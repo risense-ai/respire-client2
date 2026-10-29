@@ -136,6 +136,10 @@ func (m *Manager) hostOperation(ctx context.Context, args []string, secret, meth
 		return raw, nil
 	}
 	if runErr != nil {
+		if hostRPC {
+			// A broken host can echo credentials on stderr; keep it out of receipts.
+			return nil, &unconfirmedError{id, fmt.Errorf("账户宿主未返回完整回执: %w，请先核对当前身份", runErr)}
+		}
 		return nil, &unconfirmedError{cause: fmt.Errorf("宿主操作未返回完整回执: %w (%s)", runErr, strings.TrimSpace(stderr.String()))}
 	}
 	return nil, &unconfirmedError{cause: errors.New("宿主未返回有效 JSON 回执，请刷新对应状态，未自动重试")}
