@@ -124,7 +124,7 @@ func (m *Manager) hostOperation(ctx context.Context, args []string, secret, meth
 					} `json:"summary"`
 				}
 				if json.Unmarshal(raw, &legacy) == nil && legacy.Status == "fail" && legacy.Summary.Reason == "invalid_input" {
-					return nil, errors.New("CLI 未提供兼容的账户宿主 RPC，请先更新 CLI Dev 版本；未自动重试")
+					return nil, errors.New("CLI 未提供兼容的账户宿主 RPC，请先更新至 CLI 1.0.18 或兼容版本；未自动重试")
 				}
 				return nil, &unconfirmedError{id, errors.New("账户 RPC 回执协议或 ID 不匹配，请先核对当前身份")}
 			}

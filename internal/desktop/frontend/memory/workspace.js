@@ -134,7 +134,7 @@ export function memoryWorkspace(root, ctx) {
     try {
       if(metadataCap===null){
         try { metadataCap=summary(await execute('capabilities')).capabilities?.memory_list_metadata===true; }
-        catch(error){if(error.envelope?.summary?.reason!=='invalid_input')throw error;metadataCap=false;notify('当前 CLI 使用分页全文目录；更新 Dev 版后可使用精简目录。');}
+        catch(error){if(error.envelope?.summary?.reason!=='invalid_input')throw error;metadataCap=false;notify('当前 CLI 使用分页全文目录；更新至 CLI 1.0.18 或兼容版本后可使用精简目录。');}
       }
       const data = await execute("memory_list", { limit,...(metadataCap?{metadata:true}:{}) });
       if (!root.isConnected) return;

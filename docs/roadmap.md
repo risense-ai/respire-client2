@@ -28,9 +28,9 @@ Port the existing behavior against the current CLI rather than copying obsolete 
 
 Current CLI versions retire the old optional cross-encoder installer. Preserve its honest capability state instead of restoring a nonfunctional install button. Long writes must retain their request IDs; a timeout is not permission to replay a write.
 
-## Current 0.2.0-dev implementation
+## Current 0.2.0 implementation
 
-The published `v0.1.0` remains unchanged. Current source adds dashboard typography/colors, theme-aware artwork, memory browsing/editing/organization, diary views and the following TUI operations:
+Version `v0.2.0` promotes the tested Dev workspace and its fixes to Stable with CLI `v1.0.18`. It includes dashboard typography/colors, theme-aware artwork, memory browsing/editing/organization, diary views and the following TUI operations:
 
 | TUI page | Desktop entry |
 | --- | --- |

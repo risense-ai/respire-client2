@@ -24,7 +24,7 @@ See [platform support](docs/platforms.md) for architectures, native-library prer
 - Read-only subtree grants with direct/inherited inspection and revocation, space-member administration, memory material and permanent ciphertext purge.
 - Password/TOTP login, registration, key recovery and super-password reset through the versioned CLI host RPC; requires a compatible CLI package. See [transport and acceptance status](docs/cli-host-input.md).
 
-Stable `v0.1.0` remains the foundation release, and `v0.2.0-dev.1` is the first published memory workspace. The current source includes the additional migration work above; [Releases](https://github.com/risense-ai/respire-client2/releases) lists available builds. See [verification](docs/verification.md) and [migration acceptance](docs/migration.md) for tested paths and release gates.
+Version `v0.2.0` promotes the memory workspace and subsequent migration fixes to Stable, with CLI `v1.0.18` providing the stable account RPC dependency. New installations default to Stable for both CLI and client; existing installations keep their selected channels. To receive only stable releases, select Stable for both channels in Updates. [Releases](https://github.com/risense-ai/respire-client2/releases) lists available builds. See [verification](docs/verification.md) and [migration acceptance](docs/migration.md) for tested paths and release gates.
 
 ## Repository structure
 
@@ -73,7 +73,7 @@ Keep new Runtime operations in `host`, desktop integration in `desktop`, and ren
 Go 1.26+, Node.js 22+ (syntax checking only). On Windows, use PowerShell:
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build.ps1 -Version 0.2.0-dev.0 -Arch amd64
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build.ps1 -Version 0.2.0 -Arch amd64
 ```
 
 `-Arch` accepts `amd64` or `arm64`. The resource generator runs on the build machine's architecture; the application is built for the requested architecture. The output is `dist/respire-windows-<arch>.exe`, `dist/SHA256SUMS`, `dist/LICENSE.txt` and `dist/THIRD_PARTY_NOTICES.txt`.
@@ -81,7 +81,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build.ps1 -Version 0
 On macOS (Xcode Command Line Tools) or Linux (C/C++ compiler, pkg-config, GTK/WebKit development libraries):
 
 ```sh
-bash scripts/build.sh 0.2.0-dev.0 amd64  # or arm64 on the corresponding native runner
+bash scripts/build.sh 0.2.0 amd64  # or arm64 on the corresponding native runner
 ```
 
 Linux builds use Wails' `gtk3` tag and link against system GTK 3 and WebKitGTK 4.1. CI builds each architecture on a native runner. macOS packaging generates the app icon and applies an ad-hoc signature, which is not an Apple Developer ID signature or notarization.

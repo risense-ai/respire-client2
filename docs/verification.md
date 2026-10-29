@@ -1,5 +1,11 @@
 # Foundation verification
 
+## Stable 0.2.0 promotion
+
+On 2026-10-29, official CLI `v1.0.18` was confirmed public, non-draft and non-prerelease. A separate Windows data root installed it through the client's default Stable channel; the running Runtime reported `1.0.18`, and capabilities advertised host RPC version 1 with registration/login/recovery/reset and metadata-only memory listing. No personal data root or OS startup registration was used.
+
+Client `v0.2.0` promotes the Dev2 behavior and fixes, updates default build versions and replaces Dev-only compatibility messages with CLI `1.0.18` guidance. Native CI and final downloaded-asset checks apply to the exact stable tag. The cloud, native UI and signing limitations documented below still apply; the stable label does not add unperformed acceptance checks.
+
 ## Migration after 0.2.0-dev.1
 
 Local checks on Windows amd64, 2026-10-29, used isolated data roots and loopback fixture services. The newer CLI was built from the host-RPC branch with its pinned SDK and complete runtime manifest; its local package version is not evidence of a published compatible release.
