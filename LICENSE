@@ -1,0 +1,47 @@
+Respire Noncommercial License 1.0
+
+Copyright (c) 2026 Respire contributors.
+
+Permission is granted, without a license fee, to obtain, use, copy, inspect,
+modify, and distribute this first-party software and its documentation, in
+source or compiled form, solely for Noncommercial Purposes, subject to the
+conditions below. Personal noncommercial use and self-hosted deployment are
+permitted. Source inspection and security review for a permitted purpose are
+also permitted.
+
+"Noncommercial Purposes" means purposes that do not involve, support, or
+anticipate a Commercial Purpose. "Commercial Purpose" includes use for revenue,
+compensation, profit, business advantage, commercial research or development,
+commercial integration, resale, paid or business-operated hosted services, or
+the operations of a commercial business. Internal deployment by a business for
+its operations is a Commercial Purpose even if no software fee is charged and
+the deployment is not available to the public. Use on behalf of a business is
+not personal noncommercial use merely because an individual operates it.
+
+Any Commercial Purpose requires a separate, prior written license from the
+copyright holders. No commercial permission is granted by this license, by
+repository access, by downloading the software, or by access to a hosted
+service. Contact Asura at luodaoyi@gmail.com to request commercial authorization.
+
+Copies and distributions of this software, including modifications and compiled
+copies, must retain this copyright notice and the complete license. You may not
+offer permission for Commercial Purposes or remove these conditions from the
+first-party material supplied under this license. Distribution must itself have
+a Noncommercial Purpose, unless separately authorized in writing.
+
+This license covers only first-party material offered under these terms. It
+does not license Respire Core implementation source or change the license of
+any separately distributed Core binary. Third-party components retain their
+own licenses and notices. You receive no trademark or endorsement rights.
+
+This license does not revoke any rights already granted for material under a
+previous license. It does not limit rights that applicable law does not allow
+the parties to exclude. A separate written commercial agreement controls only
+to the extent and for the material that agreement expressly covers.
+
+THE SOFTWARE IS PROVIDED WITHOUT WARRANTY OF ANY KIND, TO THE MAXIMUM EXTENT
+PERMITTED BY LAW. THIS INCLUDES ANY IMPLIED WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE, TITLE, AND NON-INFRINGEMENT. TO THE MAXIMUM
+EXTENT PERMITTED BY LAW, THE COPYRIGHT HOLDERS AND CONTRIBUTORS ARE NOT LIABLE
+FOR DAMAGES OR OTHER CLAIMS ARISING FROM THE SOFTWARE, ITS USE, OR THIS LICENSE,
+WHETHER ARISING IN CONTRACT, TORT, OR OTHERWISE.

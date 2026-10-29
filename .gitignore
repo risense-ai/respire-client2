@@ -1,0 +1,5 @@
+/.tools/
+/dist/
+/.verification/
+/.serena/
+*.syso
