@@ -48,6 +48,13 @@ jobs:
           if ($process.ExitCode -ne 0) { throw 'Executable startup failed' }
           $info = Get-Content $versionFile -Raw | ConvertFrom-Json
           if ($info.version -ne $version -or $info.platform -ne 'windows-${{ matrix.arch }}') { throw 'Executable identity mismatch' }
+          $fontsFile = Join-Path $env:RUNNER_TEMP 'respire-fonts.json'
+          $fontProcess = Start-Process -FilePath "$PWD/dist/respire-windows-${{ matrix.arch }}.exe" -ArgumentList '--headless','fonts' -RedirectStandardOutput $fontsFile -WindowStyle Hidden -PassThru
+          if (!$fontProcess.WaitForExit(15000)) { throw 'Font enumeration timed out' }
+          $fontProcess.WaitForExit()
+          if ($fontProcess.ExitCode -ne 0) { throw 'Font enumeration failed' }
+          $fonts = Get-Content $fontsFile -Raw | ConvertFrom-Json
+          if (!$fonts.ok -or $fonts.result.Count -eq 0) { throw 'No system fonts returned' }
       - name: Build Unix
         if: matrix.os != 'windows'
         shell: bash
@@ -56,6 +63,8 @@ jobs:
           if [[ '${{ github.ref_type }}' == tag ]]; then version='${{ github.ref_name }}'; version="${version#v}"; fi
           bash scripts/build.sh "$version" '${{ matrix.arch }}'
           ./dist/respire --version
+          ./dist/respire --headless fonts > "$RUNNER_TEMP/respire-fonts.json"
+          node -e 'const fs=require("fs");const r=JSON.parse(fs.readFileSync(process.argv[1],"utf8"));if(!r.ok||!Array.isArray(r.result)||!r.result.length)throw Error("No system fonts returned")' "$RUNNER_TEMP/respire-fonts.json"
       - uses: actions/upload-artifact@v7
         with:
           name: respire-${{ matrix.os }}-${{ matrix.arch }}

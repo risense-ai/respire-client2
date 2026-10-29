@@ -59,7 +59,7 @@ func Run(m *host.Manager, buildVersion string) {
 	}
 	static := http.FileServer(http.FS(files))
 	d.app = application.New(application.Options{
-		Name: "Respire", Description: "Respire Runtime desktop client", Icon: icon,
+		Name: "Respire", Description: "Respire Runtime desktop client", Icon: lightIcon,
 		Assets:  application.AssetOptions{Handler: d.handler(static)},
 		Windows: application.WindowsOptions{DisableQuitOnLastWindowClosed: true, WebviewUserDataPath: filepath.Join(m.Root, "webview2")},
 		Linux:   application.LinuxOptions{DisableQuitOnLastWindowClosed: true, ApplicationID: "ai.risense.respire.client2"},
@@ -80,7 +80,7 @@ func Run(m *host.Manager, buildVersion string) {
 	d.window.OnWindowEvent(events.Common.WindowShow, func(*application.WindowEvent) { d.applyAppearance() })
 	tray := d.app.SystemTray.New()
 	d.tray = tray
-	tray.SetIcon(icon)
+	tray.SetIcon(lightIcon)
 	tray.SetTooltip("Respire · Runtime 管理")
 	menu := d.app.NewMenu()
 	menu.Add("打开 Respire").OnClick(func(*application.Context) { d.window.Show(); d.window.Focus() })

@@ -14,14 +14,20 @@ import {
   confirm,
   showText,
   rows,
+  summary,
 } from "../ui/core.js";
 import { heading } from "../pages/overview.js";
 import { entry, list, flatten, inventory, kindNames } from "./model.js";
 import { editor } from "./editor.js";
+import { renderGraph } from "./graph.js";
+import { recordUndo, undoLast } from "./undo.js";
+import { memoryInteractions } from "./interactions.js";
+import { memoryTools } from "./tools.js";
+import { filterControls, filterRecords } from "./filters.js";
 
 export function memoryWorkspace(root, ctx) {
   let records = [],
-    selected = "",
+    selected = ctx.params?.get("node") || "",
     selectedEntry = null,
     expanded = new Set(),
     filter = "",
@@ -32,7 +38,10 @@ export function memoryWorkspace(root, ctx) {
     selectionVersion = 0,
     revision = "",
     loaded = false;
+  let metadataCap=null;
   const checked = new Set();
+  const graphState = {};
+  let filters = {};
   root.innerHTML =
     heading(
       "你的记忆，清晰可见。",
@@ -43,18 +52,45 @@ export function memoryWorkspace(root, ctx) {
   const tree = $(".memory-index", root),
     reader = $(".memory-reader", root),
     count = $("[data-count]", root);
+  const undoButton = document.createElement("button");
+  undoButton.textContent = "撤销";
+  undoButton.dataset.undo = "";
+  undoButton.title = "Ctrl / Command Z：撤销未发生冲突的操作";
+  $(".memory-toolbar", root).append(undoButton);
+  $(".memory-toolbar", root).insertAdjacentHTML("afterend", filterControls());
+  const filterForm = $("[data-filters]", root);
+  filterForm.oninput = () => {
+    filters = Object.fromEntries(new FormData(filterForm));
+    renderTree();
+  };
+  filterForm.onreset = () => {
+    filters = {};
+    renderTree();
+  };
+  filterForm.onsubmit = (event) => event.preventDefault();
   function renderTree(searchRows) {
+    const filtered = filterRecords(searchRows || records, filters);
+    root.classList.toggle("graph-mode", mode === "graph");
+    if (mode === "graph") {
+      const values =
+        filtered.filter((row) =>
+          `${row.title} ${row.id}`.toLowerCase().includes(filter.toLowerCase()),
+        );
+      renderGraph(tree, values, selected, graphState, (id) => choose(id));
+      count.textContent = `图谱显示 ${values.length} 个已载入节点`;
+      return;
+    }
     const visible = searchRows
-      ? searchRows.map((row) => ({ row, depth: 0, kids: 0 }))
+      ? filtered.map((row) => ({ row, depth: 0, kids: 0 }))
       : mode === "list"
-        ? records
+        ? filtered
             .filter((row) =>
               `${row.title || ""} ${row.id}`
                 .toLowerCase()
                 .includes(filter.toLowerCase()),
             )
             .map((row) => ({ row, depth: 0, kids: 0 }))
-        : flatten(records, expanded, filter);
+        : flatten(filtered, expanded, filter);
     tree.innerHTML =
       visible
         .slice(0, shown)
@@ -68,6 +104,7 @@ export function memoryWorkspace(root, ctx) {
         : "");
     if (!visible.length)
       tree.innerHTML = '<div class="empty">暂无匹配记忆</div>';
+    all(".memory-row", tree).forEach((node) => (node.draggable = true));
     count.textContent = searchRows
       ? `检索返回 ${visible.length} 条；搜索覆盖整库`
       : `已载入 ${number(records.length)} / ${number(ctx.status?.summary?.local_alive)} 条 · 已选 ${checked.size} 条`;
@@ -95,7 +132,11 @@ export function memoryWorkspace(root, ctx) {
     let succeeded = false;
     count.textContent = "正在读取记忆目录…";
     try {
-      const data = await execute("memory_list", { limit });
+      if(metadataCap===null){
+        try { metadataCap=summary(await execute('capabilities')).capabilities?.memory_list_metadata===true; }
+        catch(error){if(error.envelope?.summary?.reason!=='invalid_input')throw error;metadataCap=false;notify('当前 CLI 使用分页全文目录；更新 Dev 版后可使用精简目录。');}
+      }
+      const data = await execute("memory_list", { limit,...(metadataCap?{metadata:true}:{}) });
       if (!root.isConnected) return;
       records = list(data).map((row) => ({ ...row, content: undefined }));
       loaded = true;
@@ -142,6 +183,20 @@ export function memoryWorkspace(root, ctx) {
       if (!root.isConnected || version !== selectionVersion) return;
       selectedEntry = memory;
       renderReader(memory);
+      const listed = byId.get(id);
+      $(".reader-meta", reader).insertAdjacentHTML("beforeend",
+        `<span>召回 ${h(listed?.recall_count ?? "—")} 次</span><span>${h(memory.project || "未指定项目")}</span><span>${h((memory.tags || []).join(" · "))}</span>`);
+      memoryTools(reader, memory, {
+        changed: async () => {
+          selected = "";
+          selectedEntry = null;
+          selectionVersion++;
+          reader.innerHTML =
+            '<div class="empty">操作已完成，请重新选择记忆。</div>';
+          await load();
+          await ctx.refresh();
+        },
+      });
       if (scroll) reader.scrollTop = 0;
     } catch (error) {
       if (root.isConnected && version === selectionVersion)
@@ -174,10 +229,20 @@ export function memoryWorkspace(root, ctx) {
       notify(error.message, true);
     }
   }
+  async function undo() {
+    selected = await undoLast();
+    selectedEntry = null;
+    selectionVersion++;
+    if (!selected) reader.innerHTML = '<div class="empty">新建记忆已撤销，请重新选择记忆。</div>';
+    await load();
+    await ctx.refresh();
+    notify("已撤销");
+  }
   function edit(options = {}) {
     editor({
       ...options,
-      onSaved: async (id) => {
+      onSaved: async (id, undo) => {
+        if (undo) await recordUndo({ ...undo, id });
         if (id) selected = id;
         await load();
         await ctx.refresh();
@@ -228,9 +293,17 @@ export function memoryWorkspace(root, ctx) {
       edit({ parent: selected });
       return;
     }
+    if (button.hasAttribute("data-undo")) {
+      await action(button, undo);
+      return;
+    }
     if (button.hasAttribute("data-mode")) {
-      mode = mode === "tree" ? "list" : "tree";
-      button.textContent = mode === "tree" ? "列表视图" : "树形视图";
+      mode = mode === "tree" ? "list" : mode === "list" ? "graph" : "tree";
+      button.textContent = {
+        tree: "列表视图",
+        list: "图谱视图",
+        graph: "树形视图",
+      }[mode];
       renderTree();
       return;
     }
@@ -287,6 +360,7 @@ export function memoryWorkspace(root, ctx) {
             id: memory.id,
             parent: value.parent.trim(),
           });
+          await recordUndo({ kind: "move", id: memory.id, before: memory });
           notify("已移动");
           await load();
         },
@@ -330,8 +404,10 @@ export function memoryWorkspace(root, ctx) {
         )
           return;
         await execute("memory_delete", { id: memory.id });
+        await recordUndo({ kind: "delete", id: memory.id, before: memory });
         selected = "";
         selectedEntry = null;
+        selectionVersion++;
         checked.delete(memory.id);
         reader.innerHTML = `<div class="empty"><strong>记忆已删除</strong><button data-restore="${h(memory.id)}">恢复刚才删除的记忆</button></div>`;
         $("[data-restore]", reader).addEventListener("click", (event) =>
@@ -353,12 +429,31 @@ export function memoryWorkspace(root, ctx) {
       return;
     }
     if (document.querySelector("dialog[open]")) return;
-    const stamp = `${s.local_total}/${s.max_updated_at}`;
+    const stamp = `${s.data_dir}/${s.local_total}/${s.max_updated_at}`;
     if (stamp !== revision && !busy) {
       revision = stamp;
       load();
     }
   }
   update();
-  return { update, refresh: load };
+  const dispose = memoryInteractions(root, {
+    getRecords: () => records,
+    getSelected: () => selected,
+    select: choose,
+    search: () => $("[data-search]", root).focus(),
+    newMemory: (subtree) => edit({ parent: subtree ? selected : "" }),
+    edit: () => {
+      if (selectedEntry) edit({ memory: selectedEntry });
+    },
+    remove: () => $("[data-delete]", reader)?.click(),
+    undo,
+    moved: async (before) => {
+      await recordUndo({ kind: "move", id: before.id, before });
+      selected = before.id;
+      await load();
+      await ctx.refresh();
+      notify("已移动");
+    },
+  });
+  return { update, refresh: load, dispose };
 }

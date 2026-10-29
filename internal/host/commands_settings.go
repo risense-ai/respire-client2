@@ -1,6 +1,17 @@
 package host
 
 var settingsCommands = map[string]commandSpec{
+	"auth_register":         {method: "auth.register", host: true, write: true, args: []argument{opt("addr", "--addr"), requiredOpt("user", "--user")}},
+	"auth_login":            {method: "auth.login", host: true, write: true, args: []argument{opt("addr", "--addr"), requiredOpt("user", "--user")}},
+	"auth_recover":          {method: "auth.recover", host: true, write: true, args: []argument{opt("addr", "--addr"), opt("user", "--user")}},
+	"auth_reset":            {method: "auth.reset", host: true, write: true},
+	"data_dir_set":          {words: []string{"config"}, host: true, write: true, args: []argument{requiredOpt("dir", "--data-dir")}},
+	"logout_full":           {words: []string{"logout", "--full"}, host: true, write: true},
+	"grant_list":            {words: []string{"grant", "list"}, host: true},
+	"grant_create":          {words: []string{"grant", "create"}, host: true, write: true, args: []argument{requiredOpt("root", "--root"), requiredOpt("label", "--label")}},
+	"grant_revoke":          {words: []string{"grant", "revoke"}, host: true, write: true, args: []argument{pos("id")}},
+	"space_kick":            {words: []string{"space", "kick"}, host: true, write: true, args: []argument{requiredOpt("session", "--session")}},
+	"space_kick_all":        {words: []string{"space", "kick", "--all"}, host: true, write: true},
 	"config":                {words: []string{"config"}},
 	"server_set":            {words: []string{"config"}, write: true, args: []argument{requiredOpt("addr", "--addr")}},
 	"autosync_set":          {words: []string{"config"}, write: true, args: []argument{{key: "enabled", flag: "--autosync", kind: "bool", required: true}}},

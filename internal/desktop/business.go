@@ -13,6 +13,8 @@ func (d *desktop) businessRoute(w http.ResponseWriter, r *http.Request) bool {
 	var result any
 	var err error
 	switch {
+	case r.Method == "GET" && r.URL.Path == "/api/fonts":
+		result, err = SystemFonts()
 	case r.Method == "GET" && r.URL.Path == "/api/runtime-status":
 		ctx, cancel := context.WithTimeout(r.Context(), 4*time.Second)
 		defer cancel()

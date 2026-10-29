@@ -19,8 +19,12 @@ See [platform support](docs/platforms.md) for architectures, native-library prer
 - First-run Runtime download, SHA-256 validation, bounded archive extraction, complete native-library validation, start/stop and version updates.
 - Client update checks and downloads through Wails' updater. A downloaded client update is applied by **Restart and apply**; updating the desktop does not stop the Runtime.
 - Independent Stable / Dev channels for both CLI and client, preferences, retained request IDs and explicit unknown-result handling.
+- Graph with zoom/pan, keyboard navigation, drag/drop, directory filters, node links and eligible last-operation undo. Undo refuses a changed library; it is not an atomic cross-client transaction.
+- System font enumeration, persisted UI scale and reading typography; default executable/bundle artwork uses the light icon.
+- Read-only subtree grants with direct/inherited inspection and revocation, space-member administration, memory material and permanent ciphertext purge.
+- Password/TOTP login, registration, key recovery and super-password reset through the versioned CLI host RPC; requires a compatible CLI package. See [transport and acceptance status](docs/cli-host-input.md).
 
-The published `v0.1.0` remains the foundation release. The memory-management and appearance work described above is the current `0.2.0-dev` source. See [verification](docs/verification.md) and [migration scope](docs/roadmap.md) for tested paths and remaining work.
+Stable `v0.1.0` remains the foundation release, and `v0.2.0-dev.1` is the first published memory workspace. The additional migration work above is pending release. See [verification](docs/verification.md) and [migration acceptance](docs/migration.md) for tested paths and release gates.
 
 ## Repository structure
 

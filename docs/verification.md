@@ -1,5 +1,26 @@
 # Foundation verification
 
+## Pending migration after 0.2.0-dev.1
+
+Local checks on Windows amd64, 2026-10-29, used isolated data roots and loopback fixture services. The newer CLI was built from the host-RPC branch with its pinned SDK and complete runtime manifest; its local package version is not evidence of a published compatible release.
+
+| Check | Result |
+| --- | --- |
+| Builds and syntax | Windows amd64/ARM64 build and Go static analysis passed; frontend syntax passed |
+| Directory metadata | New CLI returned two directory rows without content; old Dev14 remained usable through capability detection |
+| Edit/delete/promote undo | Real readback restored title, original ID and parent; promotion temporarily moved the child to the top level |
+| Graph | Two-node view and zoom exercised in WebView; pure-layout self-check placed 5,000 cyclic nodes without recursion |
+| Filters | Type filtering hid nonmatching rows; reset restored the directory; pure tag-filter check passed |
+| Grants | Created a real read-only root grant, inspected inheritance on its child, revoked it and reread `revoked: true` |
+| Materials | Book material included the selected entry; portrait material returned its actual entries |
+| Typography | Enumerated 784 Windows fonts; scale 125%, size 20px and line height 2.2 survived reload; computed line height was 44px |
+| Theme/layout | Dark compact workspace rendered with the saved reading settings and no frontend exception |
+| Host account RPC | Desktop reached the isolated TOTP service using the new CLI; service rejection appeared as an error. Dev14 showed an explicit upgrade message |
+| Credential boundaries | CLI failure probe returned the matching request ID without the submitted password; unknown fields, client-only mode and unsafe remote HTTP origins were rejected. Registration retained its read-only gate |
+| Existing CLI checks | Auth (8), login (2), capability/revision (8) and profile transaction (1) checks passed locally; no new repository test files were added |
+
+Successful cloud registration/login/recovery, OS credential-store writes, space-member revocation against a live service and real data-directory switching have not been exercised by these local checks. Multi-client undo is guarded by revision checks, not atomic compare-and-swap. Native CI, compatible CLI publication and final release-asset verification remain pending. The simulated external installation/synchronization state from the old UI is deliberately represented by actual CLI material and grants.
+
 Verified locally on Windows amd64, 2026-10-29. This describes the foundation release, not the pending full-client migration.
 
 | Check | Result |

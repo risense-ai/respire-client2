@@ -83,7 +83,7 @@ export function organize(root, ctx) {
       area.innerHTML = panel(
         "归纲建议",
         suggestions.length
-          ? suggestions
+          ? '<div class="panel-body actions"><button data-suggestions-all>预览全部建议</button></div>' + suggestions
               .map(
                 (item, index) =>
                   `<div class="suggestion-card"><div class="row-copy"><strong>${h(item.orphan?.title || item.orphan?.id)}</strong><p>→ ${h(item.target?.title || item.target?.id)}</p><small>${h(item.target_tree?.title || "")}</small></div><button data-suggestion="${index}">预览移动</button></div>`,
@@ -169,6 +169,13 @@ export function organize(root, ctx) {
           { ops: [{ id: item.orphan.id, parent: item.target.id }] },
           await revision(),
         );
+        await preview();
+      });
+    if (button.hasAttribute("data-suggestions-all"))
+      action(button, async () => {
+        setPlan({ ops: suggestions.map((item) => ({
+          id: item.orphan.id, parent: item.target.id,
+        })) }, await revision());
         await preview();
       });
     if (button.hasAttribute("data-plan-preview")) action(button, preview);

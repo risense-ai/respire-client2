@@ -129,5 +129,8 @@ func (m *Manager) Stop(ownedOnly bool) error {
 	if ownedOnly && !m.Owns(h.Exe) {
 		return errors.New("Runtime 由其他 CLI 管理，客户端未停止它")
 	}
+	if h.ManagedID != "" {
+		return m.stopManaged(ctx, h)
+	}
 	return m.stopProcess(ctx, h)
 }

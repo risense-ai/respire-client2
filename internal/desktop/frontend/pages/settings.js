@@ -18,6 +18,8 @@ import {
   select,
 } from "../ui/core.js";
 import { heading } from "./overview.js";
+import { typographyPanel } from "../ui/typography.js";
+import { storagePanel } from "./storage.js";
 
 function setting(label, description, control) {
   return `<div class="setting-row"><div><strong>${h(label)}</strong><p>${h(description)}</p></div>${control}</div>`;
@@ -197,6 +199,8 @@ export function settings(root, ctx) {
       ["RPC 地址", state.endpoint],
     ]);
   }
+  typographyPanel(root);
+  storagePanel(root, ctx);
   update();
   return {
     update,

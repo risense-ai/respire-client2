@@ -12,6 +12,9 @@ import {
 } from "./pages/settings.js";
 import { accounts } from "./pages/accounts.js";
 import { injection } from "./pages/injection.js";
+import { applyTypography } from "./ui/typography.js";
+import { grants } from "./pages/grants.js";
+applyTypography();
 
 const definitions = {
   overview: ["概览", overview],
@@ -21,6 +24,7 @@ const definitions = {
   models: ["模型与索引", models],
   accounts: ["账户与空间", accounts],
   injection: ["上下文注入", injection],
+  grants: ["访问授权", grants],
   settings: ["设置", settings],
   updates: ["更新", updates],
   operations: ["操作记录", operations],
@@ -69,7 +73,10 @@ function navigate(page) {
   location.hash = page;
 }
 function route() {
-  const page = location.hash.slice(1) || "overview";
+  const [page = "overview", query = ""] = (
+    location.hash.slice(1) || "overview"
+  ).split("?");
+  ctx.params = new URLSearchParams(query);
   if (!definitions[page]) {
     navigate("overview");
     return;
