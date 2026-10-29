@@ -199,6 +199,9 @@ func (m *Manager) InstallRuntime(automatic bool) error {
 	if err == nil && !m.Owns(h.Exe) {
 		return errors.New("已连接其他 CLI 管理的 Runtime；未接管或更新它。请先停止现有 Runtime，再安装")
 	}
+	if err == nil && h.ManagedID != "" {
+		return errors.New("Runtime 已由 CLI 的系统监督器管理，请通过 CLI 更新；客户端未停止或替换该实例")
+	}
 	if err != nil && !IsUnavailable(err) {
 		return err
 	}
@@ -212,6 +215,9 @@ func (m *Manager) InstallRuntime(automatic bool) error {
 	}
 	if err == nil && !m.Owns(h.Exe) {
 		return errors.New("Runtime 管理者已改变，未执行版本切换")
+	}
+	if err == nil && h.ManagedID != "" {
+		return errors.New("Runtime 已改由 CLI 的系统监督器管理，未执行版本切换")
 	}
 	if m.HasActiveOperations() {
 		return errors.New("客户端业务操作尚未完成，Runtime 更新已延后；已下载版本会保留")

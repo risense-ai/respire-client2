@@ -74,7 +74,20 @@ func (m *Manager) Start() error {
 	}
 	ctx, cancel = context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
-	if err = m.hostCommand(ctx, info, "--json", "status"); err != nil {
+	probe, probeErr := m.hostOperation(ctx, []string{"runtime", "status"}, "", "", "")
+	args := []string{"--json", "runtime", "start"}
+	if probeErr != nil {
+		var legacy struct {
+			Summary struct {
+				Reason string `json:"reason"`
+			} `json:"summary"`
+		}
+		if json.Unmarshal(probe, &legacy) != nil || legacy.Summary.Reason != "invalid_input" {
+			return probeErr
+		}
+		args = []string{"--json", "status"}
+	}
+	if err = m.hostCommand(ctx, info, args...); err != nil {
 		return err
 	}
 	return m.requireActive(info)

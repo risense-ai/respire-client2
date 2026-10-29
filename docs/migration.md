@@ -19,7 +19,7 @@ Reference: `risense-ai/respire-client`, including its React workspace, native co
 
 ## Release gate
 
-Local evidence is recorded in [verification](verification.md). Account transport is implemented in CLI PR #170; a compatible published CLI package and native CI are still required. Live cloud/native credential-store acceptance is not implied by the isolated failure-path probes.
+Local evidence is recorded in [verification](verification.md). Account transport is implemented in merged CLI PR #170. A compatible published CLI package, native CI and downloaded-asset verification are checked for each release. Live cloud/native credential-store acceptance is not implied by the isolated failure-path probes.
 
 1. Map every old native command and visible action to an implemented action, or document a retired interface with current CLI evidence. Demo-only behavior is identified explicitly and is never presented as a working integration.
 2. Keep frontend features in separate modules and Go command allowlists grouped by domain. First-party Go imports use `respire-client2/...`.

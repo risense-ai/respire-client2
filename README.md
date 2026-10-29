@@ -24,7 +24,7 @@ See [platform support](docs/platforms.md) for architectures, native-library prer
 - Read-only subtree grants with direct/inherited inspection and revocation, space-member administration, memory material and permanent ciphertext purge.
 - Password/TOTP login, registration, key recovery and super-password reset through the versioned CLI host RPC; requires a compatible CLI package. See [transport and acceptance status](docs/cli-host-input.md).
 
-Stable `v0.1.0` remains the foundation release, and `v0.2.0-dev.1` is the first published memory workspace. The additional migration work above is pending release. See [verification](docs/verification.md) and [migration acceptance](docs/migration.md) for tested paths and release gates.
+Stable `v0.1.0` remains the foundation release, and `v0.2.0-dev.1` is the first published memory workspace. The current source includes the additional migration work above; [Releases](https://github.com/risense-ai/respire-client2/releases) lists available builds. See [verification](docs/verification.md) and [migration acceptance](docs/migration.md) for tested paths and release gates.
 
 ## Repository structure
 

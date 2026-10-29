@@ -2,9 +2,11 @@
 
 The legacy desktop passes passwords/recovery values through CLI process arguments. The current CLI exposes registration, password login, key recovery and super-password reset; only classification keys currently support redirected standard input. Reproducing those process arguments would expose credentials through process inspection.
 
-## Implemented transport, pending compatible release
+## Implemented transport and compatibility
 
 CLI PR [#170](https://github.com/risense-ai/respire-cli/pull/170) implements host-only `--host-rpc-stdio`. It reads a bounded JSON request from stdin, validates fixed methods and credential fields, then dispatches existing host authentication/profile transactions. Ordinary HTTP `cli.exec` retains its host-only gate: an account commit can restart that memory Runtime, so the host transport owns the request and final receipt.
+
+Use a published CLI package advertising host RPC version 1. The compatible release line starts with `1.0.18-dev.1`; verify availability in the official CLI release list rather than inferring it from the client version. Stable/Dev selection does not silently change to enable an account operation.
 
 Methods are `auth.register`, `auth.login` (including TOTP), `auth.recover` and `auth.reset`. The request is `{v:1,id,method,params}`; a reply contains `{v:1,id,ok,exit,envelope}`. Input is limited to 64 KiB and fields to 16 KiB. Unknown fields, malformed/trailing JSON and client-only invocation are rejected. CLI capabilities advertise transport version 1. The client reports an explicit upgrade error for older packages and never automatically replays authentication after an unknown outcome.
 

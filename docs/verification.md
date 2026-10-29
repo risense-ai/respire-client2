@@ -1,6 +1,6 @@
 # Foundation verification
 
-## Pending migration after 0.2.0-dev.1
+## Migration after 0.2.0-dev.1
 
 Local checks on Windows amd64, 2026-10-29, used isolated data roots and loopback fixture services. The newer CLI was built from the host-RPC branch with its pinned SDK and complete runtime manifest; its local package version is not evidence of a published compatible release.
 
@@ -18,8 +18,16 @@ Local checks on Windows amd64, 2026-10-29, used isolated data roots and loopback
 | Host account RPC | Desktop reached the isolated TOTP service using the new CLI; service rejection appeared as an error. Dev14 showed an explicit upgrade message |
 | Credential boundaries | CLI failure probe returned the matching request ID without the submitted password; unknown fields, client-only mode and unsafe remote HTTP origins were rejected. Registration retained its read-only gate |
 | Existing CLI checks | Auth (8), login (2), capability/revision (8) and profile transaction (1) checks passed locally; no new repository test files were added |
+| Later workspace checks | Drag/drop events moved the real entry; undo restored its parent. Cyclic moves were rejected. New-entry undo cleared its deleted reader; external revisions invalidated undo. Mouse-coordinate automation at custom zoom was unreliable, so these actions used DOM events |
+| Recovery receipt | A synthetic success response displayed recovery material, removed close controls, refused Escape and accepted explicit acknowledgement; this did not create a cloud account |
+| Broken host | An ignored executable fixture echoed a synthetic credential to stderr; the unknown-result receipt and on-disk journal excluded it |
+| Deep tree | An iterative traversal rendered 5,000 cyclic nodes and preserved sibling order after reproducing a recursive stack overflow |
+| Lifecycle compatibility | Updated client started/stopped both the local host-RPC CLI and published Dev14 in separate profiles. No OS startup registration was performed |
+| Native CI | All six platforms passed for PR #1, including native font enumeration; main/tag builds provide the final source and artifact evidence |
 
-Successful cloud registration/login/recovery, OS credential-store writes, space-member revocation against a live service and real data-directory switching have not been exercised by these local checks. Multi-client undo is guarded by revision checks, not atomic compare-and-swap. Native CI, compatible CLI publication and final release-asset verification remain pending. The simulated external installation/synchronization state from the old UI is deliberately represented by actual CLI material and grants.
+Successful cloud registration/login/recovery, OS credential-store writes, space-member revocation against a live service and real data-directory switching have not been exercised by these local checks. Multi-client undo is guarded by revision checks, not atomic compare-and-swap. CLI publication and final release assets have independent CI/identity gates; local checks do not prove deployment. The simulated external installation/synchronization state from the old UI is deliberately represented by actual CLI material and grants.
+
+The client probes `runtime status` before starting: compatible CLIs use explicit `runtime start`, while only a known old-command input error selects the legacy `status` startup. A CLI-supervised Runtime is stopped through its coordinator. Its system registration and executable path remain owned by the CLI, so client-driven version replacement is refused before stopping it.
 
 Verified locally on Windows amd64, 2026-10-29. This describes the foundation release, not the pending full-client migration.
 
