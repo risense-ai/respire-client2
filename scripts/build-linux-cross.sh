@@ -12,8 +12,17 @@ esac
 dpkg --add-architecture "$debarch"
 apt-get update -qq
 DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-    "gcc-$compiler" "g++-$compiler" pkg-config file ca-certificates \
-    "libc6-dev:$debarch" "libgtk-3-dev:$debarch" "libwebkit2gtk-4.1-dev:$debarch" "libx11-dev:$debarch"
-export CC="$compiler-gcc" CXX="$compiler-g++"
-export PKG_CONFIG_LIBDIR="/usr/lib/$tuple/pkgconfig:/usr/share/pkgconfig"
+    "gcc-$compiler" "g++-$compiler" pkg-config file ca-certificates
+# Target introspection tools cannot be installed alongside the host's Python/tools.
+# Resolve an empty target root, then unpack packages without running their scripts.
+sysroot="$PWD/.tools/sysroot-$arch"
+archives="$PWD/.tools/debs-$arch"
+mkdir -p "$sysroot" "$archives/partial"
+apt-get -o Dir::State::status=/dev/null -o APT::Architecture="$debarch" \
+    -o APT::Architectures="$debarch" -o Dir::Cache::archives="$archives" \
+    --download-only --yes --no-install-recommends install libc6-dev libgtk-3-dev libwebkit2gtk-4.1-dev libx11-dev
+for package in "$archives"/*.deb; do dpkg-deb -x "$package" "$sysroot"; done
+export CC="$compiler-gcc --sysroot=$sysroot" CXX="$compiler-g++ --sysroot=$sysroot"
+export PKG_CONFIG_SYSROOT_DIR="$sysroot"
+export PKG_CONFIG_LIBDIR="$sysroot/usr/lib/$tuple/pkgconfig:$sysroot/usr/share/pkgconfig"
 bash scripts/build.sh "$version" "$arch"
