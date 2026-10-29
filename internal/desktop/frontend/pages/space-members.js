@@ -31,7 +31,7 @@ export function invitationDialog() {
 export async function membersDialog() {
   const element = dialog({
     title: "空间成员",
-    body: "<div data-members>正在读取…</div>",
+    body: '<div class="actions"><button type="button" class="danger" data-kick-all>撤销全部成员访问</button></div><div data-members>正在读取…</div>',
     submit: "关闭",
     onSubmit: () => {},
   });
@@ -44,19 +44,24 @@ export async function membersDialog() {
       : '<p class="hint">当前空间尚未签发成员会话。</p>';
   }
   element.addEventListener("click", (event) => {
-    const button = event.target.closest("[data-kick]");
+    const button = event.target.closest("[data-kick], [data-kick-all]");
     if (button)
       action(button, async () => {
         if (
           !(await confirm(
             "撤销成员访问",
-            "该成员的会话将被撤销。对方已经读取或导出的内容无法追回。",
+            button.hasAttribute("data-kick-all")
+              ? "将撤销该空间签发的全部成员会话。已经读取或导出的内容无法追回。"
+              : "该成员的会话将被撤销。对方已经读取或导出的内容无法追回。",
             "撤销访问",
           ))
         )
           return;
-        await execute("space_kick", { session: button.dataset.kick });
-        notify("成员访问已撤销");
+        const result = button.hasAttribute("data-kick-all")
+          ? await execute("space_kick_all")
+          : await execute("space_kick", { session: button.dataset.kick });
+        if (result.status === "warn") showText("成员撤销回执（请核对未完成项）", raw(result));
+        else notify("成员访问已撤销");
         await load();
       });
   });

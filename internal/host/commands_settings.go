@@ -11,6 +11,7 @@ var settingsCommands = map[string]commandSpec{
 	"grant_create":          {words: []string{"grant", "create"}, host: true, write: true, args: []argument{requiredOpt("root", "--root"), requiredOpt("label", "--label")}},
 	"grant_revoke":          {words: []string{"grant", "revoke"}, host: true, write: true, args: []argument{pos("id")}},
 	"space_kick":            {words: []string{"space", "kick"}, host: true, write: true, args: []argument{requiredOpt("session", "--session")}},
+	"space_kick_all":        {words: []string{"space", "kick", "--all"}, host: true, write: true},
 	"config":                {words: []string{"config"}},
 	"server_set":            {words: []string{"config"}, write: true, args: []argument{requiredOpt("addr", "--addr")}},
 	"autosync_set":          {words: []string{"config"}, write: true, args: []argument{{key: "enabled", flag: "--autosync", kind: "bool", required: true}}},
