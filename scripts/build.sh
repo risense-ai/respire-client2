@@ -11,6 +11,15 @@ export GOARCH="$arch" CGO_ENABLED=1
 tags=production
 [[ "$goos" != linux ]] || tags=production,gtk3
 mkdir -p dist
+if [[ "$goos" == linux && ( "$arch" == 386 || "$arch" == mipsle ) ]]; then
+    go mod download github.com/wailsapp/wails/v3
+    wails_source="$(go list -m -f '{{.Dir}}' github.com/wailsapp/wails/v3)"
+    python3 scripts/patch-wails-gtk3.py "$wails_source" "$PWD/.tools/wails-gtk3"
+    cp go.mod .tools/gtk3.go.mod
+    cp go.sum .tools/gtk3.go.sum
+    go mod edit -modfile "$PWD/.tools/gtk3.go.mod" -replace "github.com/wailsapp/wails/v3=$PWD/.tools/wails-gtk3"
+    export GOFLAGS="-modfile=$PWD/.tools/gtk3.go.mod"
+fi
 go vet -tags "$tags" ./...
 if command -v node >/dev/null 2>&1; then node --check internal/desktop/frontend/app.js; fi
 go build -tags "$tags" -trimpath -ldflags "-s -w -X main.version=$version" -o dist/respire .
