@@ -46,19 +46,24 @@ export function flatten(records, expanded, query = "") {
       }
     }
   function walk(id, depth) {
-    if (visited.has(id)) return;
-    visited.add(id);
-    if (needle && !matching.has(id)) return;
-    const row = tree.byId.get(id),
-      kids = tree.children.get(id) || [];
-    visible.push({
-      row,
-      depth,
-      kids: kids.length,
-      expanded: needle || expanded.has(id),
-    });
-    if (needle || expanded.has(id))
-      kids.forEach((child) => walk(child, depth + 1));
+    const pending = [{ id, depth }];
+    while (pending.length) {
+      const current = pending.pop();
+      if (visited.has(current.id)) continue;
+      visited.add(current.id);
+      if (needle && !matching.has(current.id)) continue;
+      const row = tree.byId.get(current.id),
+        kids = tree.children.get(current.id) || [];
+      visible.push({
+        row,
+        depth: current.depth,
+        kids: kids.length,
+        expanded: needle || expanded.has(current.id),
+      });
+      if (needle || expanded.has(current.id))
+        for (let i = kids.length - 1; i >= 0; i--)
+          pending.push({ id: kids[i], depth: current.depth + 1 });
+    }
   }
   (tree.children.get("") || []).forEach((id) => walk(id, 0));
   // Cyclic or incomplete inputs stay visible; only Runtime may repair their links.
