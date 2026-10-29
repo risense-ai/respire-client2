@@ -11,6 +11,17 @@ import (
 	"golang.org/x/sys/unix"
 )
 
+func verifyHostProcess(h HealthInfo) error {
+	actual, err := os.Readlink(fmt.Sprintf("/proc/%d/exe", h.PID))
+	if err != nil {
+		return err
+	}
+	if !samePath(actual, h.Exe) || filepath.Base(actual) != runtimeBinary() {
+		return errors.New("Runtime process identity mismatch")
+	}
+	return nil
+}
+
 func (m *Manager) stopProcess(ctx context.Context, h HealthInfo) error {
 	// A pidfd keeps the exit wait tied to this process even if its PID is reused.
 	fd, err := unix.PidfdOpen(int(h.PID), 0)
@@ -18,12 +29,8 @@ func (m *Manager) stopProcess(ctx context.Context, h HealthInfo) error {
 		return fmt.Errorf("Runtime pidfd (requires Linux 5.3+): %w", err)
 	}
 	defer unix.Close(fd)
-	actual, err := os.Readlink(fmt.Sprintf("/proc/%d/exe", h.PID))
-	if err != nil {
+	if err = verifyHostProcess(h); err != nil {
 		return err
-	}
-	if !samePath(actual, h.Exe) || filepath.Base(actual) != runtimeBinary() {
-		return errors.New("Runtime process identity mismatch")
 	}
 	if _, err = m.localRequest(ctx, "POST", "/api/runtime/stop", nil); err != nil {
 		return err

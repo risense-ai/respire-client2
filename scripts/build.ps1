@@ -1,4 +1,4 @@
-param([string]$Version = '0.1.0-dev.0', [ValidateSet('amd64', 'arm64')][string]$Arch = 'amd64')
+param([string]$Version = '0.2.0-dev.0', [ValidateSet('amd64', 'arm64')][string]$Arch = 'amd64')
 $ErrorActionPreference = 'Stop'
 if ($Version -notmatch '^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$') { throw 'Use a semantic version without a v prefix' }
 $repoRoot = Split-Path -Parent $PSScriptRoot
@@ -18,8 +18,10 @@ try {
     $env:GOARCH = $Arch
     go vet -tags production ./...
     if ($LASTEXITCODE -ne 0) { throw 'Go static analysis failed' }
-    node --check internal/desktop/frontend/app.js
-    if ($LASTEXITCODE -ne 0) { throw 'Frontend syntax check failed' }
+    Get-ChildItem internal/desktop/frontend -Recurse -Filter *.js -File | ForEach-Object {
+        node --check $_.FullName
+        if ($LASTEXITCODE -ne 0) { throw "Frontend syntax check failed: $($_.Name)" }
+    }
     go build -tags production -trimpath -ldflags "-s -w -H windowsgui -X main.version=$Version" -o "dist/$artifactName" .
     if ($LASTEXITCODE -ne 0) { throw 'Windows build failed' }
     Copy-Item -LiteralPath LICENSE -Destination dist/LICENSE.txt

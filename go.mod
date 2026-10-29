@@ -1,4 +1,4 @@
-module github.com/risense-ai/respire-client2
+module respire-client2
 
 go 1.26.0
 

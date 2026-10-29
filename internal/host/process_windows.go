@@ -15,6 +15,14 @@ func configureCommand(cmd *exec.Cmd) {
 	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: windows.CREATE_NO_WINDOW}
 }
 
+func verifyHostProcess(h HealthInfo) error {
+	handle, err := runtimeProcess(h)
+	if err != nil {
+		return err
+	}
+	return windows.CloseHandle(handle)
+}
+
 func IsUnavailable(err error) bool {
 	var op *net.OpError
 	return errors.As(err, &op) && errors.Is(err, windows.WSAECONNREFUSED)

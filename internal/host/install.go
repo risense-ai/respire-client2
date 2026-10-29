@@ -213,6 +213,9 @@ func (m *Manager) InstallRuntime(automatic bool) error {
 	if err == nil && !m.Owns(h.Exe) {
 		return errors.New("Runtime 管理者已改变，未执行版本切换")
 	}
+	if m.HasActiveOperations() {
+		return errors.New("客户端业务操作尚未完成，Runtime 更新已延后；已下载版本会保留")
+	}
 	if automatic && err == nil {
 		var load struct {
 			RPC struct {

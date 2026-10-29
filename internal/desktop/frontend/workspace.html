@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <meta name="color-scheme" content="light dark" />
+    <title>Respire</title>
+    <link rel="stylesheet" href="fonts.css" />
+    <link rel="stylesheet" href="dashboard.css" />
+    <link rel="stylesheet" href="memory/workspace.css" />
+    <script type="module" src="client.js"></script>
+  </head>
+  <body>
+    <a class="skip-link" href="#view">跳到内容</a>
+    <aside class="sidebar">
+      <div class="brand">
+        <img id="brand-icon" src="brand/respire-light.svg" alt="" /><span
+          >respire<span class="brand-period">.</span></span
+        >
+      </div>
+      <div class="workspace-label">
+        <span class="dot" id="connection-dot"></span>
+        <div>
+          <strong>本机工作区</strong
+          ><small id="connection-label">正在连接 Runtime</small>
+        </div>
+      </div>
+      <nav aria-label="主导航">
+        <button data-page="overview">概览<span>01</span></button>
+        <button data-page="memories">
+          记忆<span id="nav-memory-count"></span>
+        </button>
+        <button data-page="diary">日记<span>03</span></button>
+        <button data-page="organize">整理<span>04</span></button>
+        <button data-page="models">模型与索引<span>05</span></button>
+        <button data-page="accounts">账户与空间<span>06</span></button>
+        <button data-page="injection">上下文注入<span>07</span></button>
+      </nav>
+      <nav class="nav-bottom" aria-label="管理">
+        <button data-page="settings">设置</button>
+        <button data-page="updates">更新</button>
+        <button data-page="operations">操作记录</button>
+        <button data-page="diagnostics">诊断</button>
+      </nav>
+      <div class="sidebar-foot">
+        <span id="client-version"></span><small id="client-platform"></small>
+      </div>
+    </aside>
+    <main>
+      <header class="topbar">
+        <div class="breadcrumbs">
+          工作区 <span>/</span><strong id="breadcrumb">概览</strong>
+        </div>
+        <div class="top-actions">
+          <label class="sr-only" for="theme">界面主题</label
+          ><select id="theme" aria-label="界面主题">
+            <option value="system">跟随系统</option>
+            <option value="light">亮色</option>
+            <option value="dark">暗色</option></select
+          ><button id="layout-toggle" title="切换左右或上下紧凑布局">
+            紧凑布局</button
+          ><button id="refresh">刷新</button>
+        </div>
+      </header>
+      <div id="notice" role="status" hidden></div>
+      <div class="view-scroll"><div id="view" tabindex="-1"></div></div>
+      <footer class="statusbar">
+        <span id="status-summary">正在读取本机状态</span
+        ><span id="sync-summary">同步状态待确认</span>
+      </footer>
+    </main>
+  </body>
+</html>

@@ -10,11 +10,7 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-func (m *Manager) stopProcess(ctx context.Context, h HealthInfo) error {
-	identity, err := unix.SysctlKinfoProc("kern.proc.pid", int(h.PID))
-	if err != nil {
-		return err
-	}
+func verifyHostProcess(h HealthInfo) error {
 	args, err := unix.SysctlRaw("kern.procargs2", int(h.PID))
 	if err != nil {
 		return err
@@ -29,6 +25,17 @@ func (m *Manager) stopProcess(ctx context.Context, h HealthInfo) error {
 	actual := string(args[4 : 4+end])
 	if !samePath(actual, h.Exe) || filepath.Base(actual) != runtimeBinary() {
 		return errors.New("Runtime process identity mismatch")
+	}
+	return nil
+}
+
+func (m *Manager) stopProcess(ctx context.Context, h HealthInfo) error {
+	identity, err := unix.SysctlKinfoProc("kern.proc.pid", int(h.PID))
+	if err != nil {
+		return err
+	}
+	if err = verifyHostProcess(h); err != nil {
+		return err
 	}
 	if _, err = m.localRequest(ctx, "POST", "/api/runtime/stop", nil); err != nil {
 		return err

@@ -28,4 +28,21 @@ Port the existing behavior against the current CLI rather than copying obsolete 
 
 Current CLI versions retire the old optional cross-encoder installer. Preserve its honest capability state instead of restoring a nonfunctional install button. Long writes must retain their request IDs; a timeout is not permission to replay a write.
 
-The in-progress port is not part of the foundation release. Do not label migrated views as verified until their real RPC, error paths and native integration have been exercised.
+## Current 0.2.0-dev implementation
+
+The published `v0.1.0` remains unchanged. Current source adds dashboard typography/colors, theme-aware artwork, memory browsing/editing/organization, diary views and the following TUI operations:
+
+| TUI page | Desktop entry |
+| --- | --- |
+| Home / Sync | Overview: counts, synchronization, queues, model task and index state |
+| Accounts / Migration | Accounts and spaces: browser login, profiles, offline initialization, explicit migration |
+| Server | Accounts: server address, automatic synchronization and manual synchronization |
+| Inject | Context injection: targets, apply/remove; Codex also has revision-checked file preview |
+| Model | Models and index: preparation, cancel/restart, mirrors, engines, provider installation, re-embedding, recall configuration and nine-round checks |
+| Workspace / Language | Settings: normal/read-only/off, diary mode and CLI language |
+| Version | Updates: independent client/CLI channels, install/download and apply |
+| Web | Accounts: open the hosted dashboard |
+
+Memory operations include tree/list, full reading, semantic recall, editing, moving, merging, delete/restore, causal chains, sharing, calendar/fragments, repair previews and explicit plan application. Import/export/backup use native file pickers. Long writes keep request IDs; unknown outcomes are queried, never automatically replayed. Complete write receipts stay in memory for the current session; only metadata survives a client restart.
+
+This is still a staged migration of the previous client. Its graph, drag operations, full keyboard/undo behavior, access-grant editor, detailed typography controls, password registration/recovery and member administration are not yet ported. Native macOS/Linux acceptance, real browser authorization/cloud synchronization and AI-service execution still need verification. See [verification](verification.md) for exercised paths; a visible entry alone is not a verified integration.

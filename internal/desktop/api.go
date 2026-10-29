@@ -10,8 +10,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/risense-ai/respire-client2/internal/host"
 	"github.com/wailsapp/wails/v3/pkg/application"
+	"respire-client2/internal/host"
 )
 
 func (d *desktop) handler(static http.Handler) http.Handler {
@@ -19,11 +19,15 @@ func (d *desktop) handler(static http.Handler) http.Handler {
 		w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'")
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		if !strings.HasPrefix(r.URL.Path, "/api/") {
+			w.Header().Set("Cache-Control", "no-cache")
 			static.ServeHTTP(w, r)
 			return
 		}
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		w.Header().Set("Cache-Control", "no-store")
+		if d.businessRoute(w, r) {
+			return
+		}
 		var result any
 		var err error
 		if r.Method == "GET" && r.URL.Path == "/api/state" {
@@ -36,10 +40,11 @@ func (d *desktop) handler(static http.Handler) http.Handler {
 				err = readErr
 			}
 			d.mu.Lock()
-			latest, clientErr := d.clientVersion, d.clientError
+			latest, clientErr, theme := d.clientVersion, d.clientError, d.resolvedTheme
 			d.mu.Unlock()
 			result = map[string]any{
 				"version": version, "platform": host.Platform(), "endpoint": d.m.Endpoint, "root": d.m.Root,
+				"theme":       theme,
 				"preferences": d.m.Preferences(), "autostart": auto,
 				"task": d.m.TaskSnapshot(), "connected": healthErr == nil,
 				"managed":   healthErr == nil && d.m.Owns(h.Exe),
@@ -61,6 +66,7 @@ func (d *desktop) handler(static http.Handler) http.Handler {
 				RuntimeChannel string `json:"runtimeChannel"`
 				ClientChannel  string `json:"clientChannel"`
 				Layout         string `json:"layout"`
+				Theme          string `json:"theme"`
 			}
 			decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096))
 			decoder.DisallowUnknownFields()
@@ -89,7 +95,11 @@ func (d *desktop) handler(static http.Handler) http.Handler {
 					go d.checkClient(true)
 					result = "已请求下载"
 				case "/api/client-restart":
-					err = d.app.Updater.Restart(r.Context())
+					if d.m.HasActiveOperations() {
+						err = errors.New("仍有业务操作在执行，请等待完成后应用客户端更新")
+					} else {
+						err = d.app.Updater.Restart(r.Context())
+					}
 					result = "正在重启"
 				case "/api/autostart":
 					if input.Enabled {
@@ -99,7 +109,10 @@ func (d *desktop) handler(static http.Handler) http.Handler {
 					}
 					result = input.Enabled
 				case "/api/preferences":
-					err = d.savePreferences(host.Preferences{AutoRuntime: input.AutoRuntime, AutoUpdate: input.AutoUpdate, RuntimeChannel: input.RuntimeChannel, ClientChannel: input.ClientChannel, Layout: input.Layout})
+					if input.Theme == "" {
+						input.Theme = d.m.Preferences().Theme
+					}
+					err = d.savePreferences(host.Preferences{AutoRuntime: input.AutoRuntime, AutoUpdate: input.AutoUpdate, RuntimeChannel: input.RuntimeChannel, ClientChannel: input.ClientChannel, Layout: input.Layout, Theme: input.Theme})
 					result = "设置已保存"
 				case "/api/rpc":
 					result, err = d.m.RPC(input.Command)

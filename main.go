@@ -8,12 +8,12 @@ import (
 	"os"
 	"time"
 
-	"github.com/risense-ai/respire-client2/internal/desktop"
-	"github.com/risense-ai/respire-client2/internal/host"
 	"github.com/wailsapp/wails/v3/pkg/updater"
+	"respire-client2/internal/desktop"
+	"respire-client2/internal/host"
 )
 
-var version = "0.1.0-dev.0"
+var version = "0.2.0-dev.0"
 
 func main() {
 	updater.HandleHelperMode()

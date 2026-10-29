@@ -9,11 +9,18 @@ See [platform support](docs/platforms.md) for architectures, native-library prer
 ## Current scope
 
 - Native tray, one application instance, close-to-tray, and launch at system login with `--tray`.
-- Sidebar layout or compact top navigation, with the selection saved across restarts. EXE, tray and window artwork use the supplied Respire icon.
-- Runtime health, queue status and diagnostic operations over loopback HTTP RPC.
+- Sidebar layout or compact top navigation, plus Light / Dark / System themes, saved across restarts. The supplied light/dark artwork follows the theme in the UI, tray and native window.
+- Dashboard typography and paper/charcoal colors, with fonts embedded for offline use and their licenses included.
+- Runtime health, memory counts, synchronization, model tasks, inference queues and retrieval-index status over loopback HTTP RPC.
+- Memory tree/list, full reading, semantic recall, create/edit, move, merge, delete/restore, causal chains and subtree sharing. Merge follows the CLI contract: surviving children are promoted to surviving ancestors.
+- Diary calendar and fragment search; organization suggestions, similarity checks, audit, local repair preview, validated move plans and optional AI classification.
+- Model/index preparation, cancellation/restart, inference-engine selection, provider installation, recall-service configuration and local/quality recall checks with a nine-round Benchmark.
+- Accounts, browser login, offline initialization, spaces, migration, synchronization settings, injection targets, native file selection and import/export/backup.
 - First-run Runtime download, SHA-256 validation, bounded archive extraction, complete native-library validation, start/stop and version updates.
 - Client update checks and downloads through Wails' updater. A downloaded client update is applied by **Restart and apply**; updating the desktop does not stop the Runtime.
-- Independent Stable / Dev channels for both CLI and client, preferences, and visible operation/error states. No memory editor or account manager is included in this first version.
+- Independent Stable / Dev channels for both CLI and client, preferences, retained request IDs and explicit unknown-result handling.
+
+The published `v0.1.0` remains the foundation release. The memory-management and appearance work described above is the current `0.2.0-dev` source. See [verification](docs/verification.md) and [migration scope](docs/roadmap.md) for tested paths and remaining work.
 
 ## Repository structure
 
@@ -24,8 +31,14 @@ internal/
     app.go                            Wails lifecycle, single instance, tray, scheduling
     api.go                            In-WebView HTTP actions; no public HTTP listener
     updates.go                        Wails client updater and required-checksum policy
-    frontend/{index.html,app.css,app.js} Embedded UI, without a frontend build dependency
-    build/icon.png                    Application and tray artwork
+    appearance*.go                    Theme resolution and native window/tray artwork
+    business.go, files.go              Named business actions and native file dialogs
+    frontend/workspace.html           Embedded entry point; no frontend build dependency
+    frontend/client.js, ui/           Routing, status polling and UI helpers
+    frontend/pages/                   Runtime, account, settings and organization views
+    frontend/memory/                  Tree/list, editor, diary and memory relationships
+    frontend/fonts/                   Dashboard fonts and redistribution licenses
+    build/icon*.png                   Light/dark native artwork
   host/
     manager.go                        Installation root, preferences, atomic JSON, task state
     rpc.go                            Bounded loopback transport and diagnostic commands
@@ -34,13 +47,20 @@ internal/
     platform.go                       Asset names, CLI targets and PE/Mach-O/ELF validation
     releases.go                       Official CLI release discovery and checked downloads
     install.go                        Safe extraction, library validation, switch and recovery
+    commands_*.go                     Explicit operation/argument allowlists by business area
+    operations.go                     Asynchronous RPC requests, receipts and recovery
+    host_operations.go                Verified CLI host actions; API keys passed on stdin
 build/winres.json                     EXE icon, version and Windows manifest
 scripts/build.ps1                     Windows x64/ARM64 build and checksums
 scripts/build.sh                      Native macOS/Linux build and packaging
 .github/workflows/desktop.yml         Per-platform CI artifacts and tagged releases
 ```
 
-Dependency direction is `main → desktop → host`. The host package does not import Wails. The frontend only invokes the desktop API; it does not execute commands, open databases, load Core or call the cloud API. Routine diagnostic requests use RPC rather than spawning a CLI. CLI subprocesses are reserved for host lifecycle actions.
+Dependency direction is `main → desktop → host`. The host package does not import Wails. The frontend only invokes named desktop actions; it does not execute commands, open databases, load Core or call the cloud API. Memory, synchronization and model operations use RPC. Verified CLI subprocesses handle operations owned by the host, including browser authorization, account switching, injection and keystore configuration.
+
+The Go module is `respire-client2`. Import this repository's own packages as `respire-client2/internal/...`; do not use a domain-prefixed module name or `./` imports. Third-party dependencies retain their official module paths.
+
+CLI display language is a host preference: the CLI has no language command/RPC. The desktop follows its `client.json` `lang` contract, preserves other keys and writes atomically under the selected installation root. Memory and account data are still managed by the Runtime/CLI.
 
 Keep new Runtime operations in `host`, desktop integration in `desktop`, and rendering in `frontend`. Add narrow actions instead of an arbitrary shell/CLI execution endpoint. Keep error handling in the layer that owns the operation. Do not add a second updater, independent lifecycle coordinator, or frontend copy of Runtime business rules.
 
@@ -49,7 +69,7 @@ Keep new Runtime operations in `host`, desktop integration in `desktop`, and ren
 Go 1.26+, Node.js 22+ (syntax checking only). On Windows, use PowerShell:
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build.ps1 -Version 0.1.0 -Arch amd64
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build.ps1 -Version 0.2.0-dev.0 -Arch amd64
 ```
 
 `-Arch` accepts `amd64` or `arm64`. The resource generator runs on the build machine's architecture; the application is built for the requested architecture. The output is `dist/respire-windows-<arch>.exe`, `dist/SHA256SUMS`, `dist/LICENSE.txt` and `dist/THIRD_PARTY_NOTICES.txt`.
@@ -57,7 +77,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build.ps1 -Version 0
 On macOS (Xcode Command Line Tools) or Linux (C/C++ compiler, pkg-config, GTK/WebKit development libraries):
 
 ```sh
-bash scripts/build.sh 0.1.0 amd64  # or arm64 on the corresponding native runner
+bash scripts/build.sh 0.2.0-dev.0 amd64  # or arm64 on the corresponding native runner
 ```
 
 Linux builds use Wails' `gtk3` tag and link against system GTK 3 and WebKitGTK 4.1. CI builds each architecture on a native runner. macOS packaging generates the app icon and applies an ad-hoc signature, which is not an Apple Developer ID signature or notarization.
@@ -80,6 +100,7 @@ The installation root is `~/.rsrs`, or the existing `RSRS_DATA_DIR` override. Cl
 
 ```text
 preferences.json          Auto-connect and auto-update preferences
+requests.json             Write request IDs/status only; no arguments, keys or memory bodies
 runtime.json              Current managed version and executable SHA-256
 runtime/<version>/        Immutable CLI, core-runtime.json, native libraries and notices
 webview2/                 WebView2 browser profile
@@ -127,7 +148,9 @@ An automatic switch is deferred while RPC work is executing or queued; the check
 
 The two channel selections and the layout are independent and persist in `preferences.json`. Switching channels saves the policy; it does not interrupt an ongoing operation or automatically downgrade an installed version. If the installed Dev version is ahead of Stable, it remains installed until Stable catches up. Apply an already downloaded client update before changing its channel. Runtime channel selection is disabled during a Runtime task. New native/RPC operations must preserve these rules.
 
-RPC currently requires protocol `v = 1`; the first version exposes only `status` and `doctor` through `cli.exec`. Capability negotiation must be added before relying on newer optional RPC methods. Write operations must retain request IDs and unknown-result handling; never replay a timed-out write automatically.
+RPC requires protocol `v = 1`. Business actions use allowlisted `cli.exec` arguments; model/index preparation and recovery use the Runtime methods `model.prepare`, `model.control`, `index.prepare` and `runtime.result`. Unsupported commands and methods remain visible errors. The current business UI was exercised with CLI `1.0.17-dev.14`; do not assume the stable CLI has every optional feature.
+
+Writes keep one request ID. A lost receipt triggers a lookup of that original request, never an automatic replay. Full write receipts remain in memory during the session; after restart only metadata is retained. The verified CLI retains its last 64 completed requests in memory; an evicted receipt or a restarted Runtime can remain unknown, which is not proof that its write did not commit. Host actions with an unknown outcome must be checked on their corresponding page because Runtime cannot recover a host-process receipt. Configuration errors and missing model files are shown directly.
 
 ## Releases
 

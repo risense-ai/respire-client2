@@ -18,9 +18,13 @@ type Preferences struct {
 	RuntimeChannel string `json:"runtimeChannel"`
 	ClientChannel  string `json:"clientChannel"`
 	Layout         string `json:"layout"`
+	Theme          string `json:"theme"`
 }
 
 func (p Preferences) validate() error {
+	if p.Theme != "system" && p.Theme != "light" && p.Theme != "dark" {
+		return errors.New("主题必须是 system、light 或 dark")
+	}
 	if p.Layout != "sidebar" && p.Layout != "compact" {
 		return errors.New("布局必须是 sidebar 或 compact")
 	}
@@ -53,6 +57,7 @@ type Manager struct {
 	mu          sync.Mutex
 	prefs       Preferences
 	task        TaskState
+	jobs        map[string]*Operation
 }
 
 func New() (*Manager, error) {
@@ -78,7 +83,7 @@ func New() (*Manager, error) {
 	}
 	m := &Manager{Root: filepath.Join(dataRoot, "client2"), Endpoint: "http://127.0.0.1:" + port,
 		localClient: &http.Client{Timeout: 30 * time.Second, Transport: &http.Transport{Proxy: nil}, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }},
-		prefs:       Preferences{AutoRuntime: true, AutoUpdate: true, RuntimeChannel: "stable", ClientChannel: "stable", Layout: "sidebar"}, task: TaskState{Stage: "就绪"},
+		prefs:       Preferences{AutoRuntime: true, AutoUpdate: true, RuntimeChannel: "stable", ClientChannel: "stable", Layout: "sidebar", Theme: "system"}, task: TaskState{Stage: "就绪"},
 		HTTPClient: &http.Client{Timeout: 10 * time.Minute, CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			if len(via) >= 5 {
 				return errors.New("too many redirects")
@@ -99,6 +104,9 @@ func New() (*Manager, error) {
 		return nil, fmt.Errorf("read preferences: %w", err)
 	}
 	if err := m.prefs.validate(); err != nil {
+		return nil, err
+	}
+	if err := m.loadOperations(); err != nil {
 		return nil, err
 	}
 	return m, nil

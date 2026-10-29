@@ -12,10 +12,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/risense-ai/respire-client2/internal/host"
 	"github.com/wailsapp/wails/v3/pkg/application"
 	"github.com/wailsapp/wails/v3/pkg/events"
 	"github.com/wailsapp/wails/v3/pkg/updater"
+	"respire-client2/internal/host"
 )
 
 var version string
@@ -26,6 +26,9 @@ var frontend embed.FS
 //go:embed build/icon.png
 var icon []byte
 
+//go:embed build/icon-light.png
+var lightIcon []byte
+
 type desktop struct {
 	app           *application.App
 	window        *application.WebviewWindow
@@ -35,6 +38,9 @@ type desktop struct {
 	clientVersion string
 	clientError   string
 	closing       chan struct{}
+	tray          *application.SystemTray
+	native        nativeAppearance
+	resolvedTheme string
 }
 
 func Run(m *host.Manager, buildVersion string) {
@@ -46,6 +52,7 @@ func Run(m *host.Manager, buildVersion string) {
 	defer f.Close()
 	log.SetOutput(f)
 	d := &desktop{m: m, closing: make(chan struct{})}
+	defer d.native.close()
 	files, err := fs.Sub(frontend, "frontend")
 	if err != nil {
 		log.Fatal(err)
@@ -68,9 +75,11 @@ func Run(m *host.Manager, buildVersion string) {
 	if err = d.initUpdater(); err != nil {
 		log.Fatal(err)
 	}
-	d.window = d.app.Window.NewWithOptions(application.WebviewWindowOptions{Name: "main", Title: "Respire", Width: 1060, Height: 760, MinWidth: 800, MinHeight: 600, URL: "/", Hidden: hasArg("--tray")})
+	d.window = d.app.Window.NewWithOptions(application.WebviewWindowOptions{Name: "main", Title: "Respire", Width: 1180, Height: 800, MinWidth: 800, MinHeight: 600, URL: "/workspace.html", Hidden: hasArg("--tray")})
 	d.window.RegisterHook(events.Common.WindowClosing, func(e *application.WindowEvent) { e.Cancel(); d.window.Hide() })
+	d.window.OnWindowEvent(events.Common.WindowShow, func(*application.WindowEvent) { d.applyAppearance() })
 	tray := d.app.SystemTray.New()
+	d.tray = tray
 	tray.SetIcon(icon)
 	tray.SetTooltip("Respire · Runtime 管理")
 	menu := d.app.NewMenu()
@@ -82,7 +91,8 @@ func Run(m *host.Manager, buildVersion string) {
 	menu.Add("退出客户端（保留 Runtime）").OnClick(func(*application.Context) { d.app.Quit() })
 	tray.SetMenu(menu)
 	tray.OnClick(func() { d.window.Show(); d.window.Focus() })
-	d.app.Event.OnApplicationEvent(events.Common.ApplicationStarted, func(*application.ApplicationEvent) { go d.background() })
+	d.app.Event.OnApplicationEvent(events.Common.ApplicationStarted, func(*application.ApplicationEvent) { d.applyAppearance(); go d.background() })
+	d.app.Event.OnApplicationEvent(events.Common.ThemeChanged, func(*application.ApplicationEvent) { d.applyAppearance() })
 	if err = d.app.Run(); err != nil {
 		log.Print(err)
 	}

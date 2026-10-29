@@ -38,7 +38,7 @@ jobs:
         if: matrix.os == 'windows'
         shell: pwsh
         run: |
-          $version = '0.1.0-dev.${{ github.run_number }}'
+          $version = '0.2.0-dev.${{ github.run_number }}'
           if ('${{ github.ref_type }}' -eq 'tag') { $version = '${{ github.ref_name }}'.TrimStart('v') }
           ./scripts/build.ps1 -Version $version -Arch '${{ matrix.arch }}'
           $versionFile = Join-Path $env:RUNNER_TEMP 'respire-version.json'
@@ -52,7 +52,7 @@ jobs:
         if: matrix.os != 'windows'
         shell: bash
         run: |
-          version='0.1.0-dev.${{ github.run_number }}'
+          version='0.2.0-dev.${{ github.run_number }}'
           if [[ '${{ github.ref_type }}' == tag ]]; then version='${{ github.ref_name }}'; version="${version#v}"; fi
           bash scripts/build.sh "$version" '${{ matrix.arch }}'
           ./dist/respire --version

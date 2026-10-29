@@ -5,9 +5,9 @@ import (
 	"errors"
 	"time"
 
-	"github.com/risense-ai/respire-client2/internal/host"
 	"github.com/wailsapp/wails/v3/pkg/updater"
 	"github.com/wailsapp/wails/v3/pkg/updater/providers/github"
+	"respire-client2/internal/host"
 )
 
 func (d *desktop) initUpdater() error {
@@ -94,12 +94,18 @@ func (d *desktop) checkClient(download bool) error {
 }
 
 func (d *desktop) savePreferences(p host.Preferences) error {
-	if !d.updateMu.TryLock() {
-		return errors.New("客户端更新正在执行，请稍后修改设置")
+	if p.ClientChannel != d.m.Preferences().ClientChannel {
+		if !d.updateMu.TryLock() {
+			return errors.New("客户端更新正在执行，请稍后修改更新通道")
+		}
+		defer d.updateMu.Unlock()
+		if d.app.Updater.State() == updater.StateReady {
+			return errors.New("请先重启应用已下载的客户端更新，再切换客户端通道")
+		}
 	}
-	defer d.updateMu.Unlock()
-	if p.ClientChannel != d.m.Preferences().ClientChannel && d.app.Updater.State() == updater.StateReady {
-		return errors.New("请先重启应用已下载的客户端更新，再切换客户端通道")
+	if err := d.m.SavePreferences(p); err != nil {
+		return err
 	}
-	return d.m.SavePreferences(p)
+	d.applyAppearance()
+	return nil
 }
