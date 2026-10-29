@@ -81,7 +81,12 @@ export function editor({ memory = null, parent = "", merge = [], onSaved }) {
         summary(envelope).id || memory?.id,
         merge.length
           ? null
-          : { kind: isEdit ? "edit" : "create", before: memory },
+          : {
+              kind: isEdit ? "edit" : "create",
+              before: memory,
+              importance: values.importance,
+              action: summary(envelope).action,
+            },
       );
     },
   });

@@ -19,15 +19,18 @@ Local checks on Windows amd64, 2026-10-29, used isolated data roots and loopback
 | Credential boundaries | CLI failure probe returned the matching request ID without the submitted password; unknown fields, client-only mode and unsafe remote HTTP origins were rejected. Registration retained its read-only gate |
 | Existing CLI checks | Auth (8), login (2), capability/revision (8) and profile transaction (1) checks passed locally; no new repository test files were added |
 | Later workspace checks | Drag/drop events moved the real entry; undo restored its parent. Cyclic moves were rejected. New-entry undo cleared its deleted reader; external revisions invalidated undo. Mouse-coordinate automation at custom zoom was unreliable, so these actions used DOM events |
-| Recovery receipt | A synthetic success response displayed recovery material, removed close controls, refused Escape and accepted explicit acknowledgement; this did not create a cloud account |
-| Broken host | An ignored executable fixture echoed a synthetic credential to stderr; the unknown-result receipt and on-disk journal excluded it |
+| Recovery receipt | A fixture success response displayed recovery material, removed close controls, refused Escape and accepted explicit acknowledgement; this did not create a cloud account |
+| Broken host | An ignored executable fixture echoed a fixture credential to stderr; the unknown-result receipt and on-disk journal excluded it |
 | Deep tree | An iterative traversal rendered 5,000 cyclic nodes and preserved sibling order after reproducing a recursive stack overflow |
 | Lifecycle compatibility | Updated client started/stopped both the local host-RPC CLI and published Dev14 in separate profiles. No OS startup registration was performed |
+| Diary undo boundary | Two untitled trivial writes returned the same day ID and `diary_appended`; undo was refused and both markers remained unchanged. Independent important create/edit undo still succeeded |
 | Native CI | All six platforms passed for PR #1, including native font enumeration; main/tag builds provide the final source and artifact evidence |
 
 Successful cloud registration/login/recovery, OS credential-store writes, space-member revocation against a live service and real data-directory switching have not been exercised by these local checks. Multi-client undo is guarded by revision checks, not atomic compare-and-swap. CLI publication and final release assets have independent CI/identity gates; local checks do not prove deployment. The simulated external installation/synchronization state from the old UI is deliberately represented by actual CLI material and grants.
 
 The client probes `runtime status` before starting: compatible CLIs use explicit `runtime start`, while only a known old-command input error selects the legacy `status` startup. A CLI-supervised Runtime is stopped through its coordinator. Its system registration and executable path remain owned by the CLI, so client-driven version replacement is refused before stopping it.
+
+Create undo requires a genuinely created, independent important memory. An append to the daily diary or a deduplicated/merged result is not undone by deleting its returned ID. Edits crossing diary or legacy importance formats are also excluded. Other undo records are invalidated when recording a supported inverse fails.
 
 Verified locally on Windows amd64, 2026-10-29. This describes the foundation release, not the pending full-client migration.
 

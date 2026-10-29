@@ -6,10 +6,19 @@ const stamp = async () => {
   const status = summary(await execute("status"));
   return raw([status.data_dir, summary(await execute("memory_revision"))]);
 };
-export async function recordUndo({ kind, id, before }) {
+export async function recordUndo({ kind, id, before, importance, action }) {
+  if (
+    (kind === "create" && (importance !== "important" || action !== "created")) ||
+    (kind === "edit" && (before?.importance !== "important" || importance !== "important"))
+  ) {
+    lastUndo = null;
+    notify("此次写入涉及日记、合并或旧格式，不能单独撤销。请查看当前内容后编辑。");
+    return;
+  }
   try {
     lastUndo = { kind, id, before, revision: await stamp() };
   } catch (error) {
+    lastUndo = null;
     notify(
       `操作已保存，但未能记录撤销：${error.message}。请刷新核对，不要重复保存。`,
       true,
