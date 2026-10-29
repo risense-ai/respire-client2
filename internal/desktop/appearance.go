@@ -21,11 +21,6 @@ func (d *desktop) applyAppearance() {
 			d.tray.SetIcon(image)
 		}
 		if d.window != nil {
-			if dark {
-				d.window.SetBackgroundColour(application.NewRGB(36, 37, 31))
-			} else {
-				d.window.SetBackgroundColour(application.NewRGB(248, 246, 242))
-			}
 			if err := d.native.apply(d.window, image, dark); err != nil {
 				log.Printf("window appearance: %v", err)
 			}

@@ -41,8 +41,8 @@ Desktop and CLI releases are separate. As inspected on 2026-10-29:
 | CLI channel | Published matching targets relevant to this client |
 | --- | --- |
 | Stable 1.0.16 | Windows amd64, macOS arm64, Linux amd64 GNU |
-| Dev 1.0.17-dev.14 | The Stable targets plus Linux arm64 GNU |
+| Dev 1.0.18-dev.1 | The Stable targets plus Windows arm64 and Linux arm64 GNU |
 
-Windows arm64 and macOS amd64 require additional complete CLI/Core releases for the initial desktop matrix. Linux arm64 also needs promotion into Stable. Deferred x86/MIPS/LoongArch64 packages are tracked as later work in [CLI issue #163](https://github.com/risense-ai/respire-cli/issues/163), alongside the release contract and acceptance requirements.
+The [1.0.18-dev.1 CLI release](https://github.com/risense-ai/respire-cli/releases/tag/v1.0.18-dev.1) includes complete Windows arm64 packages. macOS amd64 still requires a matching CLI/Core release, and Linux/Windows arm64 need promotion into Stable. Deferred x86/MIPS/LoongArch64 packages are tracked as later work in [CLI issue #163](https://github.com/risense-ai/respire-cli/issues/163), alongside the release contract and acceptance requirements.
 
 Until then, the desktop reports the missing target and can connect to an already running compatible local Runtime. It never downloads another architecture to hide the gap. RPC remains loopback-only; this client does not add remote-Runtime access.

@@ -25,6 +25,8 @@ Local checks on Windows amd64, 2026-10-29, used isolated data roots and loopback
 | Lifecycle compatibility | Updated client started/stopped both the local host-RPC CLI and published Dev14 in separate profiles. No OS startup registration was performed |
 | Diary undo boundary | Two untitled trivial writes returned the same day ID and `diary_appended`; undo was refused and both markers remained unchanged. Independent important create/edit undo still succeeded |
 | Native CI | All six platforms passed for PR #1, including native font enumeration; main/tag builds provide the final source and artifact evidence |
+| Published CLI update | Automatic updating downloaded official CLI 1.0.18-dev.1, matched its binary SHA-256, started that version with `store_ready: true`, and exposed all four host account methods |
+| Startup appearance | Reproduced a WebView2 nil dereference from runtime background-color changes during startup. After moving initial color into window options, light, dark and system/tray cold starts stayed alive without a new fatal log; dark page background remained `rgb(36, 37, 31)` |
 
 Successful cloud registration/login/recovery, OS credential-store writes, space-member revocation against a live service and real data-directory switching have not been exercised by these local checks. Multi-client undo is guarded by revision checks, not atomic compare-and-swap. CLI publication and final release assets have independent CI/identity gates; local checks do not prove deployment. The simulated external installation/synchronization state from the old UI is deliberately represented by actual CLI material and grants.
 

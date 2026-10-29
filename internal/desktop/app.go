@@ -75,7 +75,13 @@ func Run(m *host.Manager, buildVersion string) {
 	if err = d.initUpdater(); err != nil {
 		log.Fatal(err)
 	}
-	d.window = d.app.Window.NewWithOptions(application.WebviewWindowOptions{Name: "main", Title: "Respire", Width: 1180, Height: 800, MinWidth: 800, MinHeight: 600, URL: "/workspace.html", Hidden: hasArg("--tray")})
+	// Set the initial canvas through options; WebView2 may not exist in startup events.
+	background := application.NewRGB(248, 246, 242)
+	theme := m.Preferences().Theme
+	if theme == "dark" || theme == "system" && d.app.Env.IsDarkMode() {
+		background = application.NewRGB(36, 37, 31)
+	}
+	d.window = d.app.Window.NewWithOptions(application.WebviewWindowOptions{Name: "main", Title: "Respire", Width: 1180, Height: 800, MinWidth: 800, MinHeight: 600, URL: "/workspace.html", Hidden: hasArg("--tray"), BackgroundColour: background})
 	d.window.RegisterHook(events.Common.WindowClosing, func(e *application.WindowEvent) { e.Cancel(); d.window.Hide() })
 	d.window.OnWindowEvent(events.Common.WindowShow, func(*application.WindowEvent) { d.applyAppearance() })
 	tray := d.app.SystemTray.New()
