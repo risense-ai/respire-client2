@@ -15,7 +15,7 @@ func (d *desktop) initUpdater() error {
 		Repository: "risense-ai/respire-client2", ChecksumAsset: "SHA256SUMS", HTTPClient: d.m.HTTPClient,
 		AssetMatcher: func(req updater.CheckRequest, assets []github.ReleaseAsset) int {
 			for i, asset := range assets {
-				if asset.Name == "respire-windows-amd64.exe" && req.Platform == "windows" && req.Arch == "amd64" {
+				if asset.Name == host.ClientAsset(req.Platform, req.Arch) {
 					return i
 				}
 			}

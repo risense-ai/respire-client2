@@ -16,8 +16,6 @@ import (
 	"golang.org/x/mod/semver"
 )
 
-const cliTarget = "x86_64-pc-windows-msvc"
-
 type releaseAsset struct {
 	Name string `json:"name"`
 	URL  string `json:"browser_download_url"`
@@ -67,6 +65,10 @@ func (m *Manager) fetchJSON(ctx context.Context, url string, v any) error {
 }
 
 func (m *Manager) LatestRuntime(ctx context.Context) (githubRelease, cliMetadata, error) {
+	cliTarget, err := runtimeTarget()
+	if err != nil {
+		return githubRelease{}, cliMetadata{}, err
+	}
 	var list []githubRelease
 	var meta cliMetadata
 	if m.Preferences().RuntimeChannel == "stable" {
@@ -104,7 +106,7 @@ func (m *Manager) LatestRuntime(ctx context.Context) (githubRelease, cliMetadata
 		return latest, meta, err
 	}
 	if meta.Schema != 1 || meta.Target != cliTarget || meta.Version != strings.TrimPrefix(latest.Tag, "v") ||
-		meta.Binary != "rsrs-"+cliTarget+".exe" || meta.Runtime != "rsrs-"+cliTarget+"-runtime.tar.gz" || !validHash(meta.BinaryHash) || !validHash(meta.RuntimeHash) {
+		meta.Binary != "rsrs-"+cliTarget+binaryExtension() || meta.Runtime != "rsrs-"+cliTarget+"-runtime.tar.gz" || !validHash(meta.BinaryHash) || !validHash(meta.RuntimeHash) {
 		return latest, meta, errors.New("CLI release metadata mismatch")
 	}
 	commit, err := hex.DecodeString(meta.Commit)
@@ -124,7 +126,7 @@ func assetURL(r githubRelease, name string) (string, error) {
 			return a.URL, nil
 		}
 	}
-	return "", fmt.Errorf("release is missing %s", name)
+	return "", fmt.Errorf("该 CLI 发布未提供 %s 所需的 %s；仍可连接已有 Runtime", Platform(), name)
 }
 
 func fileHash(path string) (string, error) {

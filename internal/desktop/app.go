@@ -55,6 +55,7 @@ func Run(m *host.Manager, buildVersion string) {
 		Name: "Respire", Description: "Respire Runtime desktop client", Icon: icon,
 		Assets:  application.AssetOptions{Handler: d.handler(static)},
 		Windows: application.WindowsOptions{DisableQuitOnLastWindowClosed: true, WebviewUserDataPath: filepath.Join(m.Root, "webview2")},
+		Linux:   application.LinuxOptions{DisableQuitOnLastWindowClosed: true, ApplicationID: "ai.risense.respire.client2"},
 		SingleInstance: &application.SingleInstanceOptions{UniqueID: "ai.risense.respire.client2", OnSecondInstanceLaunch: func(application.SecondInstanceData) {
 			if d.window != nil {
 				d.window.Show()

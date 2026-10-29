@@ -19,7 +19,7 @@ async function refresh() {
 	$('layout-toggle').textContent = compact ? '侧栏布局' : '紧凑布局';
 	$('layout-toggle').setAttribute('aria-pressed', String(compact));
     const h = state.health || {}, rpc = h.rpc || {}, task = state.task, update = state.clientUpdate;
-    $('client-version').textContent = '客户端 ' + state.version;
+    $('client-version').textContent = '客户端 ' + state.version + ' · ' + state.platform;
     $('connection-dot').classList.toggle('online', state.connected);
     $('connection-label').textContent = state.connected ? 'Runtime 已连接' : 'Runtime 未连接';
     $('runtime-title').textContent = state.connected ? '记忆服务已就绪。' : '连接你的记忆服务。';

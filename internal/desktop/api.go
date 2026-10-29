@@ -39,7 +39,7 @@ func (d *desktop) handler(static http.Handler) http.Handler {
 			latest, clientErr := d.clientVersion, d.clientError
 			d.mu.Unlock()
 			result = map[string]any{
-				"version": version, "endpoint": d.m.Endpoint, "root": d.m.Root,
+				"version": version, "platform": host.Platform(), "endpoint": d.m.Endpoint, "root": d.m.Root,
 				"preferences": d.m.Preferences(), "autostart": auto,
 				"task": d.m.TaskSnapshot(), "connected": healthErr == nil,
 				"managed":   healthErr == nil && d.m.Owns(h.Exe),

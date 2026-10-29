@@ -4,7 +4,6 @@ import (
 	"archive/tar"
 	"compress/gzip"
 	"context"
-	"debug/pe"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -63,7 +62,11 @@ func extractRuntime(archive, dir string) error {
 			if err = os.MkdirAll(filepath.Dir(target), 0700); err != nil {
 				return err
 			}
-			out, err := os.OpenFile(target, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+			mode := os.FileMode(0600)
+			if entry.Mode&0111 != 0 {
+				mode = 0700
+			}
+			out, err := os.OpenFile(target, os.O_WRONLY|os.O_CREATE|os.O_EXCL, mode)
 			if err != nil {
 				return err
 			}
@@ -82,21 +85,19 @@ func extractRuntime(archive, dir string) error {
 }
 
 func verifyRuntime(dir, binaryHash string) error {
-	hash, err := fileHash(filepath.Join(dir, "rsrs.exe"))
+	hash, err := fileHash(filepath.Join(dir, runtimeBinary()))
 	if err != nil {
 		return err
 	}
 	if hash != binaryHash {
 		return errors.New("installed CLI hash mismatch")
 	}
-	image, err := pe.Open(filepath.Join(dir, "rsrs.exe"))
-	if err != nil {
+	if err := verifyExecutable(filepath.Join(dir, runtimeBinary())); err != nil {
 		return err
 	}
-	machine := image.Machine
-	image.Close()
-	if machine != pe.IMAGE_FILE_MACHINE_AMD64 {
-		return errors.New("CLI is not Windows amd64")
+	cliTarget, err := runtimeTarget()
+	if err != nil {
+		return err
 	}
 	var manifest struct {
 		Schema int    `json:"schema_version"`
@@ -156,7 +157,10 @@ func (m *Manager) stageRuntime(ctx context.Context, release githubRelease, meta 
 	if err != nil {
 		return err
 	}
-	if err = m.download(ctx, binURL, filepath.Join(stage, "rsrs.exe"), meta.BinaryHash, 128<<20); err != nil {
+	if err = m.download(ctx, binURL, filepath.Join(stage, runtimeBinary()), meta.BinaryHash, 128<<20); err != nil {
+		return err
+	}
+	if err = os.Chmod(filepath.Join(stage, runtimeBinary()), 0700); err != nil {
 		return err
 	}
 	archive := filepath.Join(stage, "runtime.tar.gz")

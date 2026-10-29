@@ -17,6 +17,10 @@ var version = "0.1.0-dev.0"
 
 func main() {
 	updater.HandleHelperMode()
+	if len(os.Args) > 1 && os.Args[1] == "--version" {
+		json.NewEncoder(os.Stdout).Encode(map[string]string{"version": version, "platform": host.Platform()})
+		return
+	}
 	m, err := host.New()
 	if err != nil {
 		log.Fatal(err)

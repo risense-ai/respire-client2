@@ -1,4 +1,4 @@
-param([string]$Version = '0.1.0-dev.0')
+param([string]$Version = '0.1.0-dev.0', [ValidateSet('amd64', '386', 'arm64')][string]$Arch = 'amd64')
 $ErrorActionPreference = 'Stop'
 if ($Version -notmatch '^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$') { throw 'Use a semantic version without a v prefix' }
 $repoRoot = Split-Path -Parent $PSScriptRoot
@@ -9,22 +9,25 @@ try {
     $env:GOPATH = Join-Path $repoRoot '.tools\go'
     $env:CGO_ENABLED = '0'
     $env:GOOS = 'windows'
-    $env:GOARCH = 'amd64'
+    $env:GOARCH = $Arch
+    $artifactName = "respire-windows-$Arch.exe"
     $fileVersion = ($Version -split '-')[0] + '.0'
-    go run github.com/tc-hib/go-winres@v0.3.3 make --in build/winres.json --out rsrc --arch amd64 --file-version $fileVersion --product-version $fileVersion
+    $env:GOARCH = (go env GOHOSTARCH).Trim()
+    go run github.com/tc-hib/go-winres@v0.3.3 make --in build/winres.json --out rsrc --arch $Arch --file-version $fileVersion --product-version $fileVersion
     if ($LASTEXITCODE -ne 0) { throw 'Windows resource generation failed' }
+    $env:GOARCH = $Arch
     go vet -tags production ./...
     if ($LASTEXITCODE -ne 0) { throw 'Go static analysis failed' }
     node --check internal/desktop/frontend/app.js
     if ($LASTEXITCODE -ne 0) { throw 'Frontend syntax check failed' }
-    go build -tags production -trimpath -ldflags "-s -w -H windowsgui -X main.version=$Version" -o dist/respire-windows-amd64.exe .
+    go build -tags production -trimpath -ldflags "-s -w -H windowsgui -X main.version=$Version" -o "dist/$artifactName" .
     if ($LASTEXITCODE -ne 0) { throw 'Windows build failed' }
     Copy-Item -LiteralPath LICENSE -Destination dist/LICENSE.txt
     Copy-Item -LiteralPath internal/desktop/frontend/notices.txt -Destination dist/THIRD_PARTY_NOTICES.txt
-    $binaryHash = (Get-FileHash -LiteralPath dist/respire-windows-amd64.exe -Algorithm SHA256).Hash.ToLowerInvariant()
-    $checksum = "$binaryHash  respire-windows-amd64.exe`n"
+    $binaryHash = (Get-FileHash -LiteralPath "dist/$artifactName" -Algorithm SHA256).Hash.ToLowerInvariant()
+    $checksum = "$binaryHash  $artifactName`n"
     [IO.File]::WriteAllText((Join-Path $repoRoot 'dist\SHA256SUMS'), $checksum, (New-Object Text.UTF8Encoding($false)))
-    Get-Item -LiteralPath dist/respire-windows-amd64.exe | Select-Object Name, Length
+    Get-Item -LiteralPath "dist/$artifactName" | Select-Object Name, Length
 } finally {
     Pop-Location
 }
