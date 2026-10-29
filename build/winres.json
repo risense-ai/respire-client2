@@ -1,5 +1,5 @@
 {
-  "RT_GROUP_ICON": { "#1": { "0000": "../internal/desktop/build/icon.png" } },
+  "RT_GROUP_ICON": { "#1": { "0000": "../internal/desktop/build/icon-light.png" } },
   "RT_MANIFEST": {
     "#1": { "0409": {
       "identity": { "name": "ai.risense.respire.client2", "version": "0.1.0.0" },

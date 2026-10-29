@@ -54,12 +54,28 @@ func (m *Manager) hostExecutable(ctx context.Context) (string, error) {
 	return h.Exe, nil
 }
 
-func (m *Manager) hostOperation(ctx context.Context, args []string, secret string) (json.RawMessage, error) {
+func (m *Manager) hostOperation(ctx context.Context, args []string, secret, method, id string) (json.RawMessage, error) {
 	executable, err := m.hostExecutable(ctx)
 	if err != nil {
 		return nil, err
 	}
-	if secret != "" {
+	hostRPC := strings.HasPrefix(method, "auth.")
+	stdin := secret + "\n"
+	if hostRPC {
+		params, inputErr := authParams(args, secret)
+		if inputErr != nil {
+			return nil, inputErr
+		}
+		payload, encodeErr := json.Marshal(map[string]any{"v": 1, "id": id, "method": method, "params": params})
+		if encodeErr != nil {
+			return nil, encodeErr
+		}
+		if len(payload) > 65536 {
+			return nil, errors.New("账户 RPC 请求超过 64 KiB")
+		}
+		stdin = string(payload)
+		args = []string{"--host-rpc-stdio"}
+	} else if secret != "" {
 		if strings.ContainsAny(secret, "\r\n\x00") || len(secret) > 4096 {
 			return nil, errors.New("密钥格式无效")
 		}
@@ -75,8 +91,8 @@ func (m *Manager) hostOperation(ctx context.Context, args []string, secret strin
 		cmd.Env = append(cmd.Env, item)
 	}
 	cmd.Env = append(cmd.Env, "RSRS_BIN_DIR="+filepath.Dir(executable), "RSRS_CLIENT_ONLY=0", "RSRS_NO_AUTOSTART=0")
-	if secret != "" {
-		cmd.Stdin = strings.NewReader(secret + "\n")
+	if secret != "" || hostRPC {
+		cmd.Stdin = strings.NewReader(stdin)
 	}
 	out, stderr := &cappedOutput{limit: 8 << 20}, &cappedOutput{limit: 64 << 10}
 	cmd.Stdout = out
@@ -95,6 +111,25 @@ func (m *Manager) hostOperation(ctx context.Context, args []string, secret strin
 		raw = bytes.TrimSpace(lines[len(lines)-1])
 	}
 	if json.Valid(raw) {
+		if hostRPC {
+			var reply rpcResponse
+			if decodeErr := json.Unmarshal(raw, &reply); decodeErr != nil {
+				return nil, &unconfirmedError{id, decodeErr}
+			}
+			if reply.V != 1 || reply.ID != id {
+				var legacy struct {
+					Status  string `json:"status"`
+					Summary struct {
+						Reason string `json:"reason"`
+					} `json:"summary"`
+				}
+				if json.Unmarshal(raw, &legacy) == nil && legacy.Status == "fail" && legacy.Summary.Reason == "invalid_input" {
+					return nil, errors.New("CLI 未提供兼容的账户宿主 RPC，请先更新 CLI Dev 版本；未自动重试")
+				}
+				return nil, &unconfirmedError{id, errors.New("账户 RPC 回执协议或 ID 不匹配，请先核对当前身份")}
+			}
+			return reply.Envelope, envelopeError(reply.Envelope)
+		}
 		if err = envelopeError(raw); err != nil {
 			return raw, err
 		}

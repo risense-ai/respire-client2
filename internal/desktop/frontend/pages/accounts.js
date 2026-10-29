@@ -17,6 +17,8 @@ import {
   resultView,
 } from "../ui/core.js";
 import { heading } from "./overview.js";
+import { invitationDialog, membersDialog } from "./space-members.js";
+import { authenticationPanel } from "./authentication.js";
 
 export function accounts(root, ctx) {
   let loading = false,
@@ -76,7 +78,7 @@ export function accounts(root, ctx) {
     if (spaceResult.status === "fulfilled") {
       const spaces = rows(spaceResult.value, "spaces");
       $("[data-spaces]", root).innerHTML = spaces.length
-        ? `<ul class="clean">${spaces.map((item) => `<li class="row"><div class="row-copy"><strong>${h(item.name)}</strong><small>${h(item.role || item.kind || "")}</small></div>${item.current ? '<span class="badge">当前</span>' : `<button data-space-use="${h(item.name)}">使用</button>`}<button class="danger" data-space-remove="${h(item.name)}">删除</button></li>`).join("")}</ul>`
+        ? `<ul class="clean">${spaces.map((item) => `<li class="row"><div class="row-copy"><strong>${h(item.name)}</strong><small>${h(item.role || item.kind || "")}</small></div>${item.current ? '<span class="badge">当前</span>' : `<button data-space-use="${h(item.name)}">使用</button>`}${item.is_main || item.current ? "" : `<button class="danger" data-space-remove="${h(item.name)}">删除</button>`}</li>`).join("")}</ul>`
         : '<div class="empty">没有返回空间</div>';
     } else $("[data-spaces]", root).textContent = spaceResult.reason.message;
     if (configResult.status === "fulfilled") {
@@ -149,13 +151,8 @@ export function accounts(root, ctx) {
         });
       else
         action(button, async () => {
-          const result = await execute(
-            kind === "members" ? "space_members" : "space_invite",
-          );
-          showText(
-            kind === "members" ? "空间成员" : "空间邀请",
-            raw(result.details || result.summary),
-          );
+          if (kind === "members") await membersDialog();
+          else invitationDialog();
         });
     }
     if (button.dataset.account)
@@ -253,6 +250,7 @@ export function accounts(root, ctx) {
       await ctx.refresh();
     });
   });
+  authenticationPanel(root, ctx, load);
   update();
   if (ctx.desktop?.connected) load();
   return {

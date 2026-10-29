@@ -1,6 +1,6 @@
 # Delivery scope
 
-The first release is the desktop foundation for Windows, macOS and Linux. Memory-management UI migration follows it; the previous client repository is retained as a reference, not shipped as a Tauri dependency. MIPS and LoongArch64 targets are Linux-only.
+The first release is the desktop foundation for Windows, macOS and Linux. Memory-management UI migration follows it; the previous client repository is retained as a reference, not shipped as a Tauri dependency. Each supported OS targets x64 and ARM64. MIPS, LoongArch64 and x86 remain deferred.
 
 ## Foundation
 
@@ -45,4 +45,4 @@ The published `v0.1.0` remains unchanged. Current source adds dashboard typograp
 
 Memory operations include tree/list, full reading, semantic recall, editing, moving, merging, delete/restore, causal chains, sharing, calendar/fragments, repair previews and explicit plan application. Import/export/backup use native file pickers. Long writes keep request IDs; unknown outcomes are queried, never automatically replayed. Complete write receipts stay in memory for the current session; only metadata survives a client restart.
 
-This is still a staged migration of the previous client. Its graph, drag operations, full keyboard/undo behavior, access-grant editor, detailed typography controls, password registration/recovery and member administration are not yet ported. Native macOS/Linux acceptance, real browser authorization/cloud synchronization and AI-service execution still need verification. See [verification](verification.md) for exercised paths; a visible entry alone is not a verified integration.
+The pending migration adds graph, drag/keyboard operations, eligible last-operation undo, actual subtree grants, typography, host account RPC and member administration. It replaces old simulated installation/synchronization indicators with real CLI material and grant receipts. Native macOS/Linux acceptance, successful cloud authentication/synchronization and external AI-service execution still need verification. See [migration acceptance](migration.md) and [verification](verification.md); a visible entry alone is not a verified integration.

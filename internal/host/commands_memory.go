@@ -1,7 +1,9 @@
 package host
 
 var memoryCommands = map[string]commandSpec{
-	"memory_list":             {words: []string{"list"}, args: []argument{integer("limit", "--limit", 100000), opt("since", "--since"), flag("since_resort", "--since-resort")}},
+	"book_material":           {words: []string{"book-material"}, args: []argument{pos("root")}},
+	"portrait_material":       {words: []string{"portrait-material"}, args: []argument{integer("limit", "--limit", 10000)}},
+	"memory_list":             {words: []string{"list"}, args: []argument{integer("limit", "--limit", 100000), opt("since", "--since"), flag("since_resort", "--since-resort"), flag("metadata", "--metadata")}},
 	"memory_show":             {words: []string{"show"}, args: []argument{pos("id")}},
 	"memory_search":           {words: []string{"recall"}, args: []argument{pos("query"), integer("limit", "--limit", 100), opt("type", "--type"), opt("project", "--project"), choice("mode", "--mode", "fast", "quality"), flag("titles", "--titles")}},
 	"memory_create":           {words: []string{"remember"}, write: true, args: []argument{pos("content"), opt("title", "--title"), opt("type", "--type"), opt("tags", "--tags"), opt("parent", "--parent"), opt("project", "--project"), choice("importance", "--importance", "important", "trivial"), opt("merge_ids", "--merge-ids"), opt("supersedes", "--supersedes"), opt("see_also", "--see-also"), flag("force", "--force")}},

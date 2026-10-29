@@ -12,12 +12,14 @@ import (
 )
 
 type HealthInfo struct {
-	Server   string `json:"server"`
-	Version  string `json:"bin"`
-	Protocol int    `json:"v"`
-	PID      uint32 `json:"pid"`
-	Exe      string `json:"exe"`
-	DataDir  string `json:"data_dir"`
+	Server           string `json:"server"`
+	Version          string `json:"bin"`
+	Protocol         int    `json:"v"`
+	PID              uint32 `json:"pid"`
+	Exe              string `json:"exe"`
+	DataDir          string `json:"data_dir"`
+	ManagedID        string `json:"managed_id"`
+	InstallationRoot string `json:"installation_root"`
 }
 
 func (m *Manager) localRequest(ctx context.Context, method, path string, body any) (json.RawMessage, error) {

@@ -40,6 +40,8 @@ func headless(m *host.Manager) {
 		action = os.Args[2]
 	}
 	switch action {
+	case "fonts":
+		result, err = desktop.SystemFonts()
 	case "status":
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		defer cancel()
@@ -57,7 +59,7 @@ func headless(m *host.Manager) {
 	case "rpc-status":
 		result, err = m.RPC("status")
 	default:
-		err = errors.New("supported actions: status, start, stop, install-runtime, runtime-release, rpc-status")
+		err = errors.New("supported actions: status, start, stop, install-runtime, runtime-release, rpc-status, fonts")
 	}
 	output := map[string]any{"ok": err == nil, "result": result, "task": m.TaskSnapshot()}
 	if err != nil {

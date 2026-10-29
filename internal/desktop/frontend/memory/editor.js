@@ -77,7 +77,12 @@ export function editor({ memory = null, parent = "", merge = [], onSaved }) {
           );
       }
       notify(merge.length ? "合并已完成" : "记忆已保存");
-      await onSaved?.(summary(envelope).id || memory?.id);
+      await onSaved?.(
+        summary(envelope).id || memory?.id,
+        merge.length
+          ? null
+          : { kind: isEdit ? "edit" : "create", before: memory },
+      );
     },
   });
   $("[data-template]", element).addEventListener("click", () => {

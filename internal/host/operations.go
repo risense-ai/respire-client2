@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strings"
 	"time"
 )
 
@@ -144,7 +145,7 @@ func (m *Manager) Submit(name, id string, raw json.RawMessage, confirmed bool, s
 	if spec.write && !confirmed {
 		return Operation{}, errors.New("写操作需要明确提交")
 	}
-	if secret != "" && name != "classification_save" {
+	if secret != "" && name != "classification_save" && !strings.HasPrefix(spec.method, "auth.") {
 		return Operation{}, errors.New("此操作不接受密钥")
 	}
 	argv, err := spec.build(raw)
@@ -216,7 +217,7 @@ func (m *Manager) runOperation(spec commandSpec, args []string, secret, id strin
 	var envelope json.RawMessage
 	var err error
 	if spec.host {
-		envelope, err = m.hostOperation(ctx, args, secret)
+		envelope, err = m.hostOperation(ctx, args, secret, spec.method, id)
 	} else {
 		method := spec.method
 		if method == "" {

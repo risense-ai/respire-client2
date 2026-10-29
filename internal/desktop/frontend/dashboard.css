@@ -13,7 +13,7 @@
     "Work Sans Variable", "PingFang SC", "Microsoft YaHei", Arial, sans-serif;
   --font-serif:
     "Fraunces Variable", "Noto Serif SC Variable", "Songti SC", Georgia, serif;
-  font: 14px/1.5 var(--font-sans);
+  font: 14px/1.5 var(--user-ui-font, var(--font-sans));
   color: var(--text);
   background: var(--bg);
   font-synthesis: none;
@@ -39,7 +39,7 @@ html[data-theme="dark"] {
 }
 html,
 body {
-  height: 100%;
+  height: calc(100dvh / var(--ui-scale, 1));
   margin: 0;
   overflow: hidden;
 }
@@ -141,7 +141,7 @@ p {
 h1,
 h2,
 h3 {
-  font-family: var(--font-serif);
+  font-family: var(--user-ui-font, var(--font-serif));
   font-weight: 400;
 }
 h1 {
@@ -656,7 +656,8 @@ pre.code {
   border-color: transparent;
 }
 .reading-text {
-  font: 15px/1.85 var(--font-serif);
+  font: var(--read-size, 15px)/var(--read-lh, 1.95)
+    var(--user-read-font, var(--font-serif));
   min-height: 180px;
 }
 .scroll-table {

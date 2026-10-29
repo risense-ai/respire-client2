@@ -1,6 +1,7 @@
 package host
 
 var runtimeCommands = map[string]commandSpec{
+	"capabilities":          {words: []string{"capabilities"}},
 	"status":                {words: []string{"status"}},
 	"doctor":                {words: []string{"doctor"}},
 	"memory_revision":       {words: []string{"memory-revision"}},

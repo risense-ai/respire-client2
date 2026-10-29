@@ -4,6 +4,8 @@ import "errors"
 
 func (d *desktop) chooseFile(kind string) (string, error) {
 	switch kind {
+	case "directory":
+		return d.app.Dialog.OpenFile().SetTitle("选择 Runtime 数据目录").CanChooseDirectories(true).CanChooseFiles(false).AttachToWindow(d.window).PromptForSingleSelection()
 	case "import":
 		return d.app.Dialog.OpenFile().SetTitle("导入记忆").AddFilter("JSON 记忆文件", "*.json").AttachToWindow(d.window).PromptForSingleSelection()
 	case "share-import":
