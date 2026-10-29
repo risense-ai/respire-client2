@@ -15,12 +15,11 @@ jobs:
       matrix:
         include:
           - {os: windows, arch: amd64, runner: windows-latest}
-          - {os: windows, arch: '386', runner: windows-latest}
-          - {os: windows, arch: arm64, runner: windows-latest}
+          - {os: windows, arch: arm64, runner: windows-11-arm}
           - {os: darwin, arch: amd64, runner: macos-15-intel}
           - {os: darwin, arch: arm64, runner: macos-15}
-          - {os: linux, arch: amd64, runner: ubuntu-24.04}
-          - {os: linux, arch: arm64, runner: ubuntu-24.04-arm}
+          - {os: linux, arch: amd64, runner: ubuntu-22.04}
+          - {os: linux, arch: arm64, runner: ubuntu-22.04-arm}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 20
     steps:
@@ -42,6 +41,13 @@ jobs:
           $version = '0.1.0-dev.${{ github.run_number }}'
           if ('${{ github.ref_type }}' -eq 'tag') { $version = '${{ github.ref_name }}'.TrimStart('v') }
           ./scripts/build.ps1 -Version $version -Arch '${{ matrix.arch }}'
+          $versionFile = Join-Path $env:RUNNER_TEMP 'respire-version.json'
+          $process = Start-Process -FilePath "$PWD/dist/respire-windows-${{ matrix.arch }}.exe" -ArgumentList '--version' -RedirectStandardOutput $versionFile -WindowStyle Hidden -PassThru
+          if (!$process.WaitForExit(10000)) { throw 'Executable startup timed out' }
+          $process.WaitForExit()
+          if ($process.ExitCode -ne 0) { throw 'Executable startup failed' }
+          $info = Get-Content $versionFile -Raw | ConvertFrom-Json
+          if ($info.version -ne $version -or $info.platform -ne 'windows-${{ matrix.arch }}') { throw 'Executable identity mismatch' }
       - name: Build Unix
         if: matrix.os != 'windows'
         shell: bash
@@ -59,44 +65,9 @@ jobs:
             dist/LICENSE.txt
             dist/THIRD_PARTY_NOTICES.txt
           if-no-files-found: error
-  linux-cross:
-    name: linux-${{ matrix.arch }}
-    runs-on: ubuntu-24.04
-    timeout-minutes: 30
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - {arch: '386', image: 'debian:bookworm-slim'}
-          - {arch: mipsle, image: 'debian:bookworm-slim'}
-          - {arch: mips64le, image: 'debian:bookworm-slim'}
-          - {arch: loong64, image: 'debian:forky-slim'}
-    steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-go@v7
-        with:
-          go-version-file: go.mod
-          cache: false
-      - name: Build with target GTK/WebKit sysroot
-        shell: bash
-        run: |
-          version='0.1.0-dev.${{ github.run_number }}'
-          if [[ '${{ github.ref_type }}' == tag ]]; then version='${{ github.ref_name }}'; version="${version#v}"; fi
-          docker run --rm -v "$PWD:/src" -v "$(go env GOROOT):/opt/go:ro" -w /src \
-            -e PATH=/opt/go/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
-            '${{ matrix.image }}' bash scripts/build-linux-cross.sh "$version" '${{ matrix.arch }}'
-      - uses: actions/upload-artifact@v7
-        with:
-          name: respire-linux-${{ matrix.arch }}
-          path: |
-            dist/respire-linux-${{ matrix.arch }}.tar.gz
-            dist/SHA256SUMS
-            dist/LICENSE.txt
-            dist/THIRD_PARTY_NOTICES.txt
-          if-no-files-found: error
   release:
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [native, linux-cross]
+    needs: [native]
     runs-on: ubuntu-24.04
     permissions:
       contents: write
@@ -116,7 +87,7 @@ jobs:
           cp artifacts/respire-windows-amd64/THIRD_PARTY_NOTICES.txt dist/
           cd dist
           sha256sum --check SHA256SUMS
-          test "$(wc -l < SHA256SUMS)" -eq 11
+          test "$(wc -l < SHA256SUMS)" -eq 6
       - name: Publish tagged release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -51,6 +51,7 @@ func (m *Manager) stopProcess(ctx context.Context, h HealthInfo) error {
 			if err != nil {
 				return err
 			}
+			// SZOMB (5) has already exited even if the parent has not reaped it.
 			if current.Proc.P_starttime != identity.Proc.P_starttime || current.Proc.P_stat == 5 {
 				return nil
 			}

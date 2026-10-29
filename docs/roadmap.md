@@ -1,15 +1,16 @@
 # Delivery scope
 
-The first release is the Windows foundation. Memory-management UI migration follows it; the previous client repository is retained as a reference, not shipped as a Tauri dependency.
+The first release is the desktop foundation for Windows, macOS and Linux. Memory-management UI migration follows it; the previous client repository is retained as a reference, not shipped as a Tauri dependency. MIPS and LoongArch64 targets are Linux-only.
 
 ## Foundation
 
-- Wails v3, Windows amd64 single executable, supplied Respire icon.
+- Wails v3, Windows single EXE, macOS app bundles, Linux executables, supplied Respire icon.
 - Native tray, close-to-tray, single instance and launch-at-login registration.
 - RPC health and diagnostics; managed Runtime installation, graceful lifecycle and automatic updates.
 - Independent Stable/Dev update channels for CLI and desktop; no automatic downgrade.
 - Sidebar and compact top-navigation layouts with persisted selection.
-- Repeatable build, checksums, third-party notices, CI artifacts and tagged GitHub releases.
+- Repeatable platform builds, checksums, third-party notices, CI artifacts and tagged GitHub releases.
+- Matching CLI/Core packages for missing targets are tracked independently in [respire-cli#163](https://github.com/risense-ai/respire-cli/issues/163); compiling the desktop is not evidence of CLI availability.
 
 ## Full client migration
 

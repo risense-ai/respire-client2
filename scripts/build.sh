@@ -3,6 +3,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 version="${1:-0.1.0-dev.0}"
 arch="${2:-$(go env GOARCH)}"
+case "$arch" in amd64|arm64) ;; *) echo 'Supported desktop architectures: amd64, arm64' >&2; exit 1;; esac
 [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]] || { echo 'Invalid semantic version' >&2; exit 1; }
 goos="$(go env GOOS)"
 case "$goos" in linux|darwin) ;; *) echo 'Use build.ps1 on Windows' >&2; exit 1;; esac
@@ -11,15 +12,6 @@ export GOARCH="$arch" CGO_ENABLED=1
 tags=production
 [[ "$goos" != linux ]] || tags=production,gtk3
 mkdir -p dist
-if [[ "$goos" == linux && ( "$arch" == 386 || "$arch" == mipsle ) ]]; then
-    go mod download github.com/wailsapp/wails/v3
-    wails_source="$(go list -m -f '{{.Dir}}' github.com/wailsapp/wails/v3)"
-    python3 scripts/patch-wails-gtk3.py "$wails_source" "$PWD/.tools/wails-gtk3"
-    cp go.mod .tools/gtk3.go.mod
-    cp go.sum .tools/gtk3.go.sum
-    go mod edit -modfile "$PWD/.tools/gtk3.go.mod" -replace "github.com/wailsapp/wails/v3=$PWD/.tools/wails-gtk3"
-    export GOFLAGS="-modfile=$PWD/.tools/gtk3.go.mod"
-fi
 go vet -tags "$tags" ./...
 if command -v node >/dev/null 2>&1; then node --check internal/desktop/frontend/app.js; fi
 go build -tags "$tags" -trimpath -ldflags "-s -w -X main.version=$version" -o dist/respire .
@@ -50,7 +42,7 @@ if [[ "$goos" == darwin ]]; then
 <key>CFBundleIconFile</key><string>respire.icns</string>
 <key>CFBundleShortVersionString</key><string>${version%%-*}</string>
 <key>CFBundleVersion</key><string>${version%%-*}</string>
-<key>LSMinimumSystemVersion</key><string>11.0</string>
+<key>LSMinimumSystemVersion</key><string>12.0</string>
 <key>NSHighResolutionCapable</key><true/>
 </dict></plist>
 PLIST

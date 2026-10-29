@@ -14,6 +14,9 @@ import (
 func Platform() string { return runtime.GOOS + "-" + runtime.GOARCH }
 
 func ClientAsset(goos, arch string) string {
+	if arch != "amd64" && arch != "arm64" {
+		return ""
+	}
 	ext := map[string]string{"windows": ".exe", "darwin": ".zip", "linux": ".tar.gz"}[goos]
 	if ext == "" {
 		return ""
@@ -32,17 +35,12 @@ func runtimeBinary() string { return "rsrs" + binaryExtension() }
 
 func runtimeTarget() (string, error) {
 	target := map[string]string{
-		"windows-amd64":  "x86_64-pc-windows-msvc",
-		"windows-386":    "i686-pc-windows-msvc",
-		"windows-arm64":  "aarch64-pc-windows-msvc",
-		"darwin-amd64":   "x86_64-apple-darwin",
-		"darwin-arm64":   "aarch64-apple-darwin",
-		"linux-amd64":    "x86_64-unknown-linux-gnu",
-		"linux-386":      "i686-unknown-linux-gnu",
-		"linux-arm64":    "aarch64-unknown-linux-gnu",
-		"linux-mipsle":   "mipsel-unknown-linux-gnu",
-		"linux-mips64le": "mips64el-unknown-linux-gnuabi64",
-		"linux-loong64":  "loongarch64-unknown-linux-gnu",
+		"windows-amd64": "x86_64-pc-windows-msvc",
+		"windows-arm64": "aarch64-pc-windows-msvc",
+		"darwin-amd64":  "x86_64-apple-darwin",
+		"darwin-arm64":  "aarch64-apple-darwin",
+		"linux-amd64":   "x86_64-unknown-linux-gnu",
+		"linux-arm64":   "aarch64-unknown-linux-gnu",
 	}[Platform()]
 	if target == "" {
 		return "", fmt.Errorf("没有为 %s 配置 CLI 发布目标", Platform())
@@ -67,7 +65,7 @@ func verifyExecutable(path string) error {
 			return err
 		}
 		defer image.Close()
-		machine := map[string]uint16{"amd64": pe.IMAGE_FILE_MACHINE_AMD64, "386": pe.IMAGE_FILE_MACHINE_I386, "arm64": pe.IMAGE_FILE_MACHINE_ARM64}[runtime.GOARCH]
+		machine := map[string]uint16{"amd64": pe.IMAGE_FILE_MACHINE_AMD64, "arm64": pe.IMAGE_FILE_MACHINE_ARM64}[runtime.GOARCH]
 		if machine == 0 || image.Machine != machine {
 			return mismatch
 		}
@@ -87,12 +85,8 @@ func verifyExecutable(path string) error {
 			return err
 		}
 		defer image.Close()
-		machine := map[string]elf.Machine{"amd64": elf.EM_X86_64, "386": elf.EM_386, "arm64": elf.EM_AARCH64, "mipsle": elf.EM_MIPS, "mips64le": elf.EM_MIPS, "loong64": elf.EM_LOONGARCH}[runtime.GOARCH]
-		class := elf.ELFCLASS64
-		if runtime.GOARCH == "386" || runtime.GOARCH == "mipsle" {
-			class = elf.ELFCLASS32
-		}
-		if machine == 0 || image.Machine != machine || image.Class != class || image.ByteOrder != binary.LittleEndian {
+		machine := map[string]elf.Machine{"amd64": elf.EM_X86_64, "arm64": elf.EM_AARCH64}[runtime.GOARCH]
+		if machine == 0 || image.Machine != machine || image.Class != elf.ELFCLASS64 || image.ByteOrder != binary.LittleEndian {
 			return mismatch
 		}
 	default:
