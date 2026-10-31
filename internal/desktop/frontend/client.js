@@ -23,7 +23,7 @@ const definitions = {
   organize: ["整理", organize],
   models: ["模型与索引", models],
   accounts: ["账户与空间", accounts],
-  injection: ["上下文注入", injection],
+  injection: ["安装", injection],
   grants: ["访问授权", grants],
   settings: ["设置", settings],
   updates: ["更新", updates],

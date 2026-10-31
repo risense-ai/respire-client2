@@ -36,6 +36,7 @@ var settingsCommands = map[string]commandSpec{
 	"inject_targets":        {words: []string{"inject", "--targets"}, host: true},
 	"inject_preview":        {words: []string{"inject", "--preview"}, host: true, args: []argument{requiredOpt("id", "--id"), flag("remove", "--remove")}},
 	"inject_apply":          {words: []string{"inject"}, host: true, write: true, args: []argument{requiredOpt("id", "--id"), opt("revision", "--expected"), flag("remove", "--remove")}},
+	"inject_all":            {words: []string{"inject", "--all"}, host: true, write: true},
 	"classification_config": {words: []string{"classify-config"}, host: true, args: []argument{choice("backend", "--backend", "ds", "jev")}},
 	"classification_save":   {words: []string{"classify-config", "--set"}, host: true, write: true, args: []argument{choice("backend", "--backend", "ds", "jev"), opt("base", "--api-base"), opt("model", "--model")}},
 }

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 )
 
@@ -21,6 +22,10 @@ func (d *desktop) businessRoute(w http.ResponseWriter, r *http.Request) bool {
 		result, err = d.m.RuntimeStatus(ctx)
 	case r.Method == "GET" && r.URL.Path == "/api/operations":
 		result = d.m.Operations()
+	case r.Method == "GET" && r.URL.Path == "/api/plugins":
+		ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
+		defer cancel()
+		result = d.PluginStatuses(ctx)
 	case r.Method == "GET" && r.URL.Path == "/api/runtime-release":
 		ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 		defer cancel()
@@ -29,7 +34,7 @@ func (d *desktop) businessRoute(w http.ResponseWriter, r *http.Request) bool {
 		result = map[string]any{"version": metadata.Version, "channel": d.m.Preferences().RuntimeChannel}
 	case r.Method == "GET" && r.URL.Path == "/api/operation":
 		result, err = d.m.Operation(r.URL.Query().Get("id"))
-	case r.URL.Path == "/api/execute" || r.URL.Path == "/api/operation-recover" || r.URL.Path == "/api/operation-ack" || r.URL.Path == "/api/file-dialog" || r.URL.Path == "/api/open-dashboard" || r.URL.Path == "/api/cli-language":
+	case r.URL.Path == "/api/execute" || r.URL.Path == "/api/operation-recover" || r.URL.Path == "/api/operation-ack" || r.URL.Path == "/api/file-dialog" || r.URL.Path == "/api/open-dashboard" || r.URL.Path == "/api/cli-language" || r.URL.Path == "/api/plugin-install":
 		if r.Method != "POST" || r.Header.Get("X-Respire-Client") != "1" || r.Header.Get("Content-Type") != "application/json" {
 			w.WriteHeader(http.StatusForbidden)
 			err = errors.New("客户端请求被拒绝")
@@ -44,6 +49,7 @@ func (d *desktop) businessRoute(w http.ResponseWriter, r *http.Request) bool {
 			Kind      string          `json:"kind"`
 			Language  string          `json:"language"`
 			Target    string          `json:"target"`
+			Mirror    bool            `json:"mirror"`
 		}
 		decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20))
 		decoder.DisallowUnknownFields()
@@ -75,6 +81,19 @@ func (d *desktop) businessRoute(w http.ResponseWriter, r *http.Request) bool {
 				"cli":           "https://github.com/risense-ai/respire-cli/releases/latest",
 				"cli-mirror":    "https://gh-proxy.com/https://github.com/risense-ai/respire-cli/releases/latest",
 			}[input.Target]
+			if url == "" && strings.HasPrefix(input.Target, "plugin-") {
+				repo := strings.TrimPrefix(input.Target, "plugin-")
+				if strings.HasPrefix(repo, "mirror-") {
+					repo = strings.TrimPrefix(repo, "mirror-")
+					if _, ok := pluginByID(repo); ok {
+						url = "https://gh-proxy.com/https://github.com/risense-ai/" + repo
+					}
+				} else {
+					if _, ok := pluginByID(repo); ok {
+						url = "https://github.com/risense-ai/" + repo
+					}
+				}
+			}
 			if url == "" {
 				err = errors.New("未知的发布页")
 				break
@@ -84,6 +103,10 @@ func (d *desktop) businessRoute(w http.ResponseWriter, r *http.Request) bool {
 		case "/api/cli-language":
 			err = d.m.SetCLILanguage(input.Language)
 			result = "CLI 语言已保存"
+		case "/api/plugin-install":
+			ctx, cancel := context.WithTimeout(r.Context(), 10*time.Minute)
+			defer cancel()
+			result, err = d.InstallPlugin(ctx, input.Target, input.Mirror)
 		}
 	default:
 		return false
