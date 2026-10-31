@@ -8,7 +8,7 @@ const defaults = {
   readSize: 15,
   readLh: 1.95,
 };
-const bounds = { uiScale: [0.8, 1.6], readSize: [12, 30], readLh: [1.4, 2.8] };
+const bounds = { uiScale: [0.6, 2], readSize: [12, 30], readLh: [1.4, 2.8] };
 export function normalizeTypography(value = {}) {
   const result = { ...defaults };
   for (const name of ["uiFont", "readFont"])
@@ -44,6 +44,22 @@ export function applyTypography(value = loadTypography()) {
   root.style.setProperty("--ui-scale", String(value.uiScale));
   root.style.zoom = value.uiScale === 1 ? "" : value.uiScale;
 }
+window.addEventListener(
+  "wheel",
+  (event) => {
+    if (!event.ctrlKey || event.defaultPrevented) return;
+    event.preventDefault();
+    const value = loadTypography();
+    value.uiScale = event.deltaY < 0
+      ? Math.min(bounds.uiScale[1], Math.round((value.uiScale + 0.05) * 100) / 100)
+      : Math.max(bounds.uiScale[0], Math.round((value.uiScale - 0.05) * 100) / 100);
+    localStorage.setItem(key, JSON.stringify(value));
+    applyTypography(value);
+    const control = document.querySelector('[name=uiScale]');
+    if (control) control.value = String(value.uiScale);
+  },
+  { passive: false },
+);
 export function typographyPanel(root) {
   const section = document.createElement("section");
   section.className = "section-gap";

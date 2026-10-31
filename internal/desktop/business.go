@@ -6,8 +6,11 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"os"
 	"strings"
 	"time"
+
+	"respire-client2/internal/host"
 )
 
 func (d *desktop) businessRoute(w http.ResponseWriter, r *http.Request) bool {
@@ -34,7 +37,7 @@ func (d *desktop) businessRoute(w http.ResponseWriter, r *http.Request) bool {
 		result = map[string]any{"version": metadata.Version, "channel": d.m.Preferences().RuntimeChannel}
 	case r.Method == "GET" && r.URL.Path == "/api/operation":
 		result, err = d.m.Operation(r.URL.Query().Get("id"))
-	case r.URL.Path == "/api/execute" || r.URL.Path == "/api/operation-recover" || r.URL.Path == "/api/operation-ack" || r.URL.Path == "/api/file-dialog" || r.URL.Path == "/api/open-dashboard" || r.URL.Path == "/api/cli-language" || r.URL.Path == "/api/plugin-install":
+	case r.URL.Path == "/api/execute" || r.URL.Path == "/api/operation-recover" || r.URL.Path == "/api/operation-ack" || r.URL.Path == "/api/file-dialog" || r.URL.Path == "/api/open-dashboard" || r.URL.Path == "/api/cli-language" || r.URL.Path == "/api/plugin-install" || r.URL.Path == "/api/preferences-export" || r.URL.Path == "/api/preferences-import" || r.URL.Path == "/api/diagnostics-export":
 		if r.Method != "POST" || r.Header.Get("X-Respire-Client") != "1" || r.Header.Get("Content-Type") != "application/json" {
 			w.WriteHeader(http.StatusForbidden)
 			err = errors.New("客户端请求被拒绝")
@@ -50,6 +53,7 @@ func (d *desktop) businessRoute(w http.ResponseWriter, r *http.Request) bool {
 			Language  string          `json:"language"`
 			Target    string          `json:"target"`
 			Mirror    bool            `json:"mirror"`
+			Path      string          `json:"path"`
 		}
 		decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20))
 		decoder.DisallowUnknownFields()
@@ -107,6 +111,45 @@ func (d *desktop) businessRoute(w http.ResponseWriter, r *http.Request) bool {
 			ctx, cancel := context.WithTimeout(r.Context(), 10*time.Minute)
 			defer cancel()
 			result, err = d.InstallPlugin(ctx, input.Target, input.Mirror)
+		case "/api/preferences-export":
+			err = writeSettingsExport(input.Path, d.m.Preferences())
+			result = "设置已导出"
+		case "/api/preferences-import":
+			var p host.Preferences
+			data, readErr := os.ReadFile(input.Path)
+			if readErr != nil {
+				err = readErr
+				break
+			}
+			if len(data) > 64<<10 {
+				err = errors.New("设置文件过大")
+				break
+			}
+			if err = json.Unmarshal(data, &p); err == nil {
+				err = d.savePreferences(p)
+			}
+			result = "设置已导入"
+		case "/api/diagnostics-export":
+			ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+			health, _, healthErr := d.m.Health(ctx)
+			cancel()
+			auto, _ := d.app.Autostart.IsEnabled()
+			info, _ := d.m.Installed()
+			d.mu.Lock()
+			update := map[string]any{
+				"state": d.app.Updater.State(), "latest": d.clientVersion, "source": d.clientSource,
+				"notes": d.clientNotes, "error": d.clientError,
+			}
+			d.mu.Unlock()
+			report := map[string]any{
+				"generatedAt": time.Now().UTC(), "clientVersion": version, "platform": host.Platform(),
+				"endpoint": d.m.Endpoint, "root": d.m.Root, "preferences": d.m.Preferences(),
+				"autostart": auto, "task": d.m.TaskSnapshot(), "connected": healthErr == nil,
+				"installed": info, "health": health, "healthError": errorText(healthErr),
+				"clientUpdate": update, "operations": d.m.Operations(),
+			}
+			err = writeJSONFile(input.Path, report)
+			result = "诊断已导出"
 		}
 	default:
 		return false
@@ -117,4 +160,27 @@ func (d *desktop) businessRoute(w http.ResponseWriter, r *http.Request) bool {
 		json.NewEncoder(w).Encode(map[string]any{"ok": true, "result": result})
 	}
 	return true
+}
+
+func writeSettingsExport(path string, value host.Preferences) error {
+	data, err := json.MarshalIndent(value, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, append(data, '\n'), 0600)
+}
+
+func writeJSONFile(path string, value any) error {
+	data, err := json.MarshalIndent(value, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, append(data, '\n'), 0600)
+}
+
+func errorText(err error) string {
+	if err == nil {
+		return ""
+	}
+	return err.Error()
 }

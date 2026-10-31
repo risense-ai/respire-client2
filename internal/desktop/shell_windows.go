@@ -6,6 +6,8 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"syscall"
+	"unsafe"
 
 	ole "github.com/go-ole/go-ole"
 	"github.com/go-ole/go-ole/oleutil"
@@ -13,13 +15,16 @@ import (
 )
 
 // Windows shows an executable's bare file name until it has a Start Menu
-// identity. This mirrors the Magpie release layout: a friendly .lnk plus an
-// App Paths entry for the canonical respire.exe name.
+// identity. This uses the same shell identity ideas: a friendly .lnk, App
+// Paths, and a stable process AppUserModelID for notification grouping.
 func ensureShellIdentity() {
 	exe, err := os.Executable()
 	if err != nil {
 		log.Printf("shell identity: resolve executable: %v", err)
 		return
+	}
+	if err := setProcessAppUserModelID("ai.risense.respire.client2"); err != nil {
+		log.Printf("shell identity: AUMID: %v", err)
 	}
 	if err := ensureStartShortcut(exe); err != nil {
 		log.Printf("shell identity: start shortcut: %v", err)
@@ -27,6 +32,18 @@ func ensureShellIdentity() {
 	if err := registerAppPath(exe); err != nil {
 		log.Printf("shell identity: App Paths: %v", err)
 	}
+}
+
+func setProcessAppUserModelID(value string) error {
+	valuePtr, err := syscall.UTF16PtrFromString(value)
+	if err != nil {
+		return err
+	}
+	result, _, callErr := syscall.NewLazyDLL("combase.dll").NewProc("SetCurrentProcessExplicitAppUserModelID").Call(uintptr(unsafe.Pointer(valuePtr)))
+	if result != 0 {
+		return callErr
+	}
+	return nil
 }
 
 func ensureStartShortcut(exe string) error {

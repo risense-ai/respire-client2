@@ -50,7 +50,7 @@ func (d *desktop) handler(static http.Handler) http.Handler {
 				}
 			}
 			d.mu.Lock()
-			latest, clientErr, theme := d.clientVersion, d.clientError, d.resolvedTheme
+			latest, notes, source, clientErr, theme, updateCancel := d.clientVersion, d.clientNotes, d.clientSource, d.clientError, d.resolvedTheme, d.updateCancel
 			d.mu.Unlock()
 			result = map[string]any{
 				"version": version, "platform": host.Platform(), "endpoint": d.m.Endpoint, "root": d.m.Root,
@@ -59,7 +59,10 @@ func (d *desktop) handler(static http.Handler) http.Handler {
 				"task": d.m.TaskSnapshot(), "connected": healthErr == nil,
 				"managed":   healthErr == nil && d.m.Owns(h.Exe),
 				"installed": info, "externalRuntime": external, "health": body,
-				"clientUpdate": map[string]any{"state": d.app.Updater.State(), "latest": latest, "error": clientErr},
+				"clientUpdate": map[string]any{
+					"state": d.app.Updater.State(), "latest": latest, "notes": notes,
+					"source": source, "error": clientErr, "cancellable": updateCancel != nil,
+				},
 			}
 			if healthErr != nil {
 				result.(map[string]any)["connectionError"] = healthErr.Error()
@@ -105,6 +108,9 @@ func (d *desktop) handler(static http.Handler) http.Handler {
 				case "/api/client-download":
 					go d.checkClient(true)
 					result = "已请求下载"
+				case "/api/client-cancel":
+					err = d.cancelUpdate()
+					result = "已请求取消"
 				case "/api/client-restart":
 					if !d.canRestartClient() {
 						err = errors.New("仍有业务操作在执行，请等待完成后应用客户端更新")

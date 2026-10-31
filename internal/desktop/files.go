@@ -16,6 +16,12 @@ func (d *desktop) chooseFile(kind string) (string, error) {
 		return d.app.Dialog.SaveFile().SetMessage("备份数据库").SetFilename("respire-backup.db").AddFilter("数据库备份", "*.db").AttachToWindow(d.window).PromptForSingleSelection()
 	case "keys":
 		return d.app.Dialog.SaveFile().SetMessage("导出密钥").SetFilename("respire-keys.txt").AddFilter("密钥材料", "*.txt").AttachToWindow(d.window).PromptForSingleSelection()
+	case "preferences-export":
+		return d.app.Dialog.SaveFile().SetMessage("导出设置").SetFilename("respire-settings.json").AddFilter("JSON 设置", "*.json").AttachToWindow(d.window).PromptForSingleSelection()
+	case "preferences-import":
+		return d.app.Dialog.OpenFile().SetTitle("导入设置").AddFilter("JSON 设置", "*.json").AttachToWindow(d.window).PromptForSingleSelection()
+	case "diagnostics-export":
+		return d.app.Dialog.SaveFile().SetMessage("导出诊断").SetFilename("respire-diagnostics.json").AddFilter("JSON 诊断", "*.json").AttachToWindow(d.window).PromptForSingleSelection()
 	default:
 		return "", errors.New("不支持的文件操作")
 	}

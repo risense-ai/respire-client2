@@ -33,31 +33,9 @@ func (d *desktop) initUpdater() error {
 	}
 	return d.app.Updater.Init(updater.Config{
 		CurrentVersion: version,
-		Providers:      []updater.Provider{checkedProvider{Provider: stable, dev: dev, preferences: d.m.Preferences}},
+		Providers:      []updater.Provider{newReleaseProvider(d.m.HTTPClient, d.m.Preferences, stable, dev)},
 		Window:         updater.WindowNone,
 	})
-}
-
-// The upstream GitHub provider permits a missing checksum sidecar. Our releases do not.
-type checkedProvider struct {
-	updater.Provider
-	dev         updater.Provider
-	preferences func() host.Preferences
-}
-
-func (p checkedProvider) Check(ctx context.Context, req updater.CheckRequest) (*updater.Release, error) {
-	source := p.Provider
-	if p.preferences().ClientChannel == "dev" {
-		source = p.dev
-	}
-	r, err := source.Check(ctx, req)
-	if err != nil || r == nil {
-		return r, err
-	}
-	if r.Verification == nil || r.Verification.DigestAlgo != "sha256" || len(r.Verification.Digest) != 32 {
-		return nil, errors.New("客户端发布缺少有效的 SHA256SUMS，拒绝更新")
-	}
-	return r, nil
 }
 
 func (d *desktop) checkClient(download bool) error {
@@ -69,7 +47,15 @@ func (d *desktop) checkClient(download bool) error {
 		return nil
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
-	defer cancel()
+	d.mu.Lock()
+	d.updateCancel = cancel
+	d.mu.Unlock()
+	defer func() {
+		d.mu.Lock()
+		d.updateCancel = nil
+		d.mu.Unlock()
+		cancel()
+	}()
 	r, err := d.app.Updater.Check(ctx)
 	if err == nil && r == nil {
 		d.mu.Lock()
@@ -78,7 +64,7 @@ func (d *desktop) checkClient(download bool) error {
 	}
 	if err == nil && r != nil {
 		d.mu.Lock()
-		d.clientVersion = r.Version
+		d.clientVersion, d.clientNotes, d.clientSource = r.Version, r.Notes, r.Channel
 		d.mu.Unlock()
 		if download {
 			err = d.app.Updater.DownloadAndInstall(ctx)
@@ -89,11 +75,28 @@ func (d *desktop) checkClient(download bool) error {
 	}
 	d.mu.Lock()
 	d.clientError = ""
+	if errors.Is(err, context.Canceled) {
+		err = errors.New("更新已取消")
+	}
 	if err != nil {
 		d.clientError = err.Error()
+	} else {
+		d.clientNotes, d.clientSource = "", d.m.Preferences().ClientChannel
 	}
 	d.mu.Unlock()
 	return err
+}
+
+// cancelUpdate unblocks a running Check/Download without replacing its lock owner.
+func (d *desktop) cancelUpdate() error {
+	d.mu.Lock()
+	cancel := d.updateCancel
+	d.mu.Unlock()
+	if cancel == nil {
+		return errors.New("没有正在执行的客户端更新")
+	}
+	cancel()
+	return nil
 }
 
 func (d *desktop) canRestartClient() bool {

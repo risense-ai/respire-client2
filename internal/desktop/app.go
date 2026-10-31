@@ -4,6 +4,7 @@ import (
 	"context"
 	"embed"
 	"errors"
+	"fmt"
 	"io/fs"
 	"log"
 	"net/http"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/wailsapp/wails/v3/pkg/application"
 	"github.com/wailsapp/wails/v3/pkg/events"
+	"github.com/wailsapp/wails/v3/pkg/services/notifications"
 	"github.com/wailsapp/wails/v3/pkg/updater"
 	"respire-client2/internal/host"
 )
@@ -36,10 +38,14 @@ type desktop struct {
 	mu            sync.Mutex
 	updateMu      sync.Mutex
 	clientVersion string
+	clientNotes   string
+	clientSource  string
 	clientError   string
+	updateCancel  context.CancelFunc
 	closing       chan struct{}
 	restarting    bool
 	tray          *application.SystemTray
+	notifier      *notifications.NotificationService
 	native        nativeAppearance
 	resolvedTheme string
 }
@@ -60,9 +66,13 @@ func Run(m *host.Manager, buildVersion string) {
 		log.Fatal(err)
 	}
 	static := http.FileServer(http.FS(files))
+	notifier := notifications.New()
 	d.app = application.New(application.Options{
 		Name: "Respire", Description: "Respire Runtime desktop client", Icon: lightIcon,
-		Assets:  application.AssetOptions{Handler: d.handler(static)},
+		Assets: application.AssetOptions{Handler: d.handler(static)},
+		Services: []application.Service{
+			application.NewService(notifier),
+		},
 		Windows: application.WindowsOptions{DisableQuitOnLastWindowClosed: true, WebviewUserDataPath: filepath.Join(m.Root, "webview2")},
 		Linux:   application.LinuxOptions{DisableQuitOnLastWindowClosed: true, ApplicationID: "ai.risense.respire.client2"},
 		SingleInstance: &application.SingleInstanceOptions{UniqueID: "ai.risense.respire.client2", OnSecondInstanceLaunch: func(application.SecondInstanceData) {
@@ -84,6 +94,24 @@ func Run(m *host.Manager, buildVersion string) {
 		background = application.NewRGB(36, 37, 31)
 	}
 	d.window = d.app.Window.NewWithOptions(application.WebviewWindowOptions{Name: "main", Title: "Respire", Width: 1180, Height: 800, MinWidth: 800, MinHeight: 600, URL: "/workspace.html", Hidden: hasArg("--tray"), BackgroundColour: background})
+	d.notifier = notifier
+	for name, action := range map[string]func(){
+		"CmdOrCtrl+Shift+R": func() { d.window.Show(); d.window.Focus() },
+		"CmdOrCtrl+Shift+H": func() { d.window.Hide() },
+	} {
+		name, action := name, action
+		if err := d.app.GlobalShortcut.Register(name, action); err != nil {
+			log.Printf("global shortcut %s: %v", name, err)
+		}
+	}
+	d.app.Event.On(updater.EventUpdateReady, func(*application.CustomEvent) {
+		d.updateNotification()
+	})
+	d.app.Event.On(updater.EventError, func(event *application.CustomEvent) {
+		if info, ok := event.Data.(updater.ErrorInfo); ok {
+			d.updateFailureNotification(info.Message)
+		}
+	})
 	d.window.RegisterHook(events.Common.WindowClosing, func(e *application.WindowEvent) { e.Cancel(); d.window.Hide() })
 	d.window.OnWindowEvent(events.Common.WindowShow, func(*application.WindowEvent) { d.applyAppearance() })
 	tray := d.app.SystemTray.New()
@@ -104,6 +132,36 @@ func Run(m *host.Manager, buildVersion string) {
 	if err = d.app.Run(); err != nil {
 		log.Print(err)
 	}
+}
+
+func (d *desktop) notifySystem(title, body string) {
+	if d.notifier == nil {
+		return
+	}
+	go func() {
+		if err := d.notifier.SendNotification(notifications.NotificationOptions{
+			ID: "respire-update-" + fmt.Sprint(time.Now().UnixNano()), Title: title, Body: body,
+			ThreadID: "updates", InterruptionLevel: notifications.InterruptionLevelActive,
+		}); err != nil {
+			log.Printf("system notification: %v", err)
+		}
+	}()
+}
+
+func (d *desktop) updateNotification() {
+	if d.m.Preferences().Language == "zh" {
+		d.notifySystem("Respire 更新已就绪", "新版本已下载完成。请到更新页重启应用。")
+		return
+	}
+	d.notifySystem("Respire update ready", "The new version is downloaded. Restart from Updates to apply it.")
+}
+
+func (d *desktop) updateFailureNotification(message string) {
+	if d.m.Preferences().Language == "zh" {
+		d.notifySystem("Respire 更新失败", message)
+		return
+	}
+	d.notifySystem("Respire update failed", message)
 }
 
 func hasArg(arg string) bool {

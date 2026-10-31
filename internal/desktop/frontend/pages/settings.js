@@ -99,6 +99,10 @@ export function settings(root, ctx) {
     panel(
       "数据与备份",
       `<div class="panel-body stack"><p class="hint">导出文件包含记忆明文。数据库备份与 JSON 导出分别保存。</p><div class="actions"><button data-file="export">导出记忆</button><button data-file="import">导入记忆</button><button data-file="backup">备份数据库</button><button data-file="share-import">导入分享材料</button></div><div data-paths></div></div>`,
+    ) +
+    panel(
+      "客户端设置备份",
+      `<div class="panel-body actions"><button data-pref-file="preferences-export">导出设置</button><button data-pref-file="preferences-import">导入设置</button></div><p class="hint">备份包含界面语言、主题、布局和更新通道，不包含记忆密钥。</p>`,
     );
   root.addEventListener("change", (event) => {
     const control = event.target;
@@ -163,6 +167,20 @@ export function settings(root, ctx) {
           if (choice) await execute("memory_share_import", { path });
         }
         notify("文件操作已完成");
+        await ctx.refresh();
+      });
+    if (button.dataset.prefFile)
+      action(button, async () => {
+        const kind = button.dataset.prefFile,
+          path = await api("file-dialog", { kind });
+        if (!path) return;
+        if (
+          kind === "preferences-import" &&
+          !(await confirm("导入设置", "将覆盖当前客户端设置。记忆数据不会被修改。", "导入"))
+        )
+          return;
+        await api(kind === "preferences-import" ? "preferences-import" : "preferences-export", { path });
+        notify(kind === "preferences-import" ? "设置已导入" : "设置已导出");
         await ctx.refresh();
       });
   });
@@ -251,8 +269,9 @@ export function updates(root, ctx) {
           ["发布通道", p.clientChannel],
           ["状态", updateNames[u.state] || u.state || "—"],
           ["可用版本", u.latest || "—"],
+          ["更新来源", u.source || "—"],
         ]) +
-          `<div class="panel-body actions"><button data-update="client-check">检查更新</button><button data-update="client-download" ${u.state === "ready" ? "disabled" : ""}>下载更新</button><button class="primary" data-update="client-restart" ${u.state !== "ready" ? "disabled" : ""}>重启并应用</button><button data-open-releases="client">GitHub Releases</button><button data-open-releases="client-mirror">国内镜像</button></div>${u.error ? `<div class="panel-body form-error">${h(u.error)}</div>` : ""}`,
+          `<div class="panel-body actions"><button data-update="client-check">检查更新</button><button data-update="client-download" ${u.state === "ready" ? "disabled" : ""}>${u.error ? "重试下载" : "下载更新"}</button><button class="primary" data-update="client-restart" ${u.state !== "ready" ? "disabled" : ""}>重启并应用</button>${u.cancellable ? `<button data-update="client-cancel">取消更新</button>` : ""}<button data-open-releases="client">GitHub Releases</button><button data-open-releases="client-mirror">国内镜像</button></div>${u.error ? `<div class="panel-body form-error">${h(u.error)}</div>` : ""}${u.notes ? `<details class="panel-body section-gap"><summary>版本说明</summary><pre class="release-notes">${h(u.notes)}</pre></details>` : ""}`,
       )}
       ${panel(
         "CLI / Runtime",
@@ -280,7 +299,7 @@ export function updates(root, ctx) {
         latest = await api("runtime-release");
         update();
       } else if (button.dataset.update) {
-        await api(button.dataset.update, {});
+        await api(button.dataset.update === "client-cancel" ? "client-cancel" : button.dataset.update, {});
         await ctx.refresh();
       }
     });
@@ -294,7 +313,7 @@ export function diagnostics(root, ctx) {
     heading(
       "诊断",
       "查看 Runtime 的实际检查结果和连接状态。",
-      `<button data-doctor>运行诊断</button>`,
+      `<button data-doctor>运行诊断</button><button data-diagnostic-export>导出诊断</button>`,
     ) +
     `<div data-result></div>` +
     panel(
@@ -322,6 +341,14 @@ export function diagnostics(root, ctx) {
       }
       if (root.isConnected)
         $("[data-result]", root).innerHTML = resultView("检查结果", value);
+    }),
+  );
+  $("[data-diagnostic-export]", root).addEventListener("click", (event) =>
+    action(event.currentTarget, async () => {
+      const path = await api("file-dialog", { kind: "diagnostics-export" });
+      if (!path) return;
+      await api("diagnostics-export", { path });
+      notify("诊断已导出");
     }),
   );
   update();
