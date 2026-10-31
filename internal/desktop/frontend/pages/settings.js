@@ -276,13 +276,11 @@ export function updates(root, ctx) {
     action(button, async () => {
       if (button.dataset.openReleases) {
         await api("open-releases", { target: button.dataset.openReleases });
-        notify("已请求打开发布页");
       } else if (button.hasAttribute("data-cli-check")) {
         latest = await api("runtime-release");
         update();
       } else if (button.dataset.update) {
         await api(button.dataset.update, {});
-        notify("更新请求已提交");
         await ctx.refresh();
       }
     });

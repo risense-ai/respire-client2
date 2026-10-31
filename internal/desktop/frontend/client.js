@@ -103,6 +103,7 @@ function route() {
   }
   current = page;
   view?.dispose?.();
+  notify("");
   const root = document.createElement("section");
   root.className = "view-page";
   $("#view").replaceChildren(root);
