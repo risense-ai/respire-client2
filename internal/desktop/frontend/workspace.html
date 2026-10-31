@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="zh-CN">
+<html lang="en">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width,initial-scale=1" />
@@ -11,7 +11,7 @@
     <script type="module" src="client.js"></script>
   </head>
   <body>
-    <a class="skip-link" href="#view">跳到内容</a>
+    <a class="skip-link" href="#view">Skip to content</a>
     <aside class="sidebar">
       <div class="brand">
         <img id="brand-icon" src="brand/respire-light.svg" alt="" /><span
@@ -21,27 +21,27 @@
       <div class="workspace-label">
         <span class="dot" id="connection-dot"></span>
         <div>
-          <strong>本机工作区</strong
-          ><small id="connection-label">正在连接 Runtime</small>
+          <strong>Local workspace</strong>
+          ><small id="connection-label">Connecting to Runtime</small>
         </div>
       </div>
-      <nav aria-label="主导航">
-        <button data-page="overview">概览<span>01</span></button>
+      <nav aria-label="Main navigation">
+        <button data-page="overview">Overview<span>01</span></button>
         <button data-page="memories">
-          记忆<span id="nav-memory-count"></span>
+          Memories<span id="nav-memory-count"></span>
         </button>
-        <button data-page="diary">日记<span>03</span></button>
-        <button data-page="organize">整理<span>04</span></button>
-        <button data-page="models">模型与索引<span>05</span></button>
-        <button data-page="accounts">账户与空间<span>06</span></button>
-        <button data-page="injection">安装<span>07</span></button>
-        <button data-page="grants">访问授权<span>08</span></button>
+        <button data-page="diary">Diary<span>03</span></button>
+        <button data-page="organize">Organize<span>04</span></button>
+        <button data-page="models">Models & Index<span>05</span></button>
+        <button data-page="accounts">Accounts & Spaces<span>06</span></button>
+        <button data-page="injection">Install<span>07</span></button>
+        <button data-page="grants">Access Grants<span>08</span></button>
       </nav>
-      <nav class="nav-bottom" aria-label="管理">
-        <button data-page="settings">设置</button>
-        <button data-page="updates">更新</button>
-        <button data-page="operations">操作记录</button>
-        <button data-page="diagnostics">诊断</button>
+      <nav class="nav-bottom" aria-label="Management">
+        <button data-page="settings">Settings</button>
+        <button data-page="updates">Updates</button>
+        <button data-page="operations">Operations</button>
+        <button data-page="diagnostics">Diagnostics</button>
       </nav>
       <div class="sidebar-foot">
         <span id="client-version"></span><small id="client-platform"></small>
@@ -50,25 +50,39 @@
     <main>
       <header class="topbar">
         <div class="breadcrumbs">
-          工作区 <span>/</span><strong id="breadcrumb">概览</strong>
+          Workspace<span>/</span><strong id="breadcrumb">Overview</strong>
         </div>
         <div class="top-actions">
-          <label class="sr-only" for="theme">界面主题</label
-          ><select id="theme" aria-label="界面主题">
-            <option value="system">跟随系统</option>
-            <option value="light">亮色</option>
-            <option value="dark">暗色</option></select
-          ><button id="layout-toggle" title="切换左右或上下紧凑布局">
-            紧凑布局</button
-          ><button id="refresh">刷新</button>
+          <label class="sr-only" for="language">Language</label
+          ><select id="language" aria-label="Language">
+            <option value="en">English</option>
+            <option value="zh">中文</option></select
+          ><label class="sr-only" for="theme">Theme</label
+          ><select id="theme" aria-label="Theme">
+            <option value="system">System</option>
+            <option value="light">Light</option>
+            <option value="dark">Dark</option></select
+          ><button id="layout-toggle" title="Switch compact or sidebar layout">
+            Compact layout</button
+          ><button id="refresh">Refresh</button>
         </div>
       </header>
       <div id="notice" role="status" hidden></div>
       <div class="view-scroll"><div id="view" tabindex="-1"></div></div>
       <footer class="statusbar">
-        <span id="status-summary">正在读取本机状态</span
-        ><span id="sync-summary">同步状态待确认</span>
+        <span id="status-summary">Reading local status</span
+        ><span id="sync-summary">Sync status pending</span>
       </footer>
     </main>
+    <div id="first-language" class="first-language" hidden>
+      <div class="first-language-card">
+        <h1>Choose your language</h1>
+        <p>You can change this later in Settings or from the top-right corner.</p>
+        <div class="actions">
+          <button class="primary" data-language="en">English</button>
+          <button data-language="zh">中文</button>
+        </div>
+      </div>
+    </div>
   </body>
 </html>

@@ -40,6 +40,11 @@ export function settings(root, ctx) {
           "布局",
           "左右侧栏，或上下紧凑布局。",
           `<select data-pref="layout"><option value="sidebar">侧栏布局</option><option value="compact">紧凑布局</option></select>`,
+        ) +
+        setting(
+          "语言",
+          "软件界面语言；右上角也可以快速切换。",
+          '<select data-pref="language"><option value="en">English</option><option value="zh">中文</option></select>',
         ),
     ) +
     panel(
@@ -99,6 +104,10 @@ export function settings(root, ctx) {
     const control = event.target;
     if (control.dataset.pref)
       action(control, async () => {
+        if (control.dataset.pref === "language") {
+          await ctx.changeLanguage(control.value);
+          return;
+        }
         await ctx.savePreferences({
           [control.dataset.pref]:
             control.type === "checkbox" ? control.checked : control.value,

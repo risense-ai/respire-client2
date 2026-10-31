@@ -14,6 +14,12 @@ import { accounts } from "./pages/accounts.js";
 import { injection } from "./pages/injection.js";
 import { applyTypography } from "./ui/typography.js";
 import { grants } from "./pages/grants.js";
+import {
+  applyTranslations,
+  currentLanguage,
+  setLanguage,
+  t,
+} from "./ui/i18n.js";
 applyTypography();
 
 const definitions = {
@@ -42,6 +48,7 @@ const ctx = {
   notify,
   navigate,
   refresh,
+  changeLanguage,
   savePreferences,
 };
 const systemTheme = matchMedia("(prefers-color-scheme: dark)");
@@ -57,7 +64,7 @@ function appearance() {
   $("#theme").value = theme;
   document.body.dataset.layout = prefs.layout || "sidebar";
   $("#layout-toggle").textContent =
-    prefs.layout === "compact" ? "侧栏布局" : "紧凑布局";
+    prefs.layout === "compact" ? "Sidebar layout" : "Compact layout";
 }
 appearance();
 systemTheme.addEventListener("change", appearance);
@@ -68,6 +75,19 @@ async function savePreferences(patch) {
   ctx.desktop.preferences = preferences;
   localStorage.setItem("respire-theme", preferences.theme);
   appearance();
+}
+async function changeLanguage(value) {
+  await savePreferences({ language: value });
+  setLanguage(value);
+  location.reload();
+}
+async function chooseFirstLanguage(value) {
+  const preferences = { ...(ctx.desktop?.preferences || {}), language: value };
+  await api("preferences", preferences);
+  if (ctx.desktop) ctx.desktop.preferences = preferences;
+  localStorage.setItem("respire-language", value);
+  setLanguage(value);
+  $("#first-language").hidden = true;
 }
 function navigate(page) {
   location.hash = page;
@@ -104,9 +124,9 @@ async function refresh() {
     appearance();
     $("#connection-dot").classList.toggle("online", ctx.desktop.connected);
     $("#connection-label").textContent = ctx.desktop.connected
-      ? "Runtime 已连接"
-      : "Runtime 未连接";
-    $("#client-version").textContent = "客户端 " + ctx.desktop.version;
+      ? t("Runtime 已连接")
+      : t("Runtime 未连接");
+    $("#client-version").textContent = t("客户端") + " " + ctx.desktop.version;
     $("#client-platform").textContent = ctx.desktop.platform;
     if (ctx.desktop.connected) {
       try {
@@ -118,17 +138,21 @@ async function refresh() {
       }
     } else {
       ctx.status = null;
-      ctx.statusError = ctx.desktop.connectionError || "Runtime 未连接";
+    ctx.statusError = ctx.desktop.connectionError || t("Runtime 未连接");
     }
     const s = ctx.status?.summary || {};
     $("#nav-memory-count").textContent = number(s.local_alive);
     $("#status-summary").textContent = ctx.desktop.connected
-      ? `${number(s.local_alive)} 条记忆 · ${s.workspace || "normal"} · Runtime ${ctx.desktop.health?.bin || "—"}`
-      : "Runtime 未连接";
+      ? currentLanguage() === "zh"
+        ? `${number(s.local_alive)} 条记忆 · ${s.workspace || "normal"} · Runtime ${ctx.desktop.health?.bin || "—"}`
+        : `${number(s.local_alive)} memories · ${s.workspace || "normal"} · Runtime ${ctx.desktop.health?.bin || "—"}`
+      : t("Runtime 未连接");
     const sync = s.sync_live || {};
     $("#sync-summary").textContent = ctx.statusError
       ? "状态读取失败"
-      : `同步 ${sync.phase || "—"} · 待处理 ${number(sync.pending)} · 冲突 ${number(sync.conflicts)}`;
+      : currentLanguage() === "zh"
+        ? `同步 ${sync.phase || "—"} · 待处理 ${number(sync.pending)} · 冲突 ${number(sync.conflicts)}`
+        : `Sync ${sync.phase || "—"} · pending ${number(sync.pending)} · conflicts ${number(sync.conflicts)}`;
     view?.update?.();
   } catch (error) {
     notify(error.message, true);
@@ -157,15 +181,70 @@ $("#layout-toggle").addEventListener("click", async () => {
     notify(error.message, true);
   }
 });
+$("#language").addEventListener("change", async (event) => {
+  try {
+    await changeLanguage(event.target.value);
+  } catch (error) {
+    notify(error.message, true);
+    event.target.value = currentLanguage();
+  }
+});
+all("#first-language [data-language]").forEach((button) =>
+  button.addEventListener("click", async () => {
+    try {
+      await chooseFirstLanguage(button.dataset.language);
+      applyTranslations();
+    } catch (error) {
+      notify(error.message, true);
+      setLanguage(button.dataset.language);
+      $("#first-language").hidden = true;
+      applyTranslations();
+    }
+  }),
+);
 $("#refresh").addEventListener("click", async () => {
   await refresh();
   await view?.refresh?.();
 });
 window.addEventListener("hashchange", route);
 document.addEventListener("respire-operation", () => refresh());
-route();
+let translationScheduled = false;
+new MutationObserver(() => {
+  if (translationScheduled) return;
+  translationScheduled = true;
+  requestAnimationFrame(() => {
+    translationScheduled = false;
+    applyTranslations();
+  });
+}).observe(document.documentElement, {
+  childList: true,
+  subtree: true,
+  characterData: true,
+  attributes: true,
+  attributeFilter: ["title", "placeholder", "aria-label"],
+});
 async function poll() {
   await refresh();
   setTimeout(poll, document.hidden ? 15000 : 3000);
 }
-poll();
+(async () => {
+  try {
+    ctx.desktop = await api("state");
+    const preferred =
+      ctx.desktop.preferences?.language ||
+      localStorage.getItem("respire-language") ||
+      "";
+    if (preferred) {
+      setLanguage(preferred);
+      $("#language").value = preferred;
+    } else {
+      $("#first-language").hidden = false;
+    }
+  } catch {
+    const preferred = localStorage.getItem("respire-language");
+    if (preferred) setLanguage(preferred);
+    $("#first-language").hidden = Boolean(preferred);
+  }
+  route();
+  poll();
+})();

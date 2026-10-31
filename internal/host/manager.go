@@ -19,9 +19,13 @@ type Preferences struct {
 	ClientChannel  string `json:"clientChannel"`
 	Layout         string `json:"layout"`
 	Theme          string `json:"theme"`
+	Language       string `json:"language"`
 }
 
 func (p Preferences) validate() error {
+	if p.Language != "" && p.Language != "en" && p.Language != "zh" {
+		return errors.New("language must be en or zh")
+	}
 	if p.Theme != "system" && p.Theme != "light" && p.Theme != "dark" {
 		return errors.New("主题必须是 system、light 或 dark")
 	}
@@ -83,7 +87,7 @@ func New() (*Manager, error) {
 	}
 	m := &Manager{Root: filepath.Join(dataRoot, "client2"), Endpoint: "http://127.0.0.1:" + port,
 		localClient: &http.Client{Timeout: 30 * time.Second, Transport: &http.Transport{Proxy: nil}, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }},
-		prefs:       Preferences{AutoRuntime: true, AutoUpdate: true, RuntimeChannel: "stable", ClientChannel: "stable", Layout: "sidebar", Theme: "system"}, task: TaskState{Stage: "就绪"},
+		prefs:       Preferences{AutoRuntime: true, AutoUpdate: true, RuntimeChannel: "stable", ClientChannel: "stable", Layout: "sidebar", Theme: "system", Language: ""}, task: TaskState{Stage: "就绪"},
 		HTTPClient: &http.Client{Timeout: 10 * time.Minute, CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			if len(via) >= 5 {
 				return errors.New("too many redirects")

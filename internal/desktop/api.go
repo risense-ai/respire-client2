@@ -77,6 +77,7 @@ func (d *desktop) handler(static http.Handler) http.Handler {
 				ClientChannel  string `json:"clientChannel"`
 				Layout         string `json:"layout"`
 				Theme          string `json:"theme"`
+				Language       string `json:"language"`
 			}
 			decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096))
 			decoder.DisallowUnknownFields()
@@ -126,7 +127,7 @@ func (d *desktop) handler(static http.Handler) http.Handler {
 					if input.Theme == "" {
 						input.Theme = d.m.Preferences().Theme
 					}
-					err = d.savePreferences(host.Preferences{AutoRuntime: input.AutoRuntime, AutoUpdate: input.AutoUpdate, RuntimeChannel: input.RuntimeChannel, ClientChannel: input.ClientChannel, Layout: input.Layout, Theme: input.Theme})
+					err = d.savePreferences(host.Preferences{AutoRuntime: input.AutoRuntime, AutoUpdate: input.AutoUpdate, RuntimeChannel: input.RuntimeChannel, ClientChannel: input.ClientChannel, Layout: input.Layout, Theme: input.Theme, Language: input.Language})
 					result = "设置已保存"
 				case "/api/rpc":
 					result, err = d.m.RPC(input.Command)
