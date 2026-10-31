@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sync"
 	"time"
 
@@ -67,22 +68,28 @@ func Run(m *host.Manager, buildVersion string) {
 	}
 	static := http.FileServer(http.FS(files))
 	notifier := notifications.New()
+	// Windows updater replacement launches while the old singleton is still
+	// registered, so a new instance would otherwise exit and leave a hung app.
+	var singleInstance *application.SingleInstanceOptions
+	if runtime.GOOS != "windows" {
+		singleInstance = &application.SingleInstanceOptions{UniqueID: "ai.risense.respire.client2", OnSecondInstanceLaunch: func(application.SecondInstanceData) {
+			if d.window != nil {
+				d.window.Show()
+				d.window.Focus()
+			}
+		}}
+	}
 	d.app = application.New(application.Options{
 		Name: "Respire", Description: "Respire Runtime desktop client", Icon: lightIcon,
 		Assets: application.AssetOptions{Handler: d.handler(static)},
 		Services: []application.Service{
 			application.NewService(notifier),
 		},
-		Windows: application.WindowsOptions{DisableQuitOnLastWindowClosed: true, WebviewUserDataPath: filepath.Join(m.Root, "webview2")},
-		Linux:   application.LinuxOptions{DisableQuitOnLastWindowClosed: true, ApplicationID: "ai.risense.respire.client2"},
-		SingleInstance: &application.SingleInstanceOptions{UniqueID: "ai.risense.respire.client2", OnSecondInstanceLaunch: func(application.SecondInstanceData) {
-			if d.window != nil {
-				d.window.Show()
-				d.window.Focus()
-			}
-		}},
-		OnShutdown:   func() { close(d.closing); d.app.Updater.StopPeriodicCheck() },
-		ErrorHandler: func(err error) { log.Printf("desktop: %v", err) },
+		Windows:        application.WindowsOptions{DisableQuitOnLastWindowClosed: true, WebviewUserDataPath: filepath.Join(m.Root, "webview2")},
+		Linux:          application.LinuxOptions{DisableQuitOnLastWindowClosed: true, ApplicationID: "ai.risense.respire.client2"},
+		SingleInstance: singleInstance,
+		OnShutdown:     func() { close(d.closing); d.app.Updater.StopPeriodicCheck() },
+		ErrorHandler:   func(err error) { log.Printf("desktop: %v", err) },
 	})
 	if err = d.initUpdater(); err != nil {
 		log.Fatal(err)

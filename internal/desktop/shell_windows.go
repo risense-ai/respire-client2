@@ -39,7 +39,7 @@ func setProcessAppUserModelID(value string) error {
 	if err != nil {
 		return err
 	}
-	result, _, callErr := syscall.NewLazyDLL("combase.dll").NewProc("SetCurrentProcessExplicitAppUserModelID").Call(uintptr(unsafe.Pointer(valuePtr)))
+	result, _, callErr := syscall.NewLazyDLL("shell32.dll").NewProc("SetCurrentProcessExplicitAppUserModelID").Call(uintptr(unsafe.Pointer(valuePtr)))
 	if result != 0 {
 		return callErr
 	}
