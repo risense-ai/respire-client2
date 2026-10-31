@@ -104,7 +104,7 @@ func (d *desktop) handler(static http.Handler) http.Handler {
 					go d.checkClient(true)
 					result = "已请求下载"
 				case "/api/client-restart":
-					if d.m.HasActiveOperations() {
+					if !d.canRestartClient() {
 						err = errors.New("仍有业务操作在执行，请等待完成后应用客户端更新")
 					} else {
 						err = d.app.Updater.Restart(r.Context())

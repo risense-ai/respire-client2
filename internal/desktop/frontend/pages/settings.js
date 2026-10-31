@@ -259,7 +259,7 @@ export function updates(root, ctx) {
         "当前操作",
         `<div class="panel-body"><p>${h(task.stage || "就绪")}</p>${task.total ? `<div class="progress-label"><span>${h(bytes(task.done))} / ${h(bytes(task.total))}</span></div><progress value="${h(task.done)}" max="${h(task.total)}"></progress>` : ""}${task.error ? `<p class="form-error section-gap">${h(task.error)}</p>` : ""}</div>`,
       ) +
-      `<p class="hint section-gap">更换通道请到设置。客户端下载后需要重启；业务操作执行期间不会应用客户端更新。</p>`;
+      `<p class="hint section-gap">更换通道请到设置。客户端下载后会自动重启；业务操作执行期间不会应用客户端更新。</p>`;
   }
   root.addEventListener("click", (event) => {
     const button = event.target.closest("button");

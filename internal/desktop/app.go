@@ -145,7 +145,13 @@ func (d *desktop) background() {
 		case <-timer.C:
 		}
 		if d.m.Preferences().AutoUpdate {
-			if d.app.Updater.State() != updater.StateReady {
+			if d.app.Updater.State() == updater.StateReady {
+				if d.canRestartClient() {
+					if err := d.app.Updater.Restart(context.Background()); err != nil {
+						log.Printf("client update restart: %v", err)
+					}
+				}
+			} else {
 				if err := d.checkClient(true); err != nil {
 					log.Printf("client update: %v", err)
 				}

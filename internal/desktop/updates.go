@@ -82,6 +82,9 @@ func (d *desktop) checkClient(download bool) error {
 		d.mu.Unlock()
 		if download {
 			err = d.app.Updater.DownloadAndInstall(ctx)
+			if err == nil && d.canRestartClient() {
+				err = d.app.Updater.Restart(ctx)
+			}
 		}
 	}
 	d.mu.Lock()
@@ -91,6 +94,10 @@ func (d *desktop) checkClient(download bool) error {
 	}
 	d.mu.Unlock()
 	return err
+}
+
+func (d *desktop) canRestartClient() bool {
+	return !d.m.HasActiveOperations() && !d.m.TaskSnapshot().Busy
 }
 
 func (d *desktop) savePreferences(p host.Preferences) error {
