@@ -39,8 +39,10 @@ func (m *Manager) hostCommand(ctx context.Context, info InstalledRuntime, args .
 	if err := verifyRuntime(dir, info.SHA256); err != nil {
 		return err
 	}
-	cmd := exec.CommandContext(ctx, filepath.Join(dir, runtimeBinary()), args...)
-	configureCommand(cmd)
+	return runRuntimeCommand(ctx, filepath.Join(dir, runtimeBinary()), args...)
+}
+
+func runtimeEnv(dir string) []string {
 	// These host actions own lifecycle; never inherit sandbox/client flags.
 	var env []string
 	for _, item := range os.Environ() {
@@ -50,7 +52,13 @@ func (m *Manager) hostCommand(ctx context.Context, info InstalledRuntime, args .
 		}
 		env = append(env, item)
 	}
-	cmd.Env = append(env, "RSRS_BIN_DIR="+dir, "RSRS_CLIENT_ONLY=0", "RSRS_NO_AUTOSTART=0")
+	return append(env, "RSRS_BIN_DIR="+dir, "RSRS_CLIENT_ONLY=0", "RSRS_NO_AUTOSTART=0")
+}
+
+func runRuntimeCommand(ctx context.Context, executable string, args ...string) error {
+	cmd := exec.CommandContext(ctx, executable, args...)
+	configureCommand(cmd)
+	cmd.Env = runtimeEnv(filepath.Dir(executable))
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("Runtime host action failed: %w (%s)", err, strings.TrimSpace(string(out)))
@@ -69,6 +77,18 @@ func (m *Manager) Start() error {
 		return fmt.Errorf("Runtime 状态无法确认，未启动另一个实例: %w", err)
 	}
 	info, err := m.Installed()
+	if errors.Is(err, os.ErrNotExist) {
+		ctx, cancel = context.WithTimeout(context.Background(), 90*time.Second)
+		defer cancel()
+		external, externalErr := m.External(ctx)
+		if externalErr != nil {
+			return fmt.Errorf("尚未安装 Runtime，请先下载: %w", externalErr)
+		}
+		if err = runRuntimeCommand(ctx, external.Path, "--json", "runtime", "start"); err != nil {
+			return err
+		}
+		return m.requireExternalActive(external)
+	}
 	if err != nil {
 		return fmt.Errorf("尚未安装 Runtime，请先下载: %w", err)
 	}
@@ -91,6 +111,19 @@ func (m *Manager) Start() error {
 		return err
 	}
 	return m.requireActive(info)
+}
+
+func (m *Manager) requireExternalActive(external ExternalRuntime) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	h, _, err := m.Health(ctx)
+	if err != nil {
+		return err
+	}
+	if h.Version != external.Version || !samePath(h.Exe, external.Path) {
+		return errors.New("启动后的本机 Runtime 身份或版本不匹配")
+	}
+	return nil
 }
 
 func (m *Manager) requireActive(info InstalledRuntime) error {

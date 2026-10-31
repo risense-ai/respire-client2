@@ -2,7 +2,7 @@
 
 A desktop client built with Wails v3 and Go for Windows, macOS and Linux. It replaces the desktop application in `risense-ai/respire-client`. The CLI, TUI, hosted dashboard and existing user data remain independent.
 
-Download the asset matching your OS and architecture from [Releases](https://github.com/risense-ai/respire-client2/releases). Keep the extracted application in a writable, permanent folder. Windows uses one EXE and requires Microsoft Edge WebView2. macOS uses a zipped `Respire.app`; Linux uses a tarball containing one executable and requires GTK 3, WebKitGTK 4.1 and X11 libraries. No Node.js, Go, npm or Rust installation is needed by the end user. The application downloads the CLI and its native libraries separately when available; it does not contain Core or model weights.
+Download the asset matching your OS and architecture from [Releases](https://github.com/risense-ai/respire-client2/releases). Keep the extracted application in a writable, permanent folder. Windows uses one EXE and requires Microsoft Edge WebView2. macOS uses a zipped `Respire.app`; Linux uses a tarball containing one executable and requires GTK 3, WebKitGTK 4.1 and X11 libraries. No Node.js, Go, npm or Rust installation is needed by the end user. The application downloads the CLI and its native libraries separately when available; it does not contain Core or model weights. If no client-managed CLI exists, it can recognize and start an external CLI at `<root>/bin/rsrs[.exe]`, including an npm installation.
 
 See [platform support](docs/platforms.md) for architectures, native-library prerequisites and the distinction between desktop builds and matching CLI availability. Missing CLI/Core release targets are tracked in [respire-cli#163](https://github.com/risense-ai/respire-cli/issues/163).
 
@@ -24,7 +24,7 @@ See [platform support](docs/platforms.md) for architectures, native-library prer
 - Read-only subtree grants with direct/inherited inspection and revocation, space-member administration, memory material and permanent ciphertext purge.
 - Password/TOTP login, registration, key recovery and super-password reset through the versioned CLI host RPC; requires a compatible CLI package. See [transport and acceptance status](docs/cli-host-input.md).
 
-Version `v0.2.0` promotes the memory workspace and subsequent migration fixes to Stable, with CLI `v1.0.18` providing the stable account RPC dependency. New installations default to Stable for both CLI and client; existing installations keep their selected channels. To receive only stable releases, select Stable for both channels in Updates. [Releases](https://github.com/risense-ai/respire-client2/releases) lists available builds. See [verification](docs/verification.md) and [migration acceptance](docs/migration.md) for tested paths and release gates.
+Version `v0.2.1` recognizes an existing external CLI at `<root>/bin/rsrs[.exe]`, reads and displays its version, and can start it without taking over npm ownership. The Updates page adds GitHub and China mirror links for manual desktop and CLI downloads. New installations default to Stable for both CLI and client; existing installations keep their selected channels. To receive only stable releases, select Stable for both channels in Updates. [Releases](https://github.com/risense-ai/respire-client2/releases) lists available builds. See [verification](docs/verification.md) and [migration acceptance](docs/migration.md) for tested paths and release gates.
 
 ## Repository structure
 
@@ -110,6 +110,8 @@ runtime/<version>/        Immutable CLI, core-runtime.json, native libraries and
 webview2/                 WebView2 browser profile
 client.log                Desktop operational errors
 ```
+
+When `<root>/client2/runtime.json` is absent, the client also recognizes an external executable at `<root>/bin/rsrs[.exe]`. It validates the executable architecture and reads `--version`; it does not claim ownership or auto-update that external CLI.
 
 `RSRS_RPC_PORT` overrides `15169`. RPC remains HTTP on `127.0.0.1`; the client never changes Runtime bind addresses, authentication policy or Origin checks. Installed CLI host actions receive `RSRS_BIN_DIR` pointing at their complete version directory so that the CLI does not materialize an EXE without its matching libraries.
 

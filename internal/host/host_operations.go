@@ -31,14 +31,19 @@ func (b *cappedOutput) Write(p []byte) (int, error) {
 
 func (m *Manager) hostExecutable(ctx context.Context) (string, error) {
 	info, err := m.Installed()
-	if err == nil {
+	if errors.Is(err, os.ErrNotExist) {
+		external, externalErr := m.External(ctx)
+		if externalErr == nil {
+			return external.Path, nil
+		}
+	} else if err == nil {
 		dir := m.runtimeDir(info.Version)
 		if err = verifyRuntime(dir, info.SHA256); err != nil {
 			return "", err
 		}
 		return filepath.Join(dir, runtimeBinary()), nil
 	}
-	if !errors.Is(err, os.ErrNotExist) {
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return "", err
 	}
 	h, _, err := m.Health(ctx)

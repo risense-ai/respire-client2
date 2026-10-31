@@ -39,6 +39,15 @@ func (d *desktop) handler(static http.Handler) http.Handler {
 			if readErr != nil && !errors.Is(readErr, os.ErrNotExist) {
 				err = readErr
 			}
+			var external *host.ExternalRuntime
+			if errors.Is(readErr, os.ErrNotExist) {
+				ctx, cancel = context.WithTimeout(r.Context(), 3*time.Second)
+				externalItem, externalErr := d.m.External(ctx)
+				cancel()
+				if externalErr == nil {
+					external = &externalItem
+				}
+			}
 			d.mu.Lock()
 			latest, clientErr, theme := d.clientVersion, d.clientError, d.resolvedTheme
 			d.mu.Unlock()
@@ -48,7 +57,7 @@ func (d *desktop) handler(static http.Handler) http.Handler {
 				"preferences": d.m.Preferences(), "autostart": auto,
 				"task": d.m.TaskSnapshot(), "connected": healthErr == nil,
 				"managed":   healthErr == nil && d.m.Owns(h.Exe),
-				"installed": info, "health": body,
+				"installed": info, "externalRuntime": external, "health": body,
 				"clientUpdate": map[string]any{"state": d.app.Updater.State(), "latest": latest, "error": clientErr},
 			}
 			if healthErr != nil {

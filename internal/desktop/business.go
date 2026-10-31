@@ -43,6 +43,7 @@ func (d *desktop) businessRoute(w http.ResponseWriter, r *http.Request) bool {
 			Secret    string          `json:"secret"`
 			Kind      string          `json:"kind"`
 			Language  string          `json:"language"`
+			Target    string          `json:"target"`
 		}
 		decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20))
 		decoder.DisallowUnknownFields()
@@ -67,6 +68,19 @@ func (d *desktop) businessRoute(w http.ResponseWriter, r *http.Request) bool {
 		case "/api/open-dashboard":
 			err = d.app.Browser.OpenURL("https://dash.rsrs.rs")
 			result = "已打开 dashboard"
+		case "/api/open-releases":
+			url := map[string]string{
+				"client":        "https://github.com/risense-ai/respire-client2/releases/latest",
+				"client-mirror": "https://gh-proxy.com/https://github.com/risense-ai/respire-client2/releases/latest",
+				"cli":           "https://github.com/risense-ai/respire-cli/releases/latest",
+				"cli-mirror":    "https://gh-proxy.com/https://github.com/risense-ai/respire-cli/releases/latest",
+			}[input.Target]
+			if url == "" {
+				err = errors.New("未知的发布页")
+				break
+			}
+			err = d.app.Browser.OpenURL(url)
+			result = "已打开发布页"
 		case "/api/cli-language":
 			err = d.m.SetCLILanguage(input.Language)
 			result = "CLI 语言已保存"

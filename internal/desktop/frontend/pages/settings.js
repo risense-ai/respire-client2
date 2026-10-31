@@ -243,17 +243,17 @@ export function updates(root, ctx) {
           ["状态", updateNames[u.state] || u.state || "—"],
           ["可用版本", u.latest || "—"],
         ]) +
-          `<div class="panel-body actions"><button data-update="client-check">检查更新</button><button data-update="client-download" ${u.state === "ready" ? "disabled" : ""}>下载更新</button><button class="primary" data-update="client-restart" ${u.state !== "ready" ? "disabled" : ""}>重启并应用</button></div>${u.error ? `<div class="panel-body form-error">${h(u.error)}</div>` : ""}`,
+          `<div class="panel-body actions"><button data-update="client-check">检查更新</button><button data-update="client-download" ${u.state === "ready" ? "disabled" : ""}>下载更新</button><button class="primary" data-update="client-restart" ${u.state !== "ready" ? "disabled" : ""}>重启并应用</button><button data-open-releases="client">GitHub Releases</button><button data-open-releases="client-mirror">国内镜像</button></div>${u.error ? `<div class="panel-body form-error">${h(u.error)}</div>` : ""}`,
       )}
       ${panel(
         "CLI / Runtime",
         pairs([
           ["当前运行", state.health?.bin || "未连接"],
-          ["已安装", state.installed?.version || "未安装"],
+          ["已安装", state.installed?.version || (state.externalRuntime ? `${state.externalRuntime.version}（本机 bin）` : "未安装")],
           ["发布通道", p.runtimeChannel],
           ["可用版本", latest?.version || "尚未检查"],
         ]) +
-          `<div class="panel-body actions"><button data-cli-check>检查 CLI 版本</button><button class="primary" data-update="runtime-update" ${task.busy ? "disabled" : ""}>安装 / 更新 CLI</button></div>`,
+          `<div class="panel-body actions"><button data-cli-check>检查 CLI 版本</button><button class="primary" data-update="runtime-update" ${task.busy ? "disabled" : ""}>安装 / 更新 CLI</button><button data-open-releases="cli">GitHub Releases</button><button data-open-releases="cli-mirror">国内镜像</button></div>`,
       )}</div>` +
       panel(
         "当前操作",
@@ -265,7 +265,10 @@ export function updates(root, ctx) {
     const button = event.target.closest("button");
     if (!button) return;
     action(button, async () => {
-      if (button.hasAttribute("data-cli-check")) {
+      if (button.dataset.openReleases) {
+        await api("open-releases", { target: button.dataset.openReleases });
+        notify("已请求打开发布页");
+      } else if (button.hasAttribute("data-cli-check")) {
         latest = await api("runtime-release");
         update();
       } else if (button.dataset.update) {
