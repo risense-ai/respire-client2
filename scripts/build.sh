@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 cd "$(dirname "$0")/.."
-version="${1:-0.2.7}"
+version="${1:-0.2.8}"
 arch="${2:-$(go env GOARCH)}"
 case "$arch" in amd64|arm64) ;; *) echo 'Supported desktop architectures: amd64, arm64' >&2; exit 1;; esac
 [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]] || { echo 'Invalid semantic version' >&2; exit 1; }

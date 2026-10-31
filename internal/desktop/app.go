@@ -54,6 +54,7 @@ func Run(m *host.Manager, buildVersion string) {
 	log.SetOutput(f)
 	d := &desktop{m: m, closing: make(chan struct{})}
 	defer d.native.close()
+	go ensureShellIdentity()
 	files, err := fs.Sub(frontend, "frontend")
 	if err != nil {
 		log.Fatal(err)
