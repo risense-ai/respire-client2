@@ -10,7 +10,6 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"runtime"
 	"sync"
 	"time"
 
@@ -68,17 +67,12 @@ func Run(m *host.Manager, buildVersion string) {
 	}
 	static := http.FileServer(http.FS(files))
 	notifier := notifications.New()
-	// Windows updater replacement launches while the old singleton is still
-	// registered, so a new instance would otherwise exit and leave a hung app.
-	var singleInstance *application.SingleInstanceOptions
-	if runtime.GOOS != "windows" {
-		singleInstance = &application.SingleInstanceOptions{UniqueID: "ai.risense.respire.client2", OnSecondInstanceLaunch: func(application.SecondInstanceData) {
-			if d.window != nil {
-				d.window.Show()
-				d.window.Focus()
-			}
-		}}
-	}
+	singleInstance := &application.SingleInstanceOptions{UniqueID: "ai.risense.respire.client2", OnSecondInstanceLaunch: func(application.SecondInstanceData) {
+		if d.window != nil {
+			d.window.Show()
+			d.window.Focus()
+		}
+	}}
 	d.app = application.New(application.Options{
 		Name: "Respire", Description: "Respire Runtime desktop client", Icon: lightIcon,
 		Assets: application.AssetOptions{Handler: d.handler(static)},

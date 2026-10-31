@@ -1,4 +1,4 @@
-param([string]$Version = '0.2.10', [ValidateSet('amd64', 'arm64')][string]$Arch = 'amd64')
+param([string]$Version = '0.2.11', [ValidateSet('amd64', 'arm64')][string]$Arch = 'amd64')
 $ErrorActionPreference = 'Stop'
 if ($Version -notmatch '^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$') { throw 'Use a semantic version without a v prefix' }
 $repoRoot = Split-Path -Parent $PSScriptRoot
