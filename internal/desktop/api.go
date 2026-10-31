@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"strings"
@@ -107,7 +108,11 @@ func (d *desktop) handler(static http.Handler) http.Handler {
 					if !d.canRestartClient() {
 						err = errors.New("仍有业务操作在执行，请等待完成后应用客户端更新")
 					} else {
-						err = d.app.Updater.Restart(r.Context())
+						go func() {
+							if restartErr := d.restartClient(); restartErr != nil {
+								log.Printf("client update restart: %v", restartErr)
+							}
+						}()
 					}
 					result = "正在重启"
 				case "/api/autostart":

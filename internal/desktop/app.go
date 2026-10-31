@@ -38,6 +38,7 @@ type desktop struct {
 	clientVersion string
 	clientError   string
 	closing       chan struct{}
+	restarting    bool
 	tray          *application.SystemTray
 	native        nativeAppearance
 	resolvedTheme string
@@ -70,6 +71,7 @@ func Run(m *host.Manager, buildVersion string) {
 			}
 		}},
 		OnShutdown:   func() { close(d.closing); d.app.Updater.StopPeriodicCheck() },
+		PostShutdown: d.delayUpdateShutdown,
 		ErrorHandler: func(err error) { log.Printf("desktop: %v", err) },
 	})
 	if err = d.initUpdater(); err != nil {
@@ -119,6 +121,31 @@ func (d *desktop) task(stage string, action func() error) {
 	}
 }
 
+func (d *desktop) restartClient() error {
+	d.mu.Lock()
+	d.restarting = true
+	d.mu.Unlock()
+	err := d.app.Updater.Restart(context.Background())
+	if err != nil {
+		d.mu.Lock()
+		d.restarting = false
+		d.mu.Unlock()
+	}
+	return err
+}
+
+func (d *desktop) delayUpdateShutdown() {
+	d.mu.Lock()
+	restarting := d.restarting
+	d.mu.Unlock()
+	if !restarting {
+		return
+	}
+	// The updater helper starts after this PID exits; wait for WebView2 to
+	// release its user-data folder so the relaunched app is not blocked.
+	time.Sleep(3 * time.Second)
+}
+
 func (d *desktop) background() {
 	if d.m.Preferences().AutoRuntime {
 		d.task("连接 Runtime", func() error {
@@ -147,7 +174,7 @@ func (d *desktop) background() {
 		if d.m.Preferences().AutoUpdate {
 			if d.app.Updater.State() == updater.StateReady {
 				if d.canRestartClient() {
-					if err := d.app.Updater.Restart(context.Background()); err != nil {
+					if err := d.restartClient(); err != nil {
 						log.Printf("client update restart: %v", err)
 					}
 				}
