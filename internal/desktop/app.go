@@ -71,7 +71,6 @@ func Run(m *host.Manager, buildVersion string) {
 			}
 		}},
 		OnShutdown:   func() { close(d.closing); d.app.Updater.StopPeriodicCheck() },
-		PostShutdown: d.delayUpdateShutdown,
 		ErrorHandler: func(err error) { log.Printf("desktop: %v", err) },
 	})
 	if err = d.initUpdater(); err != nil {
@@ -134,18 +133,6 @@ func (d *desktop) restartClient() error {
 	return err
 }
 
-func (d *desktop) delayUpdateShutdown() {
-	d.mu.Lock()
-	restarting := d.restarting
-	d.mu.Unlock()
-	if !restarting {
-		return
-	}
-	// The updater helper starts after this PID exits; wait for WebView2 to
-	// release its user-data folder so the relaunched app is not blocked.
-	time.Sleep(3 * time.Second)
-}
-
 func (d *desktop) background() {
 	if d.m.Preferences().AutoRuntime {
 		d.task("连接 Runtime", func() error {
@@ -190,6 +177,11 @@ func (d *desktop) background() {
 				d.task("检查 Runtime 更新", func() error { return d.m.InstallRuntime(true) })
 			}
 		}
-		timer.Reset(6 * time.Hour)
+		// A staged update can wait while a business operation finishes.
+		delay := 6 * time.Hour
+		if d.app.Updater.State() == updater.StateReady {
+			delay = time.Minute
+		}
+		timer.Reset(delay)
 	}
 }
