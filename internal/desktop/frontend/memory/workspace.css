@@ -250,9 +250,9 @@ html[data-theme="dark"] .graph-node[data-kind="knowledge"] {
   grid-template-columns: var(--cols);
   gap: 10px;
   align-items: center;
-  padding: 0 8px;
+  padding: 0 0.5rem;
   border-bottom: 1px solid var(--line);
-  min-height: 40px;
+  min-height: 2.5rem;
   border-radius: 0;
 }
 .memory-list .memory-row:hover {
@@ -270,7 +270,7 @@ html[data-theme="dark"] .graph-node[data-kind="knowledge"] {
   background: color-mix(in srgb, var(--green) 18%, var(--panel));
 }
 .memory-row-head {
-  min-height: 34px;
+  min-height: 2.125rem;
   color: var(--muted);
   font: 600 0.6875rem var(--font-sans);
   letter-spacing: 0.4px;
@@ -330,7 +330,7 @@ html[data-theme="dark"] .graph-node[data-kind="knowledge"] {
   align-items: stretch;
   gap: 7px;
   text-align: left;
-  padding: 12px;
+  padding: 0.75rem;
   border: 1px solid var(--line);
   border-radius: 6px;
   background: color-mix(in srgb, var(--card-accent) 8%, var(--panel));
@@ -514,8 +514,7 @@ html[data-theme="dark"] .memory-card[data-kind="knowledge"] {
 .memory-layout {
   display: grid;
   grid-template-columns: minmax(185px, 0.35fr) minmax(0, 1fr);
-  height: calc(100svh / var(--ui-scale, 1) - 245px);
-  min-height: 300px;
+  min-height: 18.75rem;
   border: 1px solid var(--line);
   border-radius: 6px;
   background: var(--panel);
@@ -524,7 +523,7 @@ html[data-theme="dark"] .memory-card[data-kind="knowledge"] {
 .memory-index {
   overflow: auto;
   border-right: 1px solid var(--line);
-  padding: 10px 6px;
+  padding: 0.625rem 0.375rem;
   scrollbar-width: thin;
 }
 .memory-row {
@@ -616,7 +615,7 @@ html[data-theme="dark"] .memory-card[data-kind="knowledge"] {
   scrollbar-width: thin;
 }
 .reader-heading {
-  padding: 25px 27px 20px;
+  padding: 1.5625rem 1.6875rem 1.25rem;
   border-bottom: 1px solid var(--line);
 }
 .reader-path {
@@ -651,12 +650,12 @@ html[data-theme="dark"] .memory-card[data-kind="knowledge"] {
     var(--user-read-font, var(--font-serif));
   white-space: pre-wrap;
   overflow-wrap: anywhere;
-  padding: 26px 28px;
+  padding: 1.625rem 1.75rem;
   user-select: text;
   min-height: 120px;
 }
 .reader-relations {
-  padding: 16px 28px 23px;
+  padding: 1rem 1.75rem 1.4375rem;
   display: grid;
   gap: 7px;
   border-top: 1px solid var(--line);
@@ -704,13 +703,13 @@ html[data-theme="dark"] .memory-card[data-kind="knowledge"] {
 .candidate-list button {
   font-size: 0.6875rem;
   padding: 4px 7px;
-  min-height: 29px;
+  min-height: 1.8125rem;
 }
 .calendar {
   display: grid;
   grid-template-columns: repeat(7, minmax(0, 1fr));
   gap: 5px;
-  padding: 18px;
+  padding: 1.125rem;
 }
 .calendar-day {
   display: flex;
@@ -746,7 +745,7 @@ html[data-theme="dark"] .memory-card[data-kind="knowledge"] {
   display: flex;
   align-items: flex-start;
   gap: 14px;
-  padding: 16px 18px;
+  padding: 1rem 1.125rem;
   border-bottom: 1px solid var(--line);
 }
 .suggestion-card:last-child {
@@ -777,7 +776,7 @@ html[data-theme="dark"] .memory-card[data-kind="knowledge"] {
     flex-basis: 100%;
   }
   .memory-layout {
-    height: calc(100svh - 280px);
+
     grid-template-columns: 180px minmax(0, 1fr);
   }
   .reader-heading {
@@ -794,5 +793,5 @@ html[data-theme="dark"] .memory-card[data-kind="knowledge"] {
   }
 }
 body[data-layout="compact"] .memory-layout {
-  height: calc(100svh - 267px);
+
 }

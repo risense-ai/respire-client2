@@ -66,8 +66,8 @@ button {
   border: 1px solid var(--line);
   border-radius: 4px;
   background: var(--panel);
-  padding: 7px 12px;
-  min-height: 34px;
+  padding: 0.4375rem 0.75rem;
+  min-height: 2.125rem;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -104,7 +104,7 @@ textarea {
   background: var(--panel);
   border: 1px solid var(--line);
   border-radius: 4px;
-  padding: 8px 10px;
+  padding: 0.5rem 0.625rem;
   min-width: 0;
 }
 input,
@@ -116,7 +116,7 @@ textarea {
   line-height: 1.7;
 }
 select {
-  min-height: 34px;
+  min-height: 2.125rem;
 }
 label {
   display: grid;
@@ -169,7 +169,7 @@ small {
 }
 .sidebar {
   border-right: 1px solid var(--line);
-  padding: 22px 14px 14px;
+  padding: 1.375rem 0.875rem 0.875rem;
   display: flex;
   flex-direction: column;
   min-height: 0;
@@ -186,8 +186,8 @@ small {
   letter-spacing: -1.5px;
 }
 .brand img {
-  width: 35px;
-  height: 35px;
+  width: 2.1875rem;
+  height: 2.1875rem;
   border-radius: 8px;
 }
 .brand-period {
@@ -231,9 +231,9 @@ nav button {
   justify-content: flex-start;
   border-color: transparent;
   background: transparent;
-  min-height: 37px;
+  min-height: 2.3125rem;
   color: var(--muted);
-  padding: 8px 10px;
+  padding: 0.5rem 0.625rem;
   font-size: 0.9375rem;
 }
 nav button.active {
@@ -252,7 +252,7 @@ nav button span {
   padding-top: 20px;
 }
 .sidebar-foot {
-  padding: 14px 9px 0;
+  padding: 0.875rem 0.5625rem 0;
   margin-top: 12px;
   border-top: 1px solid var(--line);
   font-size: 0.6875rem;
@@ -270,9 +270,9 @@ main {
   min-width: 0;
 }
 .topbar {
-  height: 58px;
-  min-height: 58px;
-  padding: 0 24px;
+  height: 3.625rem;
+  min-height: 3.625rem;
+  padding: 0 1.5rem;
   display: flex;
   align-items: center;
   gap: 12px;
@@ -298,7 +298,7 @@ main {
 .top-actions > button,
 .top-actions > select {
   font-size: 0.8125rem;
-  min-height: 30px;
+  min-height: 1.875rem;
   padding: 5px 9px;
 }
 .view-scroll {
@@ -312,8 +312,29 @@ main {
 #view {
   max-width: 1450px;
   margin: auto;
-  padding: 26px 24px 24px;
+  padding: 1.625rem 1.5rem 1.5rem;
   outline: none;
+}
+/* Memory workspace: fill the scroll viewport so the tree/reader grid can
+   size itself with flex instead of viewport-height arithmetic. */
+#view:has(.memory-layout) {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+.view-page:has(.memory-layout) {
+  display: flex;
+  flex-direction: column;
+  /* Bound to the scroll viewport so flex sizing works. */
+  flex: 1;
+  min-height: 0;
+}
+.view-page:has(.memory-layout) .memory-layout {
+  flex: 1;
+  min-height: 0;
+}
+.view-page:has(.memory-layout) .memory-layout {
+  flex: 1;
 }
 .page-heading {
   display: flex;
@@ -352,7 +373,7 @@ main {
   overflow: hidden;
 }
 .panel-heading {
-  padding: 15px 18px;
+  padding: 0.9375rem 1.125rem;
   border-bottom: 1px solid var(--line);
   display: flex;
   gap: 12px;
@@ -363,7 +384,7 @@ main {
   font-size: 1.125rem;
 }
 .panel-body {
-  padding: 18px;
+  padding: 1.125rem;
 }
 .panel + .panel,
 .section-gap {
@@ -390,7 +411,7 @@ main {
   background: var(--panel);
   border: 1px solid var(--line);
   border-radius: 6px;
-  padding: 17px 18px;
+  padding: 1.0625rem 1.125rem;
   min-width: 0;
 }
 .metric > span {
@@ -415,7 +436,7 @@ main {
   display: flex;
   gap: 18px;
   justify-content: space-between;
-  padding: 11px 18px;
+  padding: 0.6875rem 1.125rem;
   border-bottom: 1px solid var(--line);
 }
 .facts > div:last-child {
@@ -456,13 +477,13 @@ main {
   color: var(--amber);
 }
 .statusbar {
-  height: 30px;
-  min-height: 30px;
+  height: 1.875rem;
+  min-height: 1.875rem;
   display: flex;
   gap: 12px;
   align-items: center;
   justify-content: space-between;
-  padding: 0 24px;
+  padding: 0 1.5rem;
   border-top: 1px solid var(--line);
   font: 0.6875rem var(--font-sans);
   color: var(--muted);
@@ -475,7 +496,7 @@ main {
 }
 #notice {
   margin: 12px 24px 0;
-  padding: 9px 12px;
+  padding: 0.5625rem 0.75rem;
   border: 1px solid var(--line);
   border-radius: 4px;
   background: var(--soft);
@@ -489,7 +510,7 @@ main {
   color: var(--danger);
 }
 .empty {
-  padding: 32px 24px;
+  padding: 2rem 1.5rem;
   text-align: center;
   color: var(--muted);
   font-size: 0.9375rem;
@@ -554,7 +575,7 @@ main {
   align-items: center;
   gap: 14px;
   justify-content: space-between;
-  padding: 15px 18px;
+  padding: 0.9375rem 1.125rem;
   border-bottom: 1px solid var(--line);
 }
 .setting-row:last-child {
@@ -570,8 +591,8 @@ main {
 }
 .setting-row input[type="checkbox"] {
   accent-color: var(--text);
-  width: 16px;
-  height: 16px;
+  width: 1rem;
+  height: 1rem;
 }
 .technical {
   padding: 13px 18px;
@@ -597,7 +618,7 @@ pre.code {
   display: grid;
   grid-template-columns: minmax(90px, 1fr) minmax(0, 3fr);
   gap: 15px;
-  padding: 10px 18px;
+  padding: 0.625rem 1.125rem;
   border-bottom: 1px solid var(--line);
   font-size: 0.875rem;
 }
@@ -630,14 +651,14 @@ pre.code {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 18px 22px;
+  padding: 1.125rem 1.375rem;
   border-bottom: 1px solid var(--line);
 }
 .dialog-heading h2 {
   font-size: 1.375rem;
 }
 .dialog-body {
-  padding: 20px 22px;
+  padding: 1.25rem 1.375rem;
   display: grid;
   gap: 16px;
 }
@@ -645,11 +666,11 @@ pre.code {
   display: flex;
   justify-content: flex-end;
   gap: 9px;
-  padding: 14px 22px;
+  padding: 0.875rem 1.375rem;
   border-top: 1px solid var(--line);
 }
 .icon-button {
-  width: 29px;
+  width: 1.8125rem;
   min-height: 1.875rem;
   padding: 2px;
   font-size: 1.375rem;
@@ -679,7 +700,7 @@ th {
 th,
 td {
   border-bottom: 1px solid var(--line);
-  padding: 10px 14px;
+  padding: 0.625rem 0.875rem;
 }
 td {
   vertical-align: top;
@@ -737,7 +758,7 @@ ul.clean {
   padding: 0;
 }
 .clean li {
-  padding: 12px 18px;
+  padding: 0.75rem 1.125rem;
   border-bottom: 1px solid var(--line);
 }
 .clean li:last-child {
@@ -780,7 +801,7 @@ ul.clean {
 }
 .first-language-card {
   width: min(430px, 100%);
-  padding: 28px;
+  padding: 1.75rem;
   border: 1px solid var(--line);
   border-radius: 18px;
   background: var(--panel);
@@ -815,8 +836,8 @@ body[data-layout="compact"] .brand {
   gap: 6px;
 }
 body[data-layout="compact"] .brand img {
-  width: 27px;
-  height: 27px;
+  width: 1.6875rem;
+  height: 1.6875rem;
 }
 body[data-layout="compact"] .workspace-label,
 body[data-layout="compact"] .sidebar-foot {
@@ -828,7 +849,7 @@ body[data-layout="compact"] nav {
   flex-shrink: 0;
 }
 body[data-layout="compact"] nav button {
-  min-height: 31px;
+  min-height: 1.9375rem;
   padding: 5px 8px;
   font-size: 0.8125rem;
 }
@@ -845,8 +866,8 @@ body[data-layout="compact"] #view {
   padding-top: 20px;
 }
 body[data-layout="compact"] .topbar {
-  height: 46px;
-  min-height: 46px;
+  height: 2.875rem;
+  min-height: 2.875rem;
 }
 body[data-layout="compact"] .page-heading {
   margin-bottom: 18px;
