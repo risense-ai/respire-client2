@@ -13,6 +13,7 @@ var runtimeCommands = map[string]commandSpec{
 	"sync_conflicts":        {words: []string{"sync-conflicts"}, args: []argument{flag("all", "--all")}},
 	"model_engine":          {words: []string{"model", "engine"}},
 	"model_engine_set":      {words: []string{"model", "engine"}, write: true, args: []argument{choice("engine", "", "cpu", "gpu", "npu"), choice("model", "--model", modelVariants...)}},
+	"model_engine_apply":    {method: "model.apply-engine", write: true, args: []argument{choice("engine", "", "cpu", "gpu", "npu"), choice("model", "--model", modelVariants...)}},
 	"model_prepare":         {method: "model.prepare", write: true, args: []argument{pos("mirror")}},
 	"model_progress":        {method: "model.control", args: []argument{pos("id")}},
 	"model_cancel":          {method: "model.control", write: true, args: []argument{pos("id")}},

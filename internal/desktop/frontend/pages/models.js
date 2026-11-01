@@ -1,6 +1,5 @@
 import {
   $,
-  all,
   h,
   raw,
   bytes,
@@ -15,25 +14,44 @@ import {
   confirm,
   notify,
   resultView,
+  api,
 } from "../ui/core.js";
 import { heading, phase } from "./overview.js";
 import { recallChecks } from "./recall.js";
 
+const MIRROR_OPTIONS = [
+  ["auto", "auto · 自动选择镜像"],
+  ["https://hf-mirror.com", "hf-mirror.com"],
+  ["https://hf-mirror.net", "hf-mirror.net"],
+  ["https://huggingface.co", "huggingface.co"],
+  ["custom", "自定义镜像…"],
+];
+
 export function models(root, ctx) {
   let agent = {},
     backend = {},
-    engine = "cpu",
-    variant = "quantized",
+    engineState = { engine: "cpu", model: "quantized" },
+    inventory = null,
     loaded = false,
     loading = false;
   root.innerHTML =
     heading("模型与索引", "查看真实加载与下载进度，管理推理引擎和检索方式。") +
-    `<div data-live></div><div class="grid section-gap">${panel("本机模型", `<div class="panel-body stack"><p class="hint">BGE-M3 量化模型约 543 MiB。文件下载、校验和索引构建由 Runtime 执行。</p>${input("mirror", "下载来源", "auto", { placeholder: "auto 或镜像地址" })}<div class="actions"><button data-model="mirror">保存下载来源</button><button data-model="prepare" class="primary">下载并准备模型</button><button data-model="restart">取消并重新准备</button><button data-model="cancel">取消当前任务</button><button data-model="uninstall" class="danger">卸载模型</button></div></div>`)}
-    ${panel(
-      "推理引擎",
-      `<form data-engine class="panel-body stack">${select(
+    `<div data-live></div>` +
+    panel(
+      "推理引擎与模型",
+      `<div class="panel-body stack"><p class="hint">BGE-M3 权重按需下载（多线程并行，0.5–1.2 GiB/个），下载完成前无法选择对应推理方式；应用引擎会立即重载 Runtime 模型并运行真实推理验证，失败自动回退 CPU。</p><form data-mirror class="stack"><div class="form-grid">${select(
+        "mirror",
+        "下载镜像",
+        MIRROR_OPTIONS,
+        "auto",
+      )}<div data-mirror-custom hidden>${input(
+        "mirror-custom",
+        "自定义镜像源",
+        "https://",
+        { placeholder: "http/https 源站，仅主机名" },
+      )}</div></div><div class="actions"><button type="submit">保存下载来源</button><span class="hint" data-mirror-state></span></div></form><div class="scroll-table" data-variants><p class="hint">正在读取模型目录…</p></div><div class="actions" data-baseline></div><form data-engine class="stack"><div class="form-grid">${select(
         "engine",
-        "引擎",
+        "推理引擎",
         ctx.desktop?.platform?.startsWith("linux")
           ? [["cpu", "CPU"]]
           : [
@@ -42,20 +60,8 @@ export function models(root, ctx) {
               ["npu", "NPU"],
             ],
         "cpu",
-      )}${select(
-        "variant",
-        "权重文件",
-        [
-          ["quantized", "quantized · 543 MiB（CPU 默认）"],
-          ["fp16", "fp16 · 1.06 GiB（GPU/NPU 默认）"],
-          ["int8", "int8 · 542 MiB"],
-          ["uint8", "uint8 · 542 MiB"],
-          ["q4", "q4 · 1.16 GiB"],
-          ["q4f16", "q4f16 · 667 MiB"],
-        ],
-        "quantized",
-      )}<p class="hint">CPU 默认使用 quantized 权重，GPU/NPU 默认使用 fp16 权重。所选权重文件缺失时推理会报错，先点「下载所选权重文件」补齐（约 1.06 GiB）。切换失败会报告错误，不自动改用其他引擎。</p><div class="actions"><button type="submit">保存引擎</button><button type="button" data-model="variant">下载所选权重文件</button><button type="button" data-model="probe">运行实际推理验证</button><button type="button" data-model="providers">安装 NPU 引擎</button></div></form>`,
-    )}</div>` +
+      )}<label>权重文件<select name="variant" disabled><option>正在读取模型目录…</option></select></label></div><p class="hint">只能选择已下载的权重文件；CPU 默认 quantized，GPU/NPU 默认 fp16。应用引擎立即重载并验证，失败自动回退 CPU。</p><div class="actions"><button type="submit" class="primary">应用引擎（重载并验证）</button><button type="button" data-model="probe">运行实际推理验证</button><button type="button" data-model="providers">安装 NPU 引擎</button></div></form><div class="actions"><button data-model="cancel">取消当前任务</button><button data-model="uninstall" class="danger">卸载全部模型文件</button></div></div>`,
+    ) +
     panel(
       "检索与后台索引",
       `<form data-recall class="panel-body stack">${select(
@@ -74,6 +80,111 @@ export function models(root, ctx) {
     ) +
     `<div data-result class="section-gap"></div>`;
   const live = $("[data-live]", root);
+  function variantFromItem(item) {
+    const match = /model_([a-z0-9]+)\.onnx/.exec(item || "");
+    return match ? match[1] : "";
+  }
+  function currentMirror() {
+    const value = $("[data-mirror] [name=mirror]", root).value;
+    return value === "custom"
+      ? $("[name=mirror-custom]", root).value.trim()
+      : value;
+  }
+  function syncEngineForm(opActive) {
+    const form = $("[data-engine]", root);
+    if (!form || !inventory) return;
+    const variantSel = $("[name=variant]", form);
+    const wanted = variantSel.value || engineState.model;
+    variantSel.replaceChildren(
+      ...inventory.variants.map((variant) => {
+        const option = new Option(
+          `${variant.name} · ${bytes(variant.size)}${variant.installed ? "" : "（未下载）"}`,
+          variant.name,
+          false,
+          variant.name === wanted,
+        );
+        option.disabled = !variant.installed;
+        return option;
+      }),
+    );
+    if (!variantSel.value || variantSel.selectedOptions[0]?.disabled) {
+      const first = inventory.variants.find((variant) => variant.installed);
+      variantSel.value = first ? first.name : "";
+    }
+    const anyInstalled = inventory.variants.some(
+      (variant) => variant.installed,
+    );
+    const engineSel = $("[name=engine]", form);
+    engineSel.disabled = !anyInstalled;
+    variantSel.disabled = !anyInstalled;
+    $("[type=submit]", form).disabled =
+      !anyInstalled || !variantSel.value || opActive;
+    $("[data-model=cancel]", root).disabled = !opActive || !ctx.status?.summary?.model_operation?.id;
+    $("[data-model=providers]", root).disabled =
+      !ctx.desktop?.platform?.startsWith("windows");
+    $("[name=engine] option[value=gpu]", form)?.toggleAttribute(
+      "disabled",
+      ctx.desktop?.platform?.startsWith("linux"),
+    );
+    $("[name=engine] option[value=npu]", form)?.toggleAttribute(
+      "disabled",
+      !ctx.desktop?.platform?.startsWith("windows"),
+    );
+  }
+  function variantStatus(variant, op, downloading) {
+    const busy = downloading === variant.name;
+    const current = engineState.model === variant.name;
+    const pct = op.total
+      ? Math.min(100, Math.round((op.done / op.total) * 100))
+      : 0;
+    if (busy)
+      return `<strong>${op.phase === "verify" ? "校验中" : "下载中"} ${pct}%</strong><progress ${op.total ? `value="${h(op.done)}" max="${h(op.total)}"` : ""}></progress>`;
+    if (variant.installed)
+      return `${current ? "使用中 · " : ""}已下载<span class="hint">${h(bytes(variant.bytes))} · 大小一致</span>`;
+    return "未下载";
+  }
+  function renderVariants() {
+    const node = $("[data-variants]", root);
+    if (!node || !inventory) return;
+    const op = ctx.status?.summary?.model_operation || {};
+    const downloading = op.active ? variantFromItem(op.item) : "";
+    node.innerHTML = `<table><thead><tr><th>权重文件</th><th>大小</th><th>状态</th><th>本机位置</th><th>操作</th></tr></thead><tbody>${inventory.variants
+      .map((variant) => {
+        const badge =
+          variant.name === "quantized"
+            ? "CPU 默认"
+            : variant.name === "fp16"
+              ? "GPU/NPU 默认"
+              : "";
+        return `<tr><td><strong>${h(variant.name)}</strong>${badge ? `<span class="hint">${badge}</span>` : ""}</td><td>${h(bytes(variant.size))}</td><td data-status="${h(variant.name)}">${variantStatus(variant, op, downloading)}</td><td><code title="${h(variant.path)}">${h(variant.path)}</code></td><td><button data-model="download" data-variant="${h(variant.name)}"${downloading === variant.name ? " disabled" : ""}>${variant.installed ? "重新下载" : "下载"}</button></td></tr>`;
+      })
+      .join("")}</tbody></table>`;
+    $("[data-baseline]", root).innerHTML = inventory.tokenizer_installed
+      ? `<span class="hint">基础文件已就绪 · 模型目录 <code>${h(inventory.model_dir)}</code></span>`
+      : `<button data-model="prepare" class="primary">下载并准备基础模型</button><span class="hint">首次使用需下载基础文件（quantized 权重 + 分词器，约 543 MiB）并构建索引。</span>`;
+    syncEngineForm(op.active);
+  }
+  // Polling refreshes status cells in place; rebuilding the whole table would
+  // replace buttons mid-click every 3 seconds.
+  function updateVariantsProgress() {
+    if (!inventory) return;
+    const op = ctx.status?.summary?.model_operation || {};
+    const downloading = op.active ? variantFromItem(op.item) : "";
+    for (const variant of inventory.variants) {
+      const cell = $(`[data-status="${CSS.escape(variant.name)}"]`, root);
+      if (!cell) continue;
+      const html = variantStatus(variant, op, downloading);
+      if (cell.innerHTML !== html) cell.innerHTML = html;
+      const button = $(
+        `[data-variant="${CSS.escape(variant.name)}"]`,
+        root,
+      );
+      if (button)
+        button.disabled =
+          downloading === variant.name || Boolean(op.active);
+    }
+    syncEngineForm(op.active);
+  }
   function update() {
     const s = ctx.status?.summary || {},
       health = ctx.desktop?.health || {},
@@ -103,17 +214,7 @@ export function models(root, ctx) {
         ],
       ]),
     )}${panel("模型任务", `<div class="panel-body"><p>${h(op.active ? `${phase(op.phase)} · ${op.item || ""}` : "当前没有模型任务")}</p>${op.active ? `<div class="progress-label"><span>${h(bytes(op.done))} / ${h(bytes(op.total))}</span><span>${h(op.elapsed_secs !== undefined ? op.elapsed_secs + " 秒" : "")}</span></div><progress ${op.total ? `value="${h(op.done)}" max="${h(op.total)}"` : ""}></progress>` : ""}${index.error ? `<p class="form-error section-gap">${h(index.error)}</p>` : ""}</div><details class="technical"><summary>推理与索引详情</summary><pre>${h(raw({ inference, index, model: op }))}</pre></details>`)}</div>`;
-    $("[data-model=cancel]", root).disabled = !op.active || !op.id;
-    $("[data-model=providers]", root).disabled =
-      !ctx.desktop?.platform?.startsWith("windows");
-    $("[name=engine] option[value=gpu]", root)?.toggleAttribute(
-      "disabled",
-      ctx.desktop?.platform?.startsWith("linux"),
-    );
-    $("[name=engine] option[value=npu]", root)?.toggleAttribute(
-      "disabled",
-      !ctx.desktop?.platform?.startsWith("windows"),
-    );
+    updateVariantsProgress();
   }
   async function load() {
     if (loading || !ctx.desktop?.connected) return;
@@ -124,24 +225,38 @@ export function models(root, ctx) {
         execute("agent_config"),
         execute("model_engine"),
         execute("classification_config", { backend: "ds" }),
+        api("model-variants"),
       ]);
       if (!root.isConnected) return;
       if (values[0].status === "fulfilled") {
         agent = summary(values[0].value);
         $("[data-recall] [name=mode]", root).value =
           agent.recall_mode || "fast";
-        $("[name=mirror]", root).value = agent.model_mirror || "auto";
+        const mirror = agent.model_mirror || "auto";
+        const mirrorSel = $("[data-mirror] [name=mirror]", root);
+        if ([...mirrorSel.options].some((option) => option.value === mirror))
+          mirrorSel.value = mirror;
+        else {
+          mirrorSel.value = "custom";
+          $("[data-mirror-custom]", root).hidden = false;
+          $("[name=mirror-custom]", root).value = mirror;
+        }
+        $("[data-mirror-state]", root).textContent = "当前来源：" + mirror;
       }
       if (values[1].status === "fulfilled") {
         const state = summary(values[1].value);
-        engine = state.engine;
-        variant =
-          state.model ||
-          (engine === "gpu" || engine === "npu" ? "fp16" : "quantized");
-        $("[data-engine] [name=engine]", root).value = engine || "";
-        $("[data-engine] [name=variant]", root).value = variant;
+        engineState = {
+          engine: state.engine || "cpu",
+          model:
+            state.model ||
+            (state.engine === "gpu" || state.engine === "npu"
+              ? "fp16"
+              : "quantized"),
+        };
+        $("[data-engine] [name=engine]", root).value = engineState.engine;
       }
       if (values[2].status === "fulfilled") backend = summary(values[2].value);
+      if (values[3].status === "fulfilled") inventory = values[3].value;
       $("[data-api] [name=base]", root).value =
         agent.recall_api_base ||
         backend.api_base ||
@@ -154,9 +269,12 @@ export function models(root, ctx) {
           : backend.has_key
             ? "系统凭据库已配置密钥"
             : "未检测到所选服务的密钥";
-      for (const result of values) {
-        if (result.status === "rejected") notify(result.reason.message, true);
+      for (const [index, result] of values.entries()) {
+        if (result.status === "rejected" && index !== 3)
+          notify(result.reason.message, true);
       }
+      renderVariants();
+      update();
     } catch (error) {
       notify(error.message, true);
     } finally {
@@ -169,36 +287,35 @@ export function models(root, ctx) {
     action(button, async () => {
       const operation = button.dataset.model;
       let result;
-      if (operation === "mirror") {
-        result = await execute("agent_set", {
-          setting:
-            "model_mirror=" + ($("[name=mirror]", root).value.trim() || "auto"),
-        });
-      } else if (operation === "restart") {
+      const mirror = currentMirror();
+      if (operation === "prepare") {
         if (
           !(await confirm(
-            "重新准备模型",
-            "将取消当前任务，再使用所选来源准备模型。已完成的文件会保留。",
-            "重新准备",
-          ))
-        )
-          return;
-        const id = ctx.status?.summary?.model_operation?.id;
-        if (id) await execute("model_cancel", { id });
-        result = await execute("model_prepare", {
-          mirror: $("[name=mirror]", root).value.trim() || "auto",
-        });
-      } else if (operation === "prepare") {
-        if (
-          !(await confirm(
-            "准备本机模型",
-            "首次准备需要下载约 543 MiB，并由 Runtime 构建索引。已校验的文件会保留。",
+            "准备基础模型",
+            "将下载 quantized 权重与分词器（约 543 MiB），并由 Runtime 构建索引。已校验的文件会保留。",
             "开始准备",
           ))
         )
           return;
         result = await execute("model_prepare", {
-          mirror: $("[name=mirror]", root).value.trim() || "auto",
+          mirror: mirror && mirror !== "auto" ? mirror : "auto",
+        });
+      } else if (operation === "download") {
+        const variant = button.dataset.variant;
+        const size = inventory?.variants?.find(
+          (item) => item.name === variant,
+        )?.size;
+        if (
+          !(await confirm(
+            "下载权重文件",
+            `将从所选镜像多线程并行下载 BGE-M3 ${variant} 权重（约 ${bytes(size)}）到 ${inventory?.model_dir || "本机模型目录"}；已验证的文件会跳过。`,
+            "开始下载",
+          ))
+        )
+          return;
+        result = await execute("model_install", {
+          model: variant,
+          ...(mirror && mirror !== "auto" ? { mirror } : {}),
         });
       } else if (operation === "cancel") {
         const id = ctx.status?.summary?.model_operation?.id;
@@ -207,30 +324,15 @@ export function models(root, ctx) {
       } else if (operation === "uninstall") {
         if (
           !(await confirm(
-            "卸载模型",
-            "删除用户安装的 BGE-M3 文件后，语义召回需要重新准备模型。",
+            "卸载全部模型文件",
+            "删除本机模型目录中的 BGE-M3 文件后，语义召回需要重新下载模型。",
             "卸载",
           ))
         )
           return;
         result = await execute("model_uninstall");
       } else if (operation === "probe") result = await execute("model_probe");
-      else if (operation === "variant") {
-        const weight = $("[data-engine] [name=variant]", root).value;
-        if (
-          !(await confirm(
-            "下载权重文件",
-            `将下载 BGE-M3 ${weight} 权重到本机模型目录；已有文件会校验后跳过。`,
-            "开始下载",
-          ))
-        )
-          return;
-        const mirror = $("[name=mirror]", root).value.trim();
-        result = await execute("model_install", {
-          model: weight,
-          ...(mirror && mirror !== "auto" ? { mirror } : {}),
-        });
-      } else if (operation === "providers")
+      else if (operation === "providers")
         result = await execute("model_install_engines");
       else if (operation === "index") result = await execute("index_prepare");
       else if (operation === "rebuild") {
@@ -250,15 +352,45 @@ export function models(root, ctx) {
       await ctx.refresh();
     });
   });
+  $("[data-mirror]", root).addEventListener("submit", (event) => {
+    event.preventDefault();
+    action($("[type=submit]", event.target), async () => {
+      const mirror = currentMirror();
+      await execute("agent_set", {
+        setting: "model_mirror=" + (mirror || "auto"),
+      });
+      $("[data-mirror-state]", root).textContent =
+        "当前来源：" + (mirror || "auto");
+      notify("下载来源已保存，之后的下载任务使用该镜像。");
+    });
+  });
+  $("[data-mirror] [name=mirror]", root).addEventListener("change", (event) => {
+    $("[data-mirror-custom]", root).hidden = event.target.value !== "custom";
+  });
   $("[data-engine]", root).addEventListener("submit", (event) => {
     event.preventDefault();
     action($("[type=submit]", event.target), async () => {
       const data = new FormData(event.target);
-      await execute("model_engine_set", {
+      const envelope = await execute("model_engine_apply", {
         engine: data.get("engine"),
         model: data.get("variant"),
       });
-      notify("引擎与权重已保存，下次加载模型生效");
+      const result = summary(envelope);
+      engineState = { engine: result.engine, model: result.model };
+      $("[data-engine] [name=engine]", root).value = result.engine;
+      if (result.fallback)
+        notify(
+          `所选引擎验证失败，已自动回退 CPU（${result.model}）；详情见应用结果。`,
+          true,
+        );
+      else
+        notify(
+          `已切换到 ${String(result.engine).toUpperCase()} · ${result.model}，实际推理验证通过。`,
+        );
+      if (root.isConnected)
+        $("[data-result]", root).innerHTML = resultView("应用结果", envelope);
+      renderVariants();
+      await ctx.refresh();
     });
   });
   $("[data-recall]", root).addEventListener("submit", (event) => {

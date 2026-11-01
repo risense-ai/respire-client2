@@ -216,9 +216,12 @@ func (m *Manager) runOperation(spec commandSpec, args []string, secret, id strin
 	defer cancel()
 	var envelope json.RawMessage
 	var err error
-	if spec.host {
+	switch {
+	case spec.method == "model.apply-engine":
+		envelope, err = applyEngine(ctx, m, args, id)
+	case spec.host:
 		envelope, err = m.hostOperation(ctx, args, secret, spec.method, id)
-	} else {
+	default:
 		method := spec.method
 		if method == "" {
 			method = "cli.exec"

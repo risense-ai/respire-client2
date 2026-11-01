@@ -36,6 +36,10 @@ func (d *desktop) businessRoute(w http.ResponseWriter, r *http.Request) bool {
 		_, metadata, releaseErr := d.m.LatestRuntime(ctx)
 		err = releaseErr
 		result = map[string]any{"version": metadata.Version, "channel": d.m.Preferences().RuntimeChannel}
+	case r.Method == "GET" && r.URL.Path == "/api/model-variants":
+		ctx, cancel := context.WithTimeout(r.Context(), 4*time.Second)
+		defer cancel()
+		result, err = d.m.ModelVariants(ctx)
 	case r.Method == "GET" && r.URL.Path == "/api/operation":
 		result, err = d.m.Operation(r.URL.Query().Get("id"))
 	case r.URL.Path == "/api/execute" || r.URL.Path == "/api/operation-recover" || r.URL.Path == "/api/operation-ack" || r.URL.Path == "/api/file-dialog" || r.URL.Path == "/api/open-dashboard" || r.URL.Path == "/api/open-main" || r.URL.Path == "/api/panel-size" || r.URL.Path == "/api/cli-language" || r.URL.Path == "/api/plugin-install" || r.URL.Path == "/api/preferences-export" || r.URL.Path == "/api/preferences-import" || r.URL.Path == "/api/diagnostics-export":
