@@ -4,55 +4,453 @@
   align-items: center;
   margin-bottom: 10px;
 }
-.graph-mode .memory-layout {
-  grid-template-columns: minmax(0, 1fr) minmax(260px, 0.75fr);
+.graph-mode .memory-layout,
+.wide-mode .memory-layout {
+  grid-template-columns: minmax(0, 1.2fr) minmax(260px, 0.75fr);
 }
-.graph-mode .memory-index {
+.graph-shell {
   display: flex;
   flex-direction: column;
   padding: 0;
   overflow: hidden;
 }
-.graph-tools {
+.graph-section {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  gap: 6px;
+  padding: 8px;
+}
+.graph-controls {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 5px;
-  padding: 8px;
-  border-bottom: 1px solid var(--line);
+  justify-content: space-between;
+  gap: 6px;
 }
-.graph-tools button {
-  font-size: 11px;
+.graph-controls p {
+  margin: 0;
+  font-size: 10px;
+  color: var(--muted);
+}
+.graph-controls nav {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  font-size: 10px;
+  color: var(--muted);
+}
+.graph-controls button,
+.graph-buttons button,
+.graph-external button,
+.pager-step {
+  font-size: 10px;
+  min-height: 26px;
+  padding: 3px 8px;
+}
+.graph-window-hint {
+  margin: 0;
+  font-size: 10px;
+  color: var(--muted);
 }
 .memory-graph {
+  position: relative;
   width: 100%;
   flex: 1;
-  min-height: 0;
+  min-height: 220px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  overflow: hidden;
   background: var(--panel);
   touch-action: none;
+}
+.memory-graph svg {
+  display: block;
+  width: 100%;
+  height: 100%;
   cursor: grab;
 }
-.graph-edge {
-  fill: none;
-  stroke: var(--muted);
+.memory-graph svg:active {
+  cursor: grabbing;
+}
+.memory-graph.is-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+}
+.graph-empty {
+  margin: 0;
+  font-family: var(--font-serif);
+  color: var(--muted);
+  font-size: 13px;
+}
+/* Force graph: every color rides on theme variables and per-kind accents. */
+.graph-link {
+  stroke: var(--line);
   stroke-width: 1;
-  opacity: 0.5;
+  transition: opacity 0.15s;
 }
 .graph-node {
+  stroke: var(--panel);
+  stroke-width: 1.5;
   cursor: pointer;
+  transition: opacity 0.15s;
 }
-.graph-node rect {
-  fill: var(--soft);
-  stroke: var(--line);
+.graph-node:hover {
+  stroke: var(--text);
 }
-.graph-node.selected rect,
-.graph-node:focus rect {
+.graph-node.dimmed,
+.graph-link.dimmed {
+  opacity: 0.15;
+}
+.graph-node.selected {
   stroke: var(--green);
-  stroke-width: 2;
+  stroke-width: 2.5;
 }
-.graph-node text {
-  font: 12px var(--font-sans);
+.graph-node:focus {
+  outline: none;
+  stroke: var(--text);
+  stroke-width: 3;
+}
+.graph-node[data-external] {
+  stroke-dasharray: 3 2;
+}
+.graph-node {
+  --card-accent: var(--muted);
+}
+.graph-node[data-kind="context"] {
+  --card-accent: #3d7085;
+}
+.graph-node[data-kind="decision"] {
+  --card-accent: #6d5a9c;
+}
+.graph-node[data-kind="task"] {
+  --card-accent: #4a6d9c;
+}
+.graph-node[data-kind="skill"] {
+  --card-accent: #39735a;
+}
+.graph-node[data-kind="preference"] {
+  --card-accent: #b07a3a;
+}
+.graph-node[data-kind="emotion"] {
+  --card-accent: #b05a5a;
+}
+.graph-node[data-kind="time"] {
+  --card-accent: #8a8275;
+}
+.graph-node[data-kind="knowledge"] {
+  --card-accent: #4a8a8a;
+}
+.graph-node {
+  fill: var(--card-accent);
+}
+html[data-theme="dark"] .graph-node[data-kind="context"] {
+  --card-accent: #6fa8bd;
+}
+html[data-theme="dark"] .graph-node[data-kind="decision"] {
+  --card-accent: #a08ed1;
+}
+html[data-theme="dark"] .graph-node[data-kind="task"] {
+  --card-accent: #7d9cc9;
+}
+html[data-theme="dark"] .graph-node[data-kind="skill"] {
+  --card-accent: #7aa88f;
+}
+html[data-theme="dark"] .graph-node[data-kind="preference"] {
+  --card-accent: #cf9f66;
+}
+html[data-theme="dark"] .graph-node[data-kind="emotion"] {
+  --card-accent: #cf8484;
+}
+html[data-theme="dark"] .graph-node[data-kind="time"] {
+  --card-accent: #a9a197;
+}
+html[data-theme="dark"] .graph-node[data-kind="knowledge"] {
+  --card-accent: #7ab8b8;
+}
+.graph-label {
+  font-family: var(--font-sans);
+  font-size: 11px;
   fill: var(--text);
+  paint-order: stroke;
+  stroke: var(--panel);
+  stroke-width: 3px;
+  stroke-linejoin: round;
+  pointer-events: none;
+}
+.graph-relations-picker {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+  font-size: 11px;
+  color: var(--muted);
+}
+.graph-relations-picker select {
+  max-width: 100%;
+  min-width: 0;
+  flex: 1;
+  font-size: 11px;
+}
+.graph-external {
+  max-height: 9rem;
+  overflow: auto;
+  font-size: 11px;
+}
+.graph-external summary {
+  cursor: pointer;
+  color: var(--muted);
+}
+.graph-external ul {
+  margin: 6px 0;
+  padding-left: 18px;
+  display: grid;
+  gap: 3px;
+}
+.graph-external button {
+  overflow-wrap: anywhere;
+  text-align: left;
+}
+/* View switcher: segmented control inside the toolbar. */
+.view-tabs {
+  display: flex;
+  gap: 2px;
+  border-bottom: 0;
+  margin-bottom: 0;
+  flex-shrink: 0;
+}
+.view-tabs button {
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 11px;
+  min-height: 28px;
+  padding: 4px 9px;
+}
+.view-tabs button:hover {
+  color: var(--text);
+}
+.view-tabs button.active {
+  color: var(--text);
+  background: var(--soft);
+  border-color: var(--line);
+}
+/* List view: console-style table with kind, title, project, time, tags. */
+.memory-list {
+  --cols: 16px minmax(80px, 0.7fr) minmax(0, 2.2fr) minmax(70px, 0.9fr) minmax(120px, 1fr) minmax(0, 1fr);
+}
+.memory-list .memory-row {
+  display: grid;
+  grid-template-columns: var(--cols);
+  gap: 10px;
+  align-items: center;
+  padding: 0 8px;
+  border-bottom: 1px solid var(--line);
+  min-height: 40px;
+  border-radius: 0;
+}
+.memory-list .memory-row:hover {
+  background: var(--soft);
+}
+.memory-list .memory-row.selected {
+  background: var(--soft);
+}
+.memory-row-head {
+  min-height: 34px;
+  color: var(--muted);
+  font: 600 10px var(--font-sans);
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+  background: var(--soft);
+}
+.memory-row-head > span:first-child {
+  padding-left: 2px;
+}
+.memory-list .memory-title {
+  text-align: left;
+  font-weight: 500;
+}
+.memory-cell {
+  font-size: 11px;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.memory-cell.cell-kind .badge {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.memory-list .cell-tags {
+  overflow-wrap: anywhere;
+  white-space: normal;
+  display: -webkit-box;
+  -webkit-line-clamp: 1;
+  -webkit-box-orient: vertical;
+}
+@media (max-width: 900px) {
+  .memory-list {
+    --cols: 16px minmax(0, 1fr) 24px;
+  }
+  .memory-row-head span:nth-child(2),
+  .memory-row-head span:nth-child(4),
+  .memory-row-head span:nth-child(5),
+  .memory-row-head span:nth-child(6),
+  .memory-list .cell-kind,
+  .memory-list .cell-project,
+  .memory-list .cell-updated,
+  .memory-list .cell-tags {
+    display: none;
+  }
+}
+/* Card view: console-style grid with per-kind accents. */
+.memory-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+  gap: 10px;
+  padding: 8px 2px;
+}
+.memory-card {
+  --card-accent: var(--muted);
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 7px;
+  text-align: left;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--card-accent) 8%, var(--panel));
+  cursor: pointer;
+  position: relative;
+  min-width: 0;
+}
+.memory-card:hover {
+  border-color: var(--muted);
+}
+.memory-card.active,
+.memory-card:focus {
+  border-color: var(--green);
+  outline: none;
+}
+.memory-card[data-kind="context"] {
+  --card-accent: #3d7085;
+}
+.memory-card[data-kind="decision"] {
+  --card-accent: #6d5a9c;
+}
+.memory-card[data-kind="task"] {
+  --card-accent: #4a6d9c;
+}
+.memory-card[data-kind="skill"] {
+  --card-accent: #39735a;
+}
+.memory-card[data-kind="preference"] {
+  --card-accent: #b07a3a;
+}
+.memory-card[data-kind="emotion"] {
+  --card-accent: #b05a5a;
+}
+.memory-card[data-kind="time"] {
+  --card-accent: #8a8275;
+}
+.memory-card[data-kind="knowledge"] {
+  --card-accent: #4a8a8a;
+}
+html[data-theme="dark"] .memory-card[data-kind="context"] {
+  --card-accent: #6fa8bd;
+}
+html[data-theme="dark"] .memory-card[data-kind="decision"] {
+  --card-accent: #a08ed1;
+}
+html[data-theme="dark"] .memory-card[data-kind="task"] {
+  --card-accent: #7d9cc9;
+}
+html[data-theme="dark"] .memory-card[data-kind="skill"] {
+  --card-accent: #7aa88f;
+}
+html[data-theme="dark"] .memory-card[data-kind="preference"] {
+  --card-accent: #cf9f66;
+}
+html[data-theme="dark"] .memory-card[data-kind="emotion"] {
+  --card-accent: #cf8484;
+}
+html[data-theme="dark"] .memory-card[data-kind="time"] {
+  --card-accent: #a9a197;
+}
+html[data-theme="dark"] .memory-card[data-kind="knowledge"] {
+  --card-accent: #7ab8b8;
+}
+.memory-card .badge {
+  align-self: flex-start;
+  color: var(--card-accent);
+  border-color: color-mix(in srgb, var(--card-accent) 45%, var(--line));
+}
+.memory-card > input[type="checkbox"] {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  width: 12px;
+  height: 12px;
+  margin: 0;
+}
+.memory-card strong {
+  font-family: var(--font-serif);
+  font-weight: 400;
+  font-size: 14px;
+  line-height: 1.45;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  padding-right: 14px;
+}
+.memory-card p {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.7;
+  flex: 1;
+  margin: 0;
+  display: -webkit-box;
+  -webkit-line-clamp: 4;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.memory-card small {
+  color: var(--muted);
+  font: 9px ui-monospace, monospace;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px 10px;
+  align-items: center;
+}
+.memory-card small .hit-tags {
+  overflow-wrap: anywhere;
+}
+/* Pager for the list and card views. */
+.pager {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 12px 0 4px;
+  border-top: 1px solid var(--line);
+  margin-top: 6px;
+}
+.pager-step:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+.pager-state {
+  font: 10px ui-monospace, monospace;
+  color: var(--muted);
+  letter-spacing: 1px;
 }
 .memory-toolbar > button {
   font-size: 11px;

@@ -19,63 +19,6 @@ export function inventory(records) {
   }
   return { byId, children };
 }
-export function flatten(records, expanded, query = "") {
-  const tree = inventory(records),
-    visible = [],
-    visited = new Set();
-  const matching = new Set();
-  const needle = query.trim().toLocaleLowerCase();
-  const reachable = new Set(),
-    pending = [...(tree.children.get("") || [])];
-  while (pending.length) {
-    const id = pending.pop();
-    if (reachable.has(id)) continue;
-    reachable.add(id);
-    pending.push(...(tree.children.get(id) || []));
-  }
-  if (needle)
-    for (const row of records) {
-      if (!`${row.title || ""} ${row.id}`.toLocaleLowerCase().includes(needle))
-        continue;
-      let current = row;
-      const path = new Set();
-      while (current && !path.has(current.id)) {
-        path.add(current.id);
-        matching.add(current.id);
-        current = tree.byId.get(current.parent_id);
-      }
-    }
-  function walk(id, depth) {
-    const pending = [{ id, depth }];
-    while (pending.length) {
-      const current = pending.pop();
-      if (visited.has(current.id)) continue;
-      visited.add(current.id);
-      if (needle && !matching.has(current.id)) continue;
-      const row = tree.byId.get(current.id),
-        kids = tree.children.get(current.id) || [];
-      visible.push({
-        row,
-        depth: current.depth,
-        kids: kids.length,
-        expanded: needle || expanded.has(current.id),
-      });
-      if (needle || expanded.has(current.id))
-        for (let i = kids.length - 1; i >= 0; i--)
-          pending.push({ id: kids[i], depth: current.depth + 1 });
-    }
-  }
-  (tree.children.get("") || []).forEach((id) => walk(id, 0));
-  // Cyclic or incomplete inputs stay visible; only Runtime may repair their links.
-  for (const row of records)
-    if (
-      !reachable.has(row.id) &&
-      !visited.has(row.id) &&
-      (!needle || matching.has(row.id))
-    )
-      walk(row.id, 0);
-  return visible;
-}
 export const kindNames = {
   knowledge: "知识",
   context: "上下文",

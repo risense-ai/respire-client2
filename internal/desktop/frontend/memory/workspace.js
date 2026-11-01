@@ -17,13 +17,29 @@ import {
   summary,
 } from "../ui/core.js";
 import { heading } from "../pages/overview.js";
-import { entry, list, flatten, inventory, kindNames } from "./model.js";
+import { entry, list, inventory, kindNames } from "./model.js";
 import { editor } from "./editor.js";
 import { renderGraph } from "./graph.js";
 import { recordUndo, undoLast } from "./undo.js";
 import { memoryInteractions } from "./interactions.js";
 import { memoryTools } from "./tools.js";
 import { filterControls, filterRecords } from "./filters.js";
+import { buildIndex, visibleRows, searchForceIds } from "./tree-model.js";
+
+const VIEW_MODES = [
+  ["tree", "树形"],
+  ["list", "列表"],
+  ["card", "卡片"],
+  ["graph", "图谱"],
+];
+// Rows per page for the list and card pagers, matching the console dashboard.
+const PAGE_SIZE = 24;
+
+const kindLabel = (row) =>
+  kindNames[String(row.kind || "context").toLowerCase()] || row.kind;
+const whenText = (row) => date(row.updated_at || row.created_at);
+const tagList = (row) =>
+  Array.isArray(row.tags) ? row.tags.filter(Boolean) : [];
 
 export function memoryWorkspace(root, ctx) {
   let records = [],
@@ -35,10 +51,12 @@ export function memoryWorkspace(root, ctx) {
     busy = false,
     limit = 500,
     shown = 200,
+    listPage = 1,
     selectionVersion = 0,
     revision = "",
-    loaded = false;
-  let metadataCap=null;
+    loaded = false,
+    searchCaption = "";
+  let metadataCap = null;
   const checked = new Set();
   const graphState = {};
   let filters = {};
@@ -48,7 +66,10 @@ export function memoryWorkspace(root, ctx) {
       "浏览因果树、检索整库、编辑正文，或调整记忆之间的关系。",
       `<button data-new class="primary">新建记忆</button>`,
     ) +
-    `<div class="memory-toolbar"><div class="search-field"><input data-search placeholder="筛选标题 / ID，或回车检索整库" aria-label="搜索记忆"><button data-search-submit>检索整库</button></div><button data-mode>列表视图</button><button data-merge disabled>合并所选</button><button data-more>载入更多</button></div><div class="memory-caption"><span data-count>正在读取…</span><button data-clear-search hidden>返回目录</button></div><div class="memory-layout"><div class="memory-index" role="tree" aria-label="记忆树"></div><article class="memory-reader"><div class="empty">选择左侧记忆，查看完整内容。</div></article></div>`;
+    `<div class="memory-toolbar"><div class="search-field"><input data-search placeholder="筛选标题 / ID，或回车检索整库" aria-label="搜索记忆"><button data-search-submit>检索整库</button></div><div class="tabs view-tabs" role="tablist" aria-label="视图切换">${VIEW_MODES.map(
+      ([value, label]) =>
+        `<button role="tab" data-view="${value}" aria-selected="${value === mode}" class="${value === mode ? "active" : ""}">${label}</button>`,
+    ).join("")}</div><button data-merge disabled>合并所选</button><button data-more>载入更多</button></div><div class="memory-caption"><span data-count>正在读取…</span><button data-clear-search hidden>返回目录</button></div><div class="memory-layout"><div class="memory-index" role="tree" aria-label="记忆树"></div><article class="memory-reader"><div class="empty">选择左侧记忆，查看完整内容。</div></article></div>`;
   const tree = $(".memory-index", root),
     reader = $(".memory-reader", root),
     count = $("[data-count]", root);
@@ -61,42 +82,102 @@ export function memoryWorkspace(root, ctx) {
   const filterForm = $("[data-filters]", root);
   filterForm.oninput = () => {
     filters = Object.fromEntries(new FormData(filterForm));
+    listPage = 1;
     renderTree();
   };
   filterForm.onreset = () => {
     filters = {};
+    listPage = 1;
     renderTree();
   };
   filterForm.onsubmit = (event) => event.preventDefault();
+  const textMatch = (row) =>
+    `${row.title || ""} ${row.id}`.toLowerCase().includes(filter.trim().toLowerCase());
+  const paged = (values) => {
+    const pages = Math.max(1, Math.ceil(values.length / PAGE_SIZE));
+    listPage = Math.min(Math.max(1, listPage), pages);
+    return {
+      slice: values.slice((listPage - 1) * PAGE_SIZE, listPage * PAGE_SIZE),
+      pages,
+      page: listPage,
+      total: values.length,
+    };
+  };
+  const pager = ({ pages, page, total }) =>
+    pages > 1
+      ? `<nav class="pager" aria-label="分页"><button data-page-set="-1" ${page <= 1 ? "disabled" : ""}>上一页</button><span class="pager-state">第 ${page} / ${pages} 页 · 共 ${number(total)} 条</span><button data-page-set="1" ${page >= pages ? "disabled" : ""}>下一页</button></nav>`
+      : "";
+  const checkbox = (row) =>
+    `<input type="checkbox" data-check="${h(row.id)}" ${checked.has(row.id) ? "checked" : ""} aria-label="选择 ${h(row.title)}">`;
+  const memoryRow = ({ row, depth = 0, kids = 0, open = false }, folder) =>
+    `<div class="memory-row ${row.id === selected ? "selected" : ""}" data-id="${h(row.id)}" data-level="${Math.min(depth, 8)}" role="treeitem" aria-selected="${row.id === selected}" ${kids ? `aria-expanded="${Boolean(open)}"` : ""}>${checkbox(row)}<button class="tree-toggle" data-expand="${h(row.id)}" ${kids ? "" : "disabled"} aria-label="展开或折叠">${kids ? (open ? "▾" : "▸") : "·"}</button><button class="memory-title" data-select="${h(row.id)}" title="${h(row.title)}">${h(row.title || row.id.slice(0, 8))}</button></div>`;
+  const listRow = (row) =>
+    `<div class="memory-row list-row ${row.id === selected ? "selected" : ""}" data-id="${h(row.id)}" role="row">${checkbox(row)}<span class="memory-cell cell-kind"><span class="badge">${h(kindLabel(row))}</span></span><button class="memory-title cell-title" data-select="${h(row.id)}" title="${h(row.title)}">${h(row.title || row.id.slice(0, 8))}</button><span class="memory-cell cell-project">${h(row.project || "—")}</span><span class="memory-cell cell-updated">${h(whenText(row))}</span><span class="memory-cell cell-tags">${h(tagList(row).join(", ") || "—")}</span></div>`;
+  const memoryCard = (row) => {
+    const tags = tagList(row);
+    return `<div class="memory-card ${row.id === selected ? "active" : ""}" data-card="${h(row.id)}" data-select="${h(row.id)}" data-kind="${h(String(row.kind || "context").toLowerCase())}" tabindex="0" role="button" aria-selected="${row.id === selected}">${checkbox(row)}<span class="badge">${h(kindLabel(row))}</span><strong>${h(row.title || row.id.slice(0, 8))}</strong>${
+      row.content ? `<p>${h(String(row.content).replace(/\s+/g, " ").slice(0, 140))}</p>` : ""
+    }<small><span>${h(row.project || "—")}</span><span>${h(whenText(row))}</span>${
+      tags.length ? `<span class="hit-tags">${h(tags.join(", "))}</span>` : ""
+    }</small></div>`;
+  };
   function renderTree(searchRows) {
     const filtered = filterRecords(searchRows || records, filters);
     root.classList.toggle("graph-mode", mode === "graph");
+    root.classList.toggle("wide-mode", mode === "list" || mode === "card");
+    tree.classList.toggle("graph-shell", mode === "graph");
+    all("[data-view]", root).forEach((tab) => {
+      const active = tab.dataset.view === mode;
+      tab.classList.toggle("active", active);
+      tab.setAttribute("aria-selected", String(active));
+    });
     if (mode === "graph") {
-      const values =
-        filtered.filter((row) =>
-          `${row.title} ${row.id}`.toLowerCase().includes(filter.toLowerCase()),
-        );
+      const values = filtered.filter(textMatch);
       renderGraph(tree, values, selected, graphState, (id) => choose(id));
-      count.textContent = `图谱显示 ${values.length} 个已载入节点`;
+      count.textContent = searchRows
+        ? `检索返回 ${values.length} 条；搜索覆盖整库`
+        : `已载入 ${number(records.length)} / ${number(ctx.status?.summary?.local_alive)} 条 · 已选 ${checked.size} 条`;
+      $("[data-merge]", root).disabled = checked.size < 2 || busy;
+      $("[data-more]", root).disabled =
+        busy ||
+        records.length >= Number(ctx.status?.summary?.local_alive || Infinity);
       return;
     }
+    if (mode === "card") {
+      const values = searchRows ? filtered : filtered.filter(textMatch);
+      const view = paged(values);
+      tree.innerHTML = `<div class="memory-cards">${view.slice.map(memoryCard).join("") || (values.length ? "" : '<div class="empty">暂无匹配记忆</div>')}</div>${searchRows ? "" : pager(view)}`;
+      finish();
+      return;
+    }
+    if (mode === "list") {
+      const values = searchRows ? filtered : filtered.filter(textMatch);
+      const view = paged(values);
+      tree.innerHTML = `<div class="memory-list" role="table" aria-label="全部记忆"><div class="memory-row memory-row-head" role="row" aria-hidden="true"><span></span><span>类型</span><span>标题</span><span>项目</span><span>更新时间</span><span>标签</span></div>${view.slice.map(listRow).join("")}</div>${searchRows ? "" : pager(view)}`;
+      if (!values.length)
+        tree.innerHTML = '<div class="empty">暂无匹配记忆</div>';
+      finish();
+      return;
+    }
+    // Tree view: the console's model — trivial (diary) rows group on the diary
+    // page, empty leaves and pure category notes hide, search keeps matches
+    // and their ancestors visible with every branch opened.
+    const needle = searchRows ? "" : filter.trim();
+    let source = filtered;
+    if (needle && !searchRows) {
+      const keep = searchForceIds(source, needle.toLowerCase());
+      source = source.filter((row) => keep.has(row.id));
+    }
+    const index = buildIndex(source);
+    index.forceIds = needle ? searchForceIds(source, needle.toLowerCase()) : new Set();
     const visible = searchRows
-      ? filtered.map((row) => ({ row, depth: 0, kids: 0 }))
-      : mode === "list"
-        ? filtered
-            .filter((row) =>
-              `${row.title || ""} ${row.id}`
-                .toLowerCase()
-                .includes(filter.toLowerCase()),
-            )
-            .map((row) => ({ row, depth: 0, kids: 0 }))
-        : flatten(filtered, expanded, filter);
+      ? filtered.map((row) => ({ row, depth: 0, kids: 0, open: false }))
+      : visibleRows(index, expanded, Boolean(needle));
     tree.innerHTML =
       visible
         .slice(0, shown)
-        .map(
-          ({ row, depth, kids, expanded: open }) =>
-            `<div class="memory-row ${row.id === selected ? "selected" : ""}" data-id="${h(row.id)}" data-level="${Math.min(depth, 8)}" role="treeitem" aria-selected="${row.id === selected}" ${kids ? `aria-expanded="${Boolean(open)}"` : ""}><input type="checkbox" data-check="${h(row.id)}" ${checked.has(row.id) ? "checked" : ""} aria-label="选择 ${h(row.title)}"><button class="tree-toggle" data-expand="${h(row.id)}" ${kids ? "" : "disabled"} aria-label="展开或折叠">${kids ? (open ? "▾" : "▸") : "·"}</button><button class="memory-title" data-select="${h(row.id)}" title="${h(row.title)}">${h(row.title || row.id.slice(0, 8))}</button></div>`,
+        .map((item) =>
+          memoryRow(item, item.row.kind === "folder" || item.kids > 0),
         )
         .join("") +
       (visible.length > shown
@@ -105,9 +186,13 @@ export function memoryWorkspace(root, ctx) {
     if (!visible.length)
       tree.innerHTML = '<div class="empty">暂无匹配记忆</div>';
     all(".memory-row", tree).forEach((node) => (node.draggable = true));
-    count.textContent = searchRows
-      ? `检索返回 ${visible.length} 条；搜索覆盖整库`
-      : `已载入 ${number(records.length)} / ${number(ctx.status?.summary?.local_alive)} 条 · 已选 ${checked.size} 条`;
+    finish();
+  }
+  function finish() {
+    all(".memory-row", tree).forEach((node) => (node.draggable = true));
+    count.textContent =
+      searchCaption ||
+      `已载入 ${number(records.length)} / ${number(ctx.status?.summary?.local_alive)} 条 · 已选 ${checked.size} 条`;
     $("[data-merge]", root).disabled = checked.size < 2 || busy;
     $("[data-more]", root).disabled =
       busy ||
@@ -132,15 +217,36 @@ export function memoryWorkspace(root, ctx) {
     let succeeded = false;
     count.textContent = "正在读取记忆目录…";
     try {
-      if(metadataCap===null){
-        try { metadataCap=summary(await execute('capabilities')).capabilities?.memory_list_metadata===true; }
-        catch(error){if(error.envelope?.summary?.reason!=='invalid_input')throw error;metadataCap=false;notify('当前 CLI 使用分页全文目录；更新至 CLI 1.0.18 或兼容版本后可使用精简目录。');}
+      if (metadataCap === null) {
+        try {
+          metadataCap =
+            summary(await execute("capabilities")).capabilities
+              ?.memory_list_metadata === true;
+        } catch (error) {
+          if (error.envelope?.summary?.reason !== "invalid_input")
+            throw error;
+          metadataCap = false;
+          notify(
+            "当前 CLI 使用分页全文目录；更新至 CLI 1.0.18 或兼容版本后可使用精简目录。",
+          );
+        }
       }
-      const data = await execute("memory_list", { limit,...(metadataCap?{metadata:true}:{}) });
+      const data = await execute("memory_list", {
+        limit,
+        ...(metadataCap ? { metadata: true } : {}),
+      });
       if (!root.isConnected) return;
-      records = list(data).map((row) => ({ ...row, content: undefined }));
+      // The compact catalog omits bodies; the paginated catalog provides them
+      // and they feed card excerpts and text matching until the next reload.
+      records = list(data).map((row) =>
+        metadataCap ? { ...row, content: undefined } : row,
+      );
       loaded = true;
       succeeded = true;
+      // A reader still showing the pre-unlock lock screen resets to the idle hint.
+      if (!selected && !reader.querySelector(".reader-heading"))
+        reader.innerHTML =
+          '<div class="empty">选择左侧记忆，查看完整内容。</div>';
       if (!expanded.size)
         records
           .filter((row) => !row.parent_id)
@@ -184,8 +290,10 @@ export function memoryWorkspace(root, ctx) {
       selectedEntry = memory;
       renderReader(memory);
       const listed = byId.get(id);
-      $(".reader-meta", reader).insertAdjacentHTML("beforeend",
-        `<span>召回 ${h(listed?.recall_count ?? "—")} 次</span><span>${h(memory.project || "未指定项目")}</span><span>${h((memory.tags || []).join(" · "))}</span>`);
+      $(".reader-meta", reader).insertAdjacentHTML(
+        "beforeend",
+        `<span>召回 ${h(listed?.recall_count ?? "—")} 次</span><span>${h(memory.project || "未指定项目")}</span><span>${h((memory.tags || []).join(" · "))}</span>`,
+      );
       memoryTools(reader, memory, {
         changed: async () => {
           selected = "";
@@ -207,6 +315,8 @@ export function memoryWorkspace(root, ctx) {
     const query = $("[data-search]", root).value.trim();
     if (!query) {
       filter = "";
+      searchCaption = "";
+      $("[data-clear-search]", root).hidden = true;
       renderTree();
       return;
     }
@@ -223,6 +333,7 @@ export function memoryWorkspace(root, ctx) {
           }
         })
         .filter(Boolean);
+      searchCaption = `检索返回 ${matches.length} 条；搜索覆盖整库`;
       renderTree(matches);
       $("[data-clear-search]", root).hidden = false;
     } catch (error) {
@@ -233,7 +344,9 @@ export function memoryWorkspace(root, ctx) {
     selected = await undoLast();
     selectedEntry = null;
     selectionVersion++;
-    if (!selected) reader.innerHTML = '<div class="empty">新建记忆已撤销，请重新选择记忆。</div>';
+    if (!selected)
+      reader.innerHTML =
+        '<div class="empty">新建记忆已撤销，请重新选择记忆。</div>';
     await load();
     await ctx.refresh();
     notify("已撤销");
@@ -253,6 +366,8 @@ export function memoryWorkspace(root, ctx) {
     if (event.target.matches("[data-search]")) {
       filter = event.target.value;
       shown = 200;
+      listPage = 1;
+      searchCaption = "";
       renderTree();
     }
   });
@@ -271,8 +386,25 @@ export function memoryWorkspace(root, ctx) {
     }
   });
   root.addEventListener("click", async (event) => {
+    if (event.target.matches("[data-check]")) return; // change handler owns it
+    const card = event.target.closest("[data-card]");
+    if (card) {
+      choose(card.dataset.card);
+      return;
+    }
     const button = event.target.closest("button");
     if (!button) return;
+    if (button.dataset.view) {
+      mode = button.dataset.view;
+      listPage = 1;
+      renderTree();
+      return;
+    }
+    if (button.dataset.pageSet) {
+      listPage += Number(button.dataset.pageSet);
+      renderTree();
+      return;
+    }
     if (button.dataset.select) {
       choose(button.dataset.select);
       return;
@@ -297,16 +429,6 @@ export function memoryWorkspace(root, ctx) {
       await action(button, undo);
       return;
     }
-    if (button.hasAttribute("data-mode")) {
-      mode = mode === "tree" ? "list" : mode === "list" ? "graph" : "tree";
-      button.textContent = {
-        tree: "列表视图",
-        list: "图谱视图",
-        graph: "树形视图",
-      }[mode];
-      renderTree();
-      return;
-    }
     if (button.hasAttribute("data-more")) {
       limit = Math.min(100000, limit * 2);
       await load();
@@ -314,6 +436,7 @@ export function memoryWorkspace(root, ctx) {
     }
     if (button.hasAttribute("data-clear-search")) {
       filter = "";
+      searchCaption = "";
       $("[data-search]", root).value = "";
       button.hidden = true;
       renderTree();
@@ -422,6 +545,14 @@ export function memoryWorkspace(root, ctx) {
         await ctx.refresh();
       });
   });
+  root.addEventListener("keydown", (event) => {
+    if (event.key !== "Enter" && event.key !== " ") return;
+    const card = event.target.closest?.("[data-card]");
+    if (card) {
+      event.preventDefault();
+      choose(card.dataset.card);
+    }
+  });
   function update() {
     const s = ctx.status?.summary;
     if (!s?.unlocked) {
@@ -455,5 +586,14 @@ export function memoryWorkspace(root, ctx) {
       notify("已移动");
     },
   });
-  return { update, refresh: load, dispose };
+  return {
+    update,
+    refresh: load,
+    dispose: () => {
+      dispose();
+      if (graphState.raf) cancelAnimationFrame(graphState.raf);
+      graphState.raf = 0;
+      graphState.dom = null;
+    },
+  };
 }
