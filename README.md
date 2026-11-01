@@ -16,7 +16,7 @@ See [platform support](docs/platforms.md) for architectures, native-library prer
 - Runtime health, memory counts, synchronization, model tasks, inference queues and retrieval-index status over loopback HTTP RPC.
 - Memory tree/list, full reading, semantic recall, create/edit, move, merge, delete/restore, causal chains and subtree sharing. Merge follows the CLI contract: surviving children are promoted to surviving ancestors.
 - Diary calendar and fragment search; organization suggestions, similarity checks, audit, local repair preview, validated move plans and optional AI classification.
-- Model/index preparation, cancellation/restart, inference-engine selection, provider installation, recall-service configuration and local/quality recall checks with a nine-round Benchmark.
+- Model/index preparation, cancellation/restart, inference-engine and model-weight selection, provider installation, recall-service configuration and local/quality recall checks with a nine-round Benchmark.
 - Accounts, browser login, offline initialization, spaces, migration, synchronization settings, injection targets, native file selection and import/export/backup.
 - First-run Runtime download, SHA-256 validation, bounded archive extraction, complete native-library validation, start/stop and version updates.
 - Client update checks and downloads through Wails' updater. A downloaded client update is applied by **Restart and apply**; updating the desktop does not stop the Runtime.

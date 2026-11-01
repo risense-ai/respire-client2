@@ -23,6 +23,7 @@ export function models(root, ctx) {
   let agent = {},
     backend = {},
     engine = "cpu",
+    variant = "quantized",
     loaded = false,
     loading = false;
   root.innerHTML =
@@ -41,7 +42,19 @@ export function models(root, ctx) {
               ["npu", "NPU"],
             ],
         "cpu",
-      )}<p class="hint">默认使用 CPU。切换失败会报告错误，不自动改用其他引擎。</p><div class="actions"><button type="submit">保存引擎</button><button type="button" data-model="probe">运行实际推理验证</button><button type="button" data-model="providers">安装 NPU 引擎</button></div></form>`,
+      )}${select(
+        "variant",
+        "权重文件",
+        [
+          ["quantized", "quantized · 543 MiB（CPU 默认）"],
+          ["fp16", "fp16 · 1.06 GiB（GPU/NPU 默认）"],
+          ["int8", "int8 · 542 MiB"],
+          ["uint8", "uint8 · 542 MiB"],
+          ["q4", "q4 · 1.16 GiB"],
+          ["q4f16", "q4f16 · 667 MiB"],
+        ],
+        "quantized",
+      )}<p class="hint">CPU 默认使用 quantized 权重，GPU/NPU 默认使用 fp16 权重。所选权重文件缺失时推理会报错，先点「下载所选权重文件」补齐（约 1.06 GiB）。切换失败会报告错误，不自动改用其他引擎。</p><div class="actions"><button type="submit">保存引擎</button><button type="button" data-model="variant">下载所选权重文件</button><button type="button" data-model="probe">运行实际推理验证</button><button type="button" data-model="providers">安装 NPU 引擎</button></div></form>`,
     )}</div>` +
     panel(
       "检索与后台索引",
@@ -120,8 +133,13 @@ export function models(root, ctx) {
         $("[name=mirror]", root).value = agent.model_mirror || "auto";
       }
       if (values[1].status === "fulfilled") {
-        engine = summary(values[1].value).engine;
+        const state = summary(values[1].value);
+        engine = state.engine;
+        variant =
+          state.model ||
+          (engine === "gpu" || engine === "npu" ? "fp16" : "quantized");
         $("[data-engine] [name=engine]", root).value = engine || "";
+        $("[data-engine] [name=variant]", root).value = variant;
       }
       if (values[2].status === "fulfilled") backend = summary(values[2].value);
       $("[data-api] [name=base]", root).value =
@@ -197,7 +215,22 @@ export function models(root, ctx) {
           return;
         result = await execute("model_uninstall");
       } else if (operation === "probe") result = await execute("model_probe");
-      else if (operation === "providers")
+      else if (operation === "variant") {
+        const weight = $("[data-engine] [name=variant]", root).value;
+        if (
+          !(await confirm(
+            "下载权重文件",
+            `将下载 BGE-M3 ${weight} 权重到本机模型目录；已有文件会校验后跳过。`,
+            "开始下载",
+          ))
+        )
+          return;
+        const mirror = $("[name=mirror]", root).value.trim();
+        result = await execute("model_install", {
+          model: weight,
+          ...(mirror && mirror !== "auto" ? { mirror } : {}),
+        });
+      } else if (operation === "providers")
         result = await execute("model_install_engines");
       else if (operation === "index") result = await execute("index_prepare");
       else if (operation === "rebuild") {
@@ -220,10 +253,12 @@ export function models(root, ctx) {
   $("[data-engine]", root).addEventListener("submit", (event) => {
     event.preventDefault();
     action($("[type=submit]", event.target), async () => {
+      const data = new FormData(event.target);
       await execute("model_engine_set", {
-        engine: new FormData(event.target).get("engine"),
+        engine: data.get("engine"),
+        model: data.get("variant"),
       });
-      notify("引擎已保存，下次加载模型生效");
+      notify("引擎与权重已保存，下次加载模型生效");
     });
   });
   $("[data-recall]", root).addEventListener("submit", (event) => {
