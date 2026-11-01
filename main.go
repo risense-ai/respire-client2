@@ -30,6 +30,9 @@ func main() {
 		return
 	}
 	desktop.Run(m, version)
+	if err := exitDesktopProcess(); err != nil {
+		panic(err)
+	}
 }
 
 func headless(m *host.Manager) {

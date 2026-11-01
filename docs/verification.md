@@ -1,5 +1,13 @@
 # Foundation verification
 
+## Windows update exit fix (2026-11-01)
+
+The Windows GUI reproduced a hang after `desktop.Run` returned. A non-invasive native stack mapped back to `runtime.exit` → a Win32 callback → `runtime.exitsyscall` → `runtime.fatalthrow` → a second `runtime.exit` waiting on the exit lock. This matches [Wails #6375](https://github.com/wailsapp/wails/issues/6375). A helper swap or a reported exit code alone does not prove that the old window and process have gone away.
+
+The GUI now uses Windows `TerminateProcess` on itself only after Wails shutdown and the desktop's deferred cleanup finish. This avoids DLL teardown callbacks re-entering Go. Headless commands and updater-helper mode keep their existing exit paths; Runtime is a separate process.
+
+Existing Go tests and `go vet -tags production ./...` passed, as did the Windows ARM64 cross-build. Eight consecutive isolated Windows GUI upgrades completed with SHA-256 verification, old-process exit, new-version reporting, WebView navigation completion, a visible responsive new window and no stalled native-window samples. Each new client's process handle signalled exit before the next round. The fixture and diagnostic endpoints are build overlays under ignored `.verification/`; they are absent from the production build. macOS/Linux execution and a published release have not been verified for this change.
+
 ## Stable 0.2.0 promotion
 
 On 2026-10-29, official CLI `v1.0.18` was confirmed public, non-draft and non-prerelease. A separate Windows data root installed it through the client's default Stable channel; the running Runtime reported `1.0.18`, and capabilities advertised host RPC version 1 with registration/login/recovery/reset and metadata-only memory listing. No personal data root or OS startup registration was used.
