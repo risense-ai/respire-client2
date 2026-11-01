@@ -5,7 +5,7 @@ const defaults = {
   uiFont: "",
   readFont: "",
   uiScale: 1,
-  readSize: 15,
+  readSize: 16,
   readLh: 1.95,
 };
 const bounds = { uiScale: [0.6, 2], readSize: [12, 30], readLh: [1.4, 2.8] };

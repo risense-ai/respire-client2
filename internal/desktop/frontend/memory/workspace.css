@@ -31,7 +31,7 @@
 }
 .graph-controls p {
   margin: 0;
-  font-size: 10px;
+  font-size: 0.6875rem;
   color: var(--muted);
 }
 .graph-controls nav {
@@ -39,20 +39,20 @@
   align-items: center;
   gap: 6px;
   flex-wrap: wrap;
-  font-size: 10px;
+  font-size: 0.6875rem;
   color: var(--muted);
 }
 .graph-controls button,
 .graph-buttons button,
 .graph-external button,
 .pager-step {
-  font-size: 10px;
-  min-height: 26px;
+  font-size: 0.6875rem;
+  min-height: 1.75rem;
   padding: 3px 8px;
 }
 .graph-window-hint {
   margin: 0;
-  font-size: 10px;
+  font-size: 0.6875rem;
   color: var(--muted);
 }
 .memory-graph {
@@ -85,7 +85,7 @@
   margin: 0;
   font-family: var(--font-serif);
   color: var(--muted);
-  font-size: 13px;
+  font-size: 0.9375rem;
 }
 /* Force graph: every color rides on theme variables and per-kind accents. */
 .graph-link {
@@ -174,7 +174,7 @@ html[data-theme="dark"] .graph-node[data-kind="knowledge"] {
 }
 .graph-label {
   font-family: var(--font-sans);
-  font-size: 11px;
+  font-size: 0.8125rem;
   fill: var(--text);
   paint-order: stroke;
   stroke: var(--panel);
@@ -187,19 +187,19 @@ html[data-theme="dark"] .graph-node[data-kind="knowledge"] {
   flex-wrap: wrap;
   gap: 6px;
   align-items: center;
-  font-size: 11px;
+  font-size: 0.8125rem;
   color: var(--muted);
 }
 .graph-relations-picker select {
   max-width: 100%;
   min-width: 0;
   flex: 1;
-  font-size: 11px;
+  font-size: 0.8125rem;
 }
 .graph-external {
   max-height: 9rem;
   overflow: auto;
-  font-size: 11px;
+  font-size: 0.8125rem;
 }
 .graph-external summary {
   cursor: pointer;
@@ -228,8 +228,8 @@ html[data-theme="dark"] .graph-node[data-kind="knowledge"] {
   border-radius: 4px;
   background: transparent;
   color: var(--muted);
-  font-size: 11px;
-  min-height: 28px;
+  font-size: 0.8125rem;
+  min-height: 1.875rem;
   padding: 4px 9px;
 }
 .view-tabs button:hover {
@@ -242,9 +242,10 @@ html[data-theme="dark"] .graph-node[data-kind="knowledge"] {
 }
 /* List view: console-style table with kind, title, project, time, tags. */
 .memory-list {
-  --cols: 16px minmax(80px, 0.7fr) minmax(0, 2.2fr) minmax(70px, 0.9fr) minmax(120px, 1fr) minmax(0, 1fr);
+  --cols: minmax(80px, 0.7fr) minmax(0, 2.2fr) minmax(70px, 0.9fr) minmax(120px, 1fr) minmax(0, 1fr);
 }
 .memory-list .memory-row {
+  user-select: none;
   display: grid;
   grid-template-columns: var(--cols);
   gap: 10px;
@@ -258,25 +259,31 @@ html[data-theme="dark"] .graph-node[data-kind="knowledge"] {
   background: var(--soft);
 }
 .memory-list .memory-row.selected {
+  background: color-mix(in srgb, var(--green) 12%, var(--panel));
+  box-shadow: inset 3px 0 0 var(--green);
+}
+.memory-list .memory-row.active {
   background: var(--soft);
+  font-weight: 500;
+}
+.memory-list .memory-row.selected.active {
+  background: color-mix(in srgb, var(--green) 18%, var(--panel));
 }
 .memory-row-head {
   min-height: 34px;
   color: var(--muted);
-  font: 600 10px var(--font-sans);
+  font: 600 0.6875rem var(--font-sans);
   letter-spacing: 0.4px;
   text-transform: uppercase;
   background: var(--soft);
 }
-.memory-row-head > span:first-child {
-  padding-left: 2px;
-}
+
 .memory-list .memory-title {
   text-align: left;
   font-weight: 500;
 }
 .memory-cell {
-  font-size: 11px;
+  font-size: 0.8125rem;
   color: var(--muted);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -296,12 +303,12 @@ html[data-theme="dark"] .graph-node[data-kind="knowledge"] {
 }
 @media (max-width: 900px) {
   .memory-list {
-    --cols: 16px minmax(0, 1fr) 24px;
+    --cols: minmax(0, 1fr) 24px;
   }
-  .memory-row-head span:nth-child(2),
+  .memory-row-head span:nth-child(1),
+  .memory-row-head span:nth-child(3),
   .memory-row-head span:nth-child(4),
   .memory-row-head span:nth-child(5),
-  .memory-row-head span:nth-child(6),
   .memory-list .cell-kind,
   .memory-list .cell-project,
   .memory-list .cell-updated,
@@ -334,10 +341,21 @@ html[data-theme="dark"] .graph-node[data-kind="knowledge"] {
 .memory-card:hover {
   border-color: var(--muted);
 }
-.memory-card.active,
 .memory-card:focus {
-  border-color: var(--green);
   outline: none;
+  border-color: var(--muted);
+}
+.memory-card.active {
+  border-color: var(--muted);
+  background: color-mix(in srgb, var(--text) 6%, var(--panel));
+}
+.memory-card.selected {
+  border-color: var(--green);
+  box-shadow: inset 0 0 0 1px var(--green), 0 0 0 1px color-mix(in srgb, var(--green) 40%, transparent);
+}
+.memory-card.selected.active {
+  border-color: var(--green);
+  background: color-mix(in srgb, var(--green) 10%, var(--panel));
 }
 .memory-card[data-kind="context"] {
   --card-accent: #3d7085;
@@ -392,28 +410,20 @@ html[data-theme="dark"] .memory-card[data-kind="knowledge"] {
   color: var(--card-accent);
   border-color: color-mix(in srgb, var(--card-accent) 45%, var(--line));
 }
-.memory-card > input[type="checkbox"] {
-  position: absolute;
-  top: 10px;
-  right: 10px;
-  width: 12px;
-  height: 12px;
-  margin: 0;
-}
 .memory-card strong {
   font-family: var(--font-serif);
   font-weight: 400;
-  font-size: 14px;
+  font-size: 1rem;
   line-height: 1.45;
   overflow: hidden;
   display: -webkit-box;
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
-  padding-right: 14px;
+
 }
 .memory-card p {
   color: var(--muted);
-  font-size: 11px;
+  font-size: 0.8125rem;
   line-height: 1.7;
   flex: 1;
   margin: 0;
@@ -424,7 +434,7 @@ html[data-theme="dark"] .memory-card[data-kind="knowledge"] {
 }
 .memory-card small {
   color: var(--muted);
-  font: 9px ui-monospace, monospace;
+  font: 0.6875rem ui-monospace, monospace;
   display: flex;
   flex-wrap: wrap;
   gap: 3px 10px;
@@ -448,12 +458,12 @@ html[data-theme="dark"] .memory-card[data-kind="knowledge"] {
   cursor: not-allowed;
 }
 .pager-state {
-  font: 10px ui-monospace, monospace;
+  font: 0.6875rem ui-monospace, monospace;
   color: var(--muted);
   letter-spacing: 1px;
 }
 .memory-toolbar > button {
-  font-size: 11px;
+  font-size: 0.8125rem;
 }
 .search-field {
   display: flex;
@@ -463,13 +473,13 @@ html[data-theme="dark"] .memory-card[data-kind="knowledge"] {
 }
 .search-field input {
   min-width: 100px;
-  font-size: 12px;
+  font-size: 0.875rem;
 }
 .search-field button {
-  font-size: 11px;
+  font-size: 0.8125rem;
 }
 .memory-caption {
-  font-size: 10px;
+  font-size: 0.6875rem;
   color: var(--muted);
   display: flex;
   justify-content: space-between;
@@ -477,9 +487,9 @@ html[data-theme="dark"] .memory-card[data-kind="knowledge"] {
   margin-bottom: 11px;
 }
 .memory-caption button {
-  min-height: 24px;
+  min-height: 1.625rem;
   padding: 2px 7px;
-  font-size: 10px;
+  font-size: 0.6875rem;
 }
 .memory-layout {
   display: grid;
@@ -502,28 +512,36 @@ html[data-theme="dark"] .memory-card[data-kind="knowledge"] {
   align-items: center;
   min-width: 0;
   gap: 2px;
-  min-height: 32px;
+  min-height: 2rem;
   border: 1px solid transparent;
   border-radius: 4px;
   padding-right: 5px;
+  user-select: none;
 }
 .memory-row:hover {
-  background: var(--soft);
+  background: var(--hover);
 }
+/* Multi-select (checked) rows: soft green wash + left accent bar. */
 .memory-row.selected {
-  background: var(--soft);
-  border-color: var(--line);
+  background: color-mix(in srgb, var(--green) 12%, var(--panel));
+  border-color: color-mix(in srgb, var(--green) 35%, var(--line));
+  box-shadow: inset 3px 0 0 var(--green);
 }
-.memory-row input {
-  width: 12px;
-  height: 12px;
-  flex-shrink: 0;
-  margin: 0 5px;
+/* The row whose content is open in the reader: strong neutral highlight. */
+.memory-row.active {
+  background: var(--soft);
+  border-color: var(--muted);
+  font-weight: 500;
+}
+.memory-row.selected.active {
+  background: color-mix(in srgb, var(--green) 18%, var(--panel));
+  border-color: var(--green);
+  box-shadow: inset 3px 0 0 var(--green);
 }
 .tree-toggle {
   padding: 0;
   width: 15px;
-  min-height: 24px;
+  min-height: 1.625rem;
   background: transparent;
   border: 0;
   color: var(--muted);
@@ -538,9 +556,9 @@ html[data-theme="dark"] .memory-card[data-kind="knowledge"] {
   text-overflow: ellipsis;
   overflow: hidden;
   flex: 1;
-  font-size: 12px;
+  font-size: 0.875rem;
   padding: 4px 2px;
-  min-height: 30px;
+  min-height: 1.875rem;
 }
 .memory-row[data-level="1"] {
   padding-left: 12px;
@@ -569,7 +587,7 @@ html[data-theme="dark"] .memory-card[data-kind="knowledge"] {
 .tree-load {
   display: block;
   width: 100%;
-  font-size: 10px;
+  font-size: 0.6875rem;
   margin-top: 8px;
 }
 .memory-reader {
@@ -582,13 +600,13 @@ html[data-theme="dark"] .memory-card[data-kind="knowledge"] {
   border-bottom: 1px solid var(--line);
 }
 .reader-path {
-  font-size: 10px;
+  font-size: 0.6875rem;
   color: var(--muted);
   margin-bottom: 13px;
   overflow-wrap: anywhere;
 }
 .reader-heading h2 {
-  font-size: 25px;
+  font-size: 1.6875rem;
   line-height: 1.45;
   overflow-wrap: anywhere;
 }
@@ -596,7 +614,7 @@ html[data-theme="dark"] .memory-card[data-kind="knowledge"] {
   display: flex;
   gap: 12px;
   color: var(--muted);
-  font-size: 10px;
+  font-size: 0.6875rem;
   margin: 13px 0 17px;
   flex-wrap: wrap;
 }
@@ -604,12 +622,12 @@ html[data-theme="dark"] .memory-card[data-kind="knowledge"] {
   gap: 5px;
 }
 .reader-heading button {
-  font-size: 10px;
-  min-height: 28px;
+  font-size: 0.6875rem;
+  min-height: 1.875rem;
   padding: 4px 8px;
 }
 .reading-content {
-  font: var(--read-size, 15px)/var(--read-lh, 1.95)
+  font: var(--read-size, 1.0625rem)/var(--read-lh, 1.95)
     var(--user-read-font, var(--font-serif));
   white-space: pre-wrap;
   overflow-wrap: anywhere;
@@ -628,7 +646,7 @@ html[data-theme="dark"] .memory-card[data-kind="knowledge"] {
 }
 .reader-relations button {
   justify-content: flex-start;
-  font-size: 11px;
+  font-size: 0.8125rem;
   text-align: left;
   white-space: normal;
 }
@@ -655,16 +673,16 @@ html[data-theme="dark"] .memory-card[data-kind="knowledge"] {
 }
 .candidate-list strong {
   display: block;
-  font-size: 12px;
+  font-size: 0.875rem;
   font-weight: 500;
   overflow-wrap: anywhere;
 }
 .candidate-list small {
   display: block;
-  font-size: 9px;
+  font-size: 0.6875rem;
 }
 .candidate-list button {
-  font-size: 10px;
+  font-size: 0.6875rem;
   padding: 4px 7px;
   min-height: 29px;
 }
@@ -682,7 +700,7 @@ html[data-theme="dark"] .memory-card[data-kind="knowledge"] {
   min-height: 66px;
   padding: 8px;
   border-color: transparent;
-  font-size: 11px;
+  font-size: 0.8125rem;
 }
 .calendar-day.has-entries {
   border-color: var(--line);
@@ -692,13 +710,13 @@ html[data-theme="dark"] .memory-card[data-kind="knowledge"] {
   border-color: var(--muted);
 }
 .calendar-day small {
-  font-size: 9px;
+  font-size: 0.6875rem;
   margin-top: 7px;
 }
 .calendar-weekday {
   text-align: center;
   color: var(--muted);
-  font-size: 10px;
+  font-size: 0.6875rem;
   padding: 5px;
 }
 .calendar-blank {
@@ -718,15 +736,15 @@ html[data-theme="dark"] .memory-card[data-kind="knowledge"] {
   overflow-wrap: anywhere;
 }
 .suggestion-card p {
-  font-size: 12px;
+  font-size: 0.875rem;
   margin-top: 6px;
   color: var(--muted);
 }
 .suggestion-card button {
-  font-size: 11px;
+  font-size: 0.8125rem;
 }
 .suggestion-card small {
-  font-size: 10px;
+  font-size: 0.6875rem;
 }
 .memory-toolbar .primary {
   flex-shrink: 0;
@@ -749,7 +767,7 @@ html[data-theme="dark"] .memory-card[data-kind="knowledge"] {
     padding: 20px;
   }
   .reader-heading h2 {
-    font-size: 22px;
+    font-size: 1.5rem;
   }
   .calendar-day {
     min-height: 48px;

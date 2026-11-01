@@ -13,7 +13,12 @@
     "Work Sans Variable", "PingFang SC", "Microsoft YaHei", Arial, sans-serif;
   --font-serif:
     "Fraunces Variable", "Noto Serif SC Variable", "Songti SC", Georgia, serif;
-  font: 14px/1.5 var(--user-ui-font, var(--font-sans));
+  /* Root font size tracks the window: every rem-based font, control and
+     spacing scales with it automatically. ~14.6px at 1280px, ~16px at 1440px
+     and up to 18.8px on large displays (rem here resolves against the
+     initial 16px, so the clamp is viewport-driven only). The user's UI scale
+     multiplies on top of this via --ui-scale. */
+  font: clamp(14px, 0.5rem + 0.62vw, 18.8px) / 1.5 var(--user-ui-font, var(--font-sans));
   color: var(--text);
   background: var(--bg);
   font-synthesis: none;
@@ -116,13 +121,13 @@ select {
 label {
   display: grid;
   gap: 6px;
-  font-size: 12px;
+  font-size: 0.875rem;
   color: var(--muted);
 }
 label > input,
 label > textarea,
 label > select {
-  font-size: 14px;
+  font-size: 1rem;
   color: var(--text);
 }
 input[type="checkbox"] {
@@ -145,22 +150,22 @@ h3 {
   font-weight: 400;
 }
 h1 {
-  font-size: 27px;
+  font-size: 1.8125rem;
   letter-spacing: -0.5px;
   line-height: 1.3;
 }
 h2 {
-  font-size: 18px;
+  font-size: 1.25rem;
 }
 h3 {
-  font-size: 15px;
+  font-size: 1.0625rem;
 }
 small,
 .muted {
   color: var(--muted);
 }
 small {
-  font-size: 11px;
+  font-size: 0.8125rem;
 }
 .sidebar {
   border-right: 1px solid var(--line);
@@ -176,7 +181,7 @@ small {
   align-items: center;
   gap: 9px;
   padding: 0 8px 21px;
-  font-size: 28px;
+  font-size: 1.875rem;
   font-weight: 600;
   letter-spacing: -1.5px;
 }
@@ -199,12 +204,12 @@ small {
   margin-bottom: 22px;
 }
 .workspace-label strong {
-  font-size: 12px;
+  font-size: 0.875rem;
   font-weight: 500;
 }
 .workspace-label small {
   display: block;
-  font-size: 10px;
+  font-size: 0.6875rem;
   margin-top: 3px;
 }
 .dot {
@@ -229,7 +234,7 @@ nav button {
   min-height: 37px;
   color: var(--muted);
   padding: 8px 10px;
-  font-size: 13px;
+  font-size: 0.9375rem;
 }
 nav button.active {
   border-color: var(--line);
@@ -238,8 +243,7 @@ nav button.active {
 }
 nav button span {
   margin-left: auto;
-  font:
-    10px ui-monospace,
+  font: 0.6875rem ui-monospace,
     monospace;
   color: var(--muted);
 }
@@ -251,13 +255,13 @@ nav button span {
   padding: 14px 9px 0;
   margin-top: 12px;
   border-top: 1px solid var(--line);
-  font-size: 10px;
+  font-size: 0.6875rem;
   color: var(--muted);
   display: grid;
   gap: 3px;
 }
 .sidebar-foot small {
-  font-size: 9px;
+  font-size: 0.6875rem;
 }
 main {
   display: flex;
@@ -275,7 +279,7 @@ main {
   border-bottom: 1px solid var(--line);
 }
 .breadcrumbs {
-  font-size: 12px;
+  font-size: 0.875rem;
   display: flex;
   gap: 12px;
   align-items: center;
@@ -293,7 +297,7 @@ main {
 }
 .top-actions > button,
 .top-actions > select {
-  font-size: 11px;
+  font-size: 0.8125rem;
   min-height: 30px;
   padding: 5px 9px;
 }
@@ -319,14 +323,13 @@ main {
   margin-bottom: 22px;
 }
 .page-heading p {
-  font-size: 12px;
+  font-size: 0.875rem;
   line-height: 1.8;
   color: var(--muted);
   margin-top: 7px;
 }
 .eyebrow {
-  font:
-    9px ui-monospace,
+  font: 0.6875rem ui-monospace,
     monospace;
   letter-spacing: 1.5px;
   color: var(--muted);
@@ -340,7 +343,7 @@ main {
   flex-wrap: wrap;
 }
 .heading-actions button {
-  font-size: 12px;
+  font-size: 0.875rem;
 }
 .panel {
   background: var(--panel);
@@ -357,7 +360,7 @@ main {
   justify-content: space-between;
 }
 .panel-heading h2 {
-  font-size: 16px;
+  font-size: 1.125rem;
 }
 .panel-body {
   padding: 18px;
@@ -392,17 +395,17 @@ main {
 }
 .metric > span {
   color: var(--muted);
-  font-size: 11px;
+  font-size: 0.8125rem;
 }
 .metric strong {
   display: block;
-  font: 30px/1.25 var(--font-serif);
+  font: 2rem/1.25 var(--font-serif);
   margin: 9px 0 6px;
   overflow-wrap: anywhere;
 }
 .metric small {
   display: block;
-  font-size: 10px;
+  font-size: 0.6875rem;
 }
 .facts {
   margin: 0;
@@ -419,14 +422,14 @@ main {
   border-bottom: 0;
 }
 .facts dt {
-  font-size: 12px;
+  font-size: 0.875rem;
   color: var(--muted);
   flex-shrink: 0;
 }
 .facts dd {
   margin: 0;
   text-align: right;
-  font-size: 12px;
+  font-size: 0.875rem;
   overflow-wrap: anywhere;
   min-width: 0;
 }
@@ -436,8 +439,7 @@ main {
   padding: 3px 7px;
   border: 1px solid var(--line);
   border-radius: 4px;
-  font:
-    10px ui-monospace,
+  font: 0.6875rem ui-monospace,
     monospace;
   color: var(--muted);
   background: var(--soft);
@@ -462,7 +464,7 @@ main {
   justify-content: space-between;
   padding: 0 24px;
   border-top: 1px solid var(--line);
-  font: 10px var(--font-sans);
+  font: 0.6875rem var(--font-sans);
   color: var(--muted);
   white-space: nowrap;
   overflow: hidden;
@@ -477,7 +479,7 @@ main {
   border: 1px solid var(--line);
   border-radius: 4px;
   background: var(--soft);
-  font-size: 12px;
+  font-size: 0.875rem;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   max-height: 90px;
@@ -490,12 +492,12 @@ main {
   padding: 32px 24px;
   text-align: center;
   color: var(--muted);
-  font-size: 13px;
+  font-size: 0.9375rem;
 }
 .empty strong {
   display: block;
   color: var(--text);
-  font-size: 15px;
+  font-size: 1.0625rem;
   margin-bottom: 9px;
 }
 .empty .actions {
@@ -515,12 +517,12 @@ main {
   grid-column: 1/-1;
 }
 .form-error {
-  font-size: 12px;
+  font-size: 0.875rem;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
 .hint {
-  font-size: 11px;
+  font-size: 0.8125rem;
   color: var(--muted);
   line-height: 1.8;
 }
@@ -539,13 +541,13 @@ main {
 }
 .row-copy strong {
   display: block;
-  font-size: 13px;
+  font-size: 0.9375rem;
   font-weight: 500;
 }
 .row-copy small {
   display: block;
   margin-top: 4px;
-  font-size: 11px;
+  font-size: 0.8125rem;
 }
 .setting-row {
   display: flex;
@@ -560,7 +562,7 @@ main {
 }
 .setting-row p {
   color: var(--muted);
-  font-size: 11px;
+  font-size: 0.8125rem;
   margin-top: 4px;
 }
 .setting-row select {
@@ -573,7 +575,7 @@ main {
 }
 .technical {
   padding: 13px 18px;
-  font-size: 11px;
+  font-size: 0.8125rem;
   color: var(--muted);
   border-top: 1px solid var(--line);
 }
@@ -584,8 +586,7 @@ main {
 pre.code {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
-  font:
-    11px/1.65 ui-monospace,
+  font: 0.8125rem/1.65 ui-monospace,
     Consolas,
     monospace;
   max-height: 350px;
@@ -598,7 +599,7 @@ pre.code {
   gap: 15px;
   padding: 10px 18px;
   border-bottom: 1px solid var(--line);
-  font-size: 12px;
+  font-size: 0.875rem;
 }
 .result-lines span {
   color: var(--muted);
@@ -633,7 +634,7 @@ pre.code {
   border-bottom: 1px solid var(--line);
 }
 .dialog-heading h2 {
-  font-size: 20px;
+  font-size: 1.375rem;
 }
 .dialog-body {
   padding: 20px 22px;
@@ -649,14 +650,14 @@ pre.code {
 }
 .icon-button {
   width: 29px;
-  min-height: 29px;
+  min-height: 1.875rem;
   padding: 2px;
-  font-size: 20px;
+  font-size: 1.375rem;
   background: transparent;
   border-color: transparent;
 }
 .reading-text {
-  font: var(--read-size, 15px)/var(--read-lh, 1.95)
+  font: var(--read-size, 1.0625rem)/var(--read-lh, 1.95)
     var(--user-read-font, var(--font-serif));
   min-height: 180px;
 }
@@ -666,12 +667,12 @@ pre.code {
 table {
   width: 100%;
   border-collapse: collapse;
-  font-size: 12px;
+  font-size: 0.875rem;
 }
 th {
   text-align: left;
   color: var(--muted);
-  font-size: 10px;
+  font-size: 0.6875rem;
   font-weight: 400;
   background: var(--soft);
 }
@@ -687,13 +688,12 @@ td .actions {
   gap: 4px;
 }
 td button {
-  font-size: 10px;
+  font-size: 0.6875rem;
   padding: 4px 7px;
-  min-height: 28px;
+  min-height: 1.875rem;
 }
 td code {
-  font:
-    10px ui-monospace,
+  font: 0.6875rem ui-monospace,
     monospace;
   overflow-wrap: anywhere;
 }
@@ -727,7 +727,7 @@ progress {
 .progress-label {
   display: flex;
   justify-content: space-between;
-  font-size: 10px;
+  font-size: 0.6875rem;
   color: var(--muted);
   margin: 9px 0;
 }
@@ -811,7 +811,7 @@ body[data-layout="compact"] .sidebar {
 }
 body[data-layout="compact"] .brand {
   padding: 0;
-  font-size: 22px;
+  font-size: 1.5rem;
   gap: 6px;
 }
 body[data-layout="compact"] .brand img {
@@ -830,7 +830,7 @@ body[data-layout="compact"] nav {
 body[data-layout="compact"] nav button {
   min-height: 31px;
   padding: 5px 8px;
-  font-size: 11px;
+  font-size: 0.8125rem;
 }
 body[data-layout="compact"] nav button span {
   display: none;
@@ -852,7 +852,7 @@ body[data-layout="compact"] .page-heading {
   margin-bottom: 18px;
 }
 body[data-layout="compact"] h1 {
-  font-size: 24px;
+  font-size: 1.625rem;
 }
 @media (max-width: 1000px) {
   .metrics {

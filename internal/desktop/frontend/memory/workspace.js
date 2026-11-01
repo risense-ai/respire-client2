@@ -107,15 +107,13 @@ export function memoryWorkspace(root, ctx) {
     pages > 1
       ? `<nav class="pager" aria-label="分页"><button data-page-set="-1" ${page <= 1 ? "disabled" : ""}>上一页</button><span class="pager-state">第 ${page} / ${pages} 页 · 共 ${number(total)} 条</span><button data-page-set="1" ${page >= pages ? "disabled" : ""}>下一页</button></nav>`
       : "";
-  const checkbox = (row) =>
-    `<input type="checkbox" data-check="${h(row.id)}" ${checked.has(row.id) ? "checked" : ""} aria-label="选择 ${h(row.title)}">`;
   const memoryRow = ({ row, depth = 0, kids = 0, open = false }, folder) =>
-    `<div class="memory-row ${row.id === selected ? "selected" : ""}" data-id="${h(row.id)}" data-level="${Math.min(depth, 8)}" role="treeitem" aria-selected="${row.id === selected}" ${kids ? `aria-expanded="${Boolean(open)}"` : ""}>${checkbox(row)}<button class="tree-toggle" data-expand="${h(row.id)}" ${kids ? "" : "disabled"} aria-label="展开或折叠">${kids ? (open ? "▾" : "▸") : "·"}</button><button class="memory-title" data-select="${h(row.id)}" title="${h(row.title)}">${h(row.title || row.id.slice(0, 8))}</button></div>`;
+    `<div class="memory-row ${row.id === selected ? "active" : ""}${checked.has(row.id) ? " selected" : ""}" data-id="${h(row.id)}" data-level="${Math.min(depth, 8)}" role="treeitem" aria-selected="${checked.has(row.id) || row.id === selected}" ${kids ? `aria-expanded="${Boolean(open)}"` : ""}><button class="tree-toggle" data-expand="${h(row.id)}" ${kids ? "" : "disabled"} aria-label="展开或折叠">${kids ? (open ? "▾" : "▸") : "·"}</button><button class="memory-title" data-select="${h(row.id)}" title="${h(row.title)}">${h(row.title || row.id.slice(0, 8))}</button></div>`;
   const listRow = (row) =>
-    `<div class="memory-row list-row ${row.id === selected ? "selected" : ""}" data-id="${h(row.id)}" role="row">${checkbox(row)}<span class="memory-cell cell-kind"><span class="badge">${h(kindLabel(row))}</span></span><button class="memory-title cell-title" data-select="${h(row.id)}" title="${h(row.title)}">${h(row.title || row.id.slice(0, 8))}</button><span class="memory-cell cell-project">${h(row.project || "—")}</span><span class="memory-cell cell-updated">${h(whenText(row))}</span><span class="memory-cell cell-tags">${h(tagList(row).join(", ") || "—")}</span></div>`;
+    `<div class="memory-row list-row ${row.id === selected ? "active" : ""}${checked.has(row.id) ? " selected" : ""}" data-id="${h(row.id)}" role="row"><span class="memory-cell cell-kind"><span class="badge">${h(kindLabel(row))}</span></span><button class="memory-title cell-title" data-select="${h(row.id)}" title="${h(row.title)}">${h(row.title || row.id.slice(0, 8))}</button><span class="memory-cell cell-project">${h(row.project || "—")}</span><span class="memory-cell cell-updated">${h(whenText(row))}</span><span class="memory-cell cell-tags">${h(tagList(row).join(", ") || "—")}</span></div>`;
   const memoryCard = (row) => {
     const tags = tagList(row);
-    return `<div class="memory-card ${row.id === selected ? "active" : ""}" data-card="${h(row.id)}" data-select="${h(row.id)}" data-kind="${h(String(row.kind || "context").toLowerCase())}" tabindex="0" role="button" aria-selected="${row.id === selected}">${checkbox(row)}<span class="badge">${h(kindLabel(row))}</span><strong>${h(row.title || row.id.slice(0, 8))}</strong>${
+    return `<div class="memory-card ${row.id === selected ? "active" : ""}${checked.has(row.id) ? " selected" : ""}" data-id="${h(row.id)}" data-card="${h(row.id)}" data-select="${h(row.id)}" data-kind="${h(String(row.kind || "context").toLowerCase())}" tabindex="0" role="button" aria-selected="${row.id === selected || checked.has(row.id)}"><span class="badge">${h(kindLabel(row))}</span><strong>${h(row.title || row.id.slice(0, 8))}</strong>${
       row.content ? `<p>${h(String(row.content).replace(/\s+/g, " ").slice(0, 140))}</p>` : ""
     }<small><span>${h(row.project || "—")}</span><span>${h(whenText(row))}</span>${
       tags.length ? `<span class="hit-tags">${h(tags.join(", "))}</span>` : ""
@@ -153,7 +151,7 @@ export function memoryWorkspace(root, ctx) {
     if (mode === "list") {
       const values = searchRows ? filtered : filtered.filter(textMatch);
       const view = paged(values);
-      tree.innerHTML = `<div class="memory-list" role="table" aria-label="全部记忆"><div class="memory-row memory-row-head" role="row" aria-hidden="true"><span></span><span>类型</span><span>标题</span><span>项目</span><span>更新时间</span><span>标签</span></div>${view.slice.map(listRow).join("")}</div>${searchRows ? "" : pager(view)}`;
+      tree.innerHTML = `<div class="memory-list" role="table" aria-label="全部记忆"><div class="memory-row memory-row-head" role="row" aria-hidden="true"><span>类型</span><span>标题</span><span>项目</span><span>更新时间</span><span>标签</span></div>${view.slice.map(listRow).join("")}</div>${searchRows ? "" : pager(view)}`;
       if (!values.length)
         tree.innerHTML = '<div class="empty">暂无匹配记忆</div>';
       finish();
@@ -377,22 +375,75 @@ export function memoryWorkspace(root, ctx) {
       search();
     }
   });
-  root.addEventListener("change", (event) => {
-    if (event.target.dataset.check) {
-      const id = event.target.dataset.check;
-      if (event.target.checked) checked.add(id);
-      else checked.delete(id);
-      renderTree();
+  // Anchor for Shift range selection: last row chosen with a plain click.
+  let selectionAnchor = null;
+  // Select a whole row: plain click resets to just this row, Ctrl/Cmd toggles
+  // it in the multi-select set, Shift selects the inclusive visible range
+  // between the anchor and this row.
+  function selectRow(row, { ctrl = false, shift = false } = {}) {
+    const id = row?.dataset.id;
+    if (!id) return;
+    if (shift && selectionAnchor) {
+      const rows = all(".memory-row[data-id], .memory-card[data-id]", tree);
+      const from = rows.findIndex((n) => n.dataset.id === selectionAnchor);
+      const to = rows.findIndex((n) => n.dataset.id === id);
+      if (from >= 0 && to >= 0) {
+        if (!ctrl) checked.clear();
+        const [a, b] = from < to ? [from, to] : [to, from];
+        for (let i = a; i <= b; i++) checked.add(rows[i].dataset.id);
+        selectionAnchor = id;
+        renderTree();
+        return;
+      }
     }
-  });
+    if (ctrl) {
+      if (checked.has(id)) checked.delete(id);
+      else checked.add(id);
+    } else {
+      checked.clear();
+      checked.add(id);
+    }
+    selectionAnchor = id;
+    renderTree();
+  }
   root.addEventListener("click", async (event) => {
-    if (event.target.matches("[data-check]")) return; // change handler owns it
+    const button = event.target.closest("button");
     const card = event.target.closest("[data-card]");
     if (card) {
+      if (button) {
+        // Buttons inside the card (none today) keep dedicated handling.
+        choose(card.dataset.card);
+        return;
+      }
+      // Ctrl/Cmd or Shift on a card multi/range-selects; a plain card click
+      // still opens the memory in the reader.
+      if (event.ctrlKey || event.metaKey || event.shiftKey) {
+        selectRow(card, { ctrl: event.ctrlKey || event.metaKey, shift: event.shiftKey });
+        return;
+      }
+      selectRow(card, { ctrl: false, shift: false });
       choose(card.dataset.card);
       return;
     }
-    const button = event.target.closest("button");
+    const row = event.target.closest(".memory-row[data-id]");
+    if (row) {
+      if (button && button.classList.contains("memory-title")) {
+        if (event.ctrlKey || event.metaKey || event.shiftKey) {
+          selectRow(row, { ctrl: event.ctrlKey || event.metaKey, shift: event.shiftKey });
+          return;
+        }
+        // A plain title click selects the row and opens it in the reader.
+        selectRow(row, { ctrl: false, shift: false });
+        choose(row.dataset.id);
+        return;
+      }
+      if (!button) {
+        // Clicking anywhere else on the row selects the whole row.
+        selectRow(row, { ctrl: event.ctrlKey || event.metaKey, shift: event.shiftKey });
+        return;
+      }
+      // Other buttons (tree expand toggles) fall through to their handlers.
+    }
     if (!button) return;
     if (button.dataset.view) {
       mode = button.dataset.view;
