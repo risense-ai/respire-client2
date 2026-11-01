@@ -478,6 +478,26 @@ html[data-theme="dark"] .memory-card[data-kind="knowledge"] {
 .search-field button {
   font-size: 0.8125rem;
 }
+/* Collapsed filter bar: compact, quiet header that doesn't crowd the panel. */
+.memory-filters {
+  margin-bottom: 11px;
+}
+.memory-filters > summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 14px;
+  font-size: 0.8125rem;
+  color: var(--muted);
+  cursor: pointer;
+  list-style-position: inside;
+}
+.memory-filters > summary::marker {
+  color: var(--muted);
+}
+.memory-filters[open] > summary {
+  border-bottom: 1px solid var(--line);
+}
 .memory-caption {
   font-size: 0.6875rem;
   color: var(--muted);
