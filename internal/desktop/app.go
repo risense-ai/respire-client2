@@ -34,6 +34,7 @@ var lightIcon []byte
 type desktop struct {
 	app           *application.App
 	window        *application.WebviewWindow
+	panel         *application.WebviewWindow
 	m             *host.Manager
 	mu            sync.Mutex
 	updateMu      sync.Mutex
@@ -95,6 +96,15 @@ func Run(m *host.Manager, buildVersion string) {
 		background = application.NewRGB(36, 37, 31)
 	}
 	d.window = d.app.Window.NewWithOptions(application.WebviewWindowOptions{Name: "main", Title: "Respire", Width: 1180, Height: 800, MinWidth: 800, MinHeight: 600, URL: "/workspace.html", Hidden: hasArg("--tray"), BackgroundColour: background})
+	// Tray quick panel: a frameless popup anchored to the tray icon; it hides
+	// itself on focus loss so a tray click toggles it like a flyout.
+	d.panel = d.app.Window.NewWithOptions(application.WebviewWindowOptions{
+		Name: "quickpanel", Title: "Respire", Width: 360, Height: 540,
+		URL: "/quickpanel.html", Hidden: true, Frameless: true, AlwaysOnTop: true,
+		DisableResize: true, HideOnFocusLost: true, HideOnEscape: true,
+		Windows:          application.WindowsWindow{HiddenOnTaskbar: true},
+		BackgroundColour: background,
+	})
 	d.notifier = notifier
 	for name, action := range map[string]func(){
 		"CmdOrCtrl+Shift+R": func() { d.window.Show(); d.window.Focus() },
@@ -118,7 +128,7 @@ func Run(m *host.Manager, buildVersion string) {
 	tray := d.app.SystemTray.New()
 	d.tray = tray
 	tray.SetIcon(lightIcon)
-	tray.SetTooltip("Respire · Runtime 管理")
+	tray.SetTooltip("Respire · 点击查看状态")
 	menu := d.app.NewMenu()
 	menu.Add("打开 Respire").OnClick(func(*application.Context) { d.window.Show(); d.window.Focus() })
 	menu.Add("启动 Runtime").OnClick(func(*application.Context) { go d.task("启动 Runtime", m.Start) })
@@ -127,7 +137,10 @@ func Run(m *host.Manager, buildVersion string) {
 	menu.AddSeparator()
 	menu.Add("退出客户端（保留 Runtime）").OnClick(func(*application.Context) { d.app.Quit() })
 	tray.SetMenu(menu)
-	tray.OnClick(func() { d.window.Show(); d.window.Focus() })
+	// With an attached window and a menu, tray defaults apply: left click
+	// toggles the quick panel next to the icon, right click opens the menu.
+	tray.AttachWindow(d.panel)
+	tray.WindowOffset(8)
 	d.app.Event.OnApplicationEvent(events.Common.ApplicationStarted, func(*application.ApplicationEvent) { d.applyAppearance(); go d.background() })
 	d.app.Event.OnApplicationEvent(events.Common.ThemeChanged, func(*application.ApplicationEvent) { d.applyAppearance() })
 	if err = d.app.Run(); err != nil {

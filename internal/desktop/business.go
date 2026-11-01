@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"math"
 	"net/http"
 	"os"
 	"strings"
@@ -37,7 +38,7 @@ func (d *desktop) businessRoute(w http.ResponseWriter, r *http.Request) bool {
 		result = map[string]any{"version": metadata.Version, "channel": d.m.Preferences().RuntimeChannel}
 	case r.Method == "GET" && r.URL.Path == "/api/operation":
 		result, err = d.m.Operation(r.URL.Query().Get("id"))
-	case r.URL.Path == "/api/execute" || r.URL.Path == "/api/operation-recover" || r.URL.Path == "/api/operation-ack" || r.URL.Path == "/api/file-dialog" || r.URL.Path == "/api/open-dashboard" || r.URL.Path == "/api/cli-language" || r.URL.Path == "/api/plugin-install" || r.URL.Path == "/api/preferences-export" || r.URL.Path == "/api/preferences-import" || r.URL.Path == "/api/diagnostics-export":
+	case r.URL.Path == "/api/execute" || r.URL.Path == "/api/operation-recover" || r.URL.Path == "/api/operation-ack" || r.URL.Path == "/api/file-dialog" || r.URL.Path == "/api/open-dashboard" || r.URL.Path == "/api/open-main" || r.URL.Path == "/api/panel-size" || r.URL.Path == "/api/cli-language" || r.URL.Path == "/api/plugin-install" || r.URL.Path == "/api/preferences-export" || r.URL.Path == "/api/preferences-import" || r.URL.Path == "/api/diagnostics-export":
 		if r.Method != "POST" || r.Header.Get("X-Respire-Client") != "1" || r.Header.Get("Content-Type") != "application/json" {
 			w.WriteHeader(http.StatusForbidden)
 			err = errors.New("客户端请求被拒绝")
@@ -54,6 +55,7 @@ func (d *desktop) businessRoute(w http.ResponseWriter, r *http.Request) bool {
 			Target    string          `json:"target"`
 			Mirror    bool            `json:"mirror"`
 			Path      string          `json:"path"`
+			Height    float64         `json:"height"`
 		}
 		decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20))
 		decoder.DisallowUnknownFields()
@@ -78,6 +80,25 @@ func (d *desktop) businessRoute(w http.ResponseWriter, r *http.Request) bool {
 		case "/api/open-dashboard":
 			err = d.app.Browser.OpenURL("https://dash.rsrs.rs")
 			result = "已打开 dashboard"
+		case "/api/open-main":
+			if d.panel != nil {
+				d.panel.Hide()
+			}
+			d.window.Show()
+			d.window.Focus()
+			result = "已打开主窗口"
+		case "/api/panel-size":
+			height := int(math.Round(input.Height))
+			if height < 320 {
+				height = 320
+			}
+			if height > 1100 {
+				height = 1100
+			}
+			if d.panel != nil {
+				d.panel.SetSize(360, height)
+			}
+			result = height
 		case "/api/open-releases":
 			url := map[string]string{
 				"client":        "https://github.com/risense-ai/respire-client2/releases/latest",

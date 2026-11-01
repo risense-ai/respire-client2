@@ -8,7 +8,7 @@ See [platform support](docs/platforms.md) for architectures, native-library prer
 
 ## Current scope
 
-- Native tray, one application instance, close-to-tray, and launch at system login with `--tray`.
+- Native tray with a click-to-open quick panel (local/cloud memory counts, pending sync and index state, last sync success, account, server address, inference queue and model tasks), one application instance, close-to-tray, and launch at system login with `--tray`.
 - Sidebar layout or compact top navigation, plus Light / Dark / System themes, saved across restarts. The supplied light/dark artwork follows the theme in the UI, tray and native window.
 - Dashboard typography and paper/charcoal colors, with fonts embedded for offline use and their licenses included.
 - Runtime health, memory counts, synchronization, model tasks, inference queues and retrieval-index status over loopback HTTP RPC.

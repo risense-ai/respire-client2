@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <meta name="color-scheme" content="light dark" />
+    <title>Respire</title>
+    <link rel="stylesheet" href="fonts.css" />
+    <link rel="stylesheet" href="dashboard.css" />
+    <link rel="stylesheet" href="quickpanel.css" />
+    <script type="module" src="quickpanel.js"></script>
+  </head>
+  <body class="quickpanel">
+    <header class="qp-header">
+      <img id="brand-icon" src="brand/respire-light.svg" alt="" />
+      <div class="qp-title">
+        <strong>Respire</strong>
+        <small id="qp-connection"><span class="dot" id="qp-dot"></span><span id="qp-connection-label">正在连接 Runtime</span></small>
+      </div>
+      <button id="qp-refresh" title="刷新" aria-label="刷新">刷新</button>
+    </header>
+    <div id="notice" role="status" hidden></div>
+    <main id="qp-body" class="qp-body"><p class="qp-loading">正在读取本机状态</p></main>
+    <footer class="qp-footer">
+      <button id="qp-sync" data-command="sync">立即同步</button>
+      <button id="qp-open" class="primary">打开 Respire</button>
+    </footer>
+  </body>
+</html>

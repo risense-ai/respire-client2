@@ -657,6 +657,9 @@ export const ZH_TO_EN = [
   ["把日常，留在日历里。", "Keep daily activity on a calendar."],
   ["让记忆各归其位。", "Put every memory in its place."],
   ["你的记忆，清晰可见。", "Your memory, clearly visible."],
+  ["推理与索引", "Inference & index"],
+  ["打开 Respire", "Open Respire"],
+  ["快捷面板", "Quick panel"],
 ];
 
 export const EN_TO_ZH = new Map([
