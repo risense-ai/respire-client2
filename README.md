@@ -57,6 +57,7 @@ internal/
 build/winres.json                     EXE icon, version and Windows manifest
 scripts/build.ps1                     Windows x64/ARM64 build and checksums
 scripts/build.sh                      Native macOS/Linux build and packaging
+scripts/release-notes.sh              Tag release notes plus a copy-ready user announcement block
 .github/workflows/desktop.yml         Per-platform CI artifacts and tagged releases
 ```
 
@@ -163,6 +164,8 @@ Writes keep one request ID. A lost receipt triggers a lookup of that original re
 Branch and pull-request builds upload per-platform artifacts without publishing a release. A pushed `vX.Y.Z` tag runs the same matrix, combines all checksums and creates one GitHub release only after every required build succeeds. Tags such as `vX.Y.Z-dev.N` publish a prerelease for the Dev channel and are not selected by the stable updater. The release workflow uses the repository's scoped `GITHUB_TOKEN`; no account credentials belong in source.
 
 The first release must be explicitly published before public self-update can work. Building locally does not publish, push, install a login entry or replace a user's Runtime.
+
+Every tagged release generates `.release-notes.md` in two parts: the commit changelog and a fenced 更新说明 block written in user-facing Chinese (plain-text subjects, download link, per-category bullets). When announcing a release to users, copy that fenced block verbatim; do not paste raw commit subjects or links. Keep the user-facing wording in the block, not in commit messages.
 
 ## Diagnostics
 
