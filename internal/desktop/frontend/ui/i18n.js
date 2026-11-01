@@ -660,6 +660,23 @@ export const ZH_TO_EN = [
   ["推理与索引", "Inference & index"],
   ["打开 Respire", "Open Respire"],
   ["快捷面板", "Quick panel"],
+  ["运行状态", "Runtime status"],
+  ["推理工作进程", "Inference worker"],
+  ["执行中 / 等待", "Running / waiting"],
+  ["索引任务", "Index task"],
+  ["推理与索引详情", "Inference & index details"],
+  ["保存下载来源", "Save download source"],
+  ["下载并准备模型", "Download & prepare model"],
+  ["取消并重新准备", "Cancel & reprepare"],
+  ["取消当前任务", "Cancel current task"],
+  ["保存引擎", "Save engine"],
+  ["运行实际推理验证", "Run real inference check"],
+  ["安装 NPU 引擎", "Install NPU engine"],
+  ["打开 dashboard", "Open dashboard"],
+  ["目录筛选与排序（已载入记忆）", "Directory filter & sort (loaded memories)"],
+  ["BGE-M3 量化模型约 543 MiB。文件下载、校验和索引构建由 Runtime 执行。", "The quantized BGE-M3 model is about 543 MiB. Runtime downloads and verifies the files and builds the index."],
+  ["默认使用 CPU。切换失败会报告错误，不自动改用其他引擎。", "CPU is the default. A failed switch reports an error and does not fall back automatically."],
+  ["密码认证通过 CLI 宿主 RPC 执行，凭据不会进入进程命令行或客户端设置。需要 CLI 1.0.18 或支持账户 RPC 的兼容版本。", "Password sign-in runs through the CLI host RPC; credentials never enter process command lines or client settings. Requires CLI 1.0.18 or a compatible account-RPC version."],
 ];
 
 export const EN_TO_ZH = new Map([
@@ -698,7 +715,7 @@ export const EN_TO_ZH = new Map([
 
 const PHRASES = [
   [/(\d[\d,]*) 条记忆/g, "$1 memories", "$1 条记忆"],
-  [/总 (\d[\d,]*) 条，包含已删除记录/g, "Total $1 records, including deleted records", "总 $1 条，包含已删除记录"],
+  [/总(计)? (\d[\d,]*) 条，包含已删除记录/g, "Total $2 records, including deleted records", "总$1 $2 条，包含已删除记录"],
   [/(\d[\d,]*) 项冲突/g, "$1 conflicts", "$1 项冲突"],
   [/已载入 (.+?) \/ (.+?) 条 · 已选 (.+?) 条/g, "Loaded $1 / $2 · selected $3", "已载入 $1 / $2 条 · 已选 $3 条"],
   [/检索返回 (.+?) 条；搜索覆盖整库/g, "Retrieved $1; search covers all memories", "检索返回 $1 条；搜索覆盖整库"],

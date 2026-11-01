@@ -1,5 +1,7 @@
 # Respire Client 2
 
+English | [简体中文](README.zh-CN.md)
+
 A desktop client built with Wails v3 and Go for Windows, macOS and Linux. It replaces the desktop application in `risense-ai/respire-client`. The CLI, TUI, hosted dashboard and existing user data remain independent.
 
 Download the asset matching your OS and architecture from [Releases](https://github.com/risense-ai/respire-client2/releases). Keep the extracted application in a writable, permanent folder. Windows uses one EXE and requires Microsoft Edge WebView2. macOS uses a zipped `Respire.app`; Linux uses a tarball containing one executable and requires GTK 3, WebKitGTK 4.1 and X11 libraries. No Node.js, Go, npm or Rust installation is needed by the end user. The application downloads the CLI and its native libraries separately when available; it does not contain Core or model weights. If no client-managed CLI exists, it can recognize and start an external CLI at `<root>/bin/rsrs[.exe]`, including an npm installation.
@@ -25,6 +27,20 @@ See [platform support](docs/platforms.md) for architectures, native-library prer
 - Password/TOTP login, registration, key recovery and super-password reset through the versioned CLI host RPC; requires a compatible CLI package. See [transport and acceptance status](docs/cli-host-input.md).
 
 Version `v0.2.2` recognizes an existing external CLI at `<root>/bin/rsrs[.exe]`, reads and displays its version, and can start it without taking over npm ownership. The Updates page adds GitHub and China mirror links for manual desktop and CLI downloads. Desktop updates download automatically and restart after the download completes unless a business operation or task is running. New installations default to Stable for both CLI and client; existing installations keep their selected channels. To receive only stable releases, select Stable for both channels in Updates. [Releases](https://github.com/risense-ai/respire-client2/releases) lists available builds. See [verification](docs/verification.md) and [migration acceptance](docs/migration.md) for tested paths and release gates.
+
+## Screenshots
+
+| Overview | Memories |
+| --- | --- |
+| ![Overview](docs/screenshots/overview-en.png) | ![Memories](docs/screenshots/memories-en.png) |
+
+| Models & Index | Accounts & Spaces |
+| --- | --- |
+| ![Models & Index](docs/screenshots/models-en.png) | ![Accounts & Spaces](docs/screenshots/accounts-en.png) |
+
+Tray quick panel:
+
+![Tray quick panel](docs/screenshots/quickpanel-en.png)
 
 ## Repository structure
 
