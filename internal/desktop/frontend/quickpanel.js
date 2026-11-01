@@ -109,9 +109,16 @@ function fit() {
     footer = $(".qp-footer");
   const zoom =
     parseFloat(document.documentElement.style.zoom || "1") || 1;
+  // #qp-body sits on a 1fr grid track and stretches to the window height, so
+  // its scrollHeight reports the stale window size once the content shrinks
+  // and the panel would never shrink back. Measure the natural content
+  // height instead; the inline height is restored before anything paints.
+  main.style.height = "fit-content";
+  const natural = main.scrollHeight;
+  main.style.height = "";
   const height = Math.ceil(
     (header.offsetHeight +
-      main.scrollHeight +
+      natural +
       footer.offsetHeight +
       (notice.hidden ? 0 : notice.offsetHeight) +
       2) *
