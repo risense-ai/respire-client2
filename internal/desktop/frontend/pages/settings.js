@@ -272,7 +272,7 @@ export function updates(root, ctx) {
       ${panel(
         "CLI / Runtime",
         `<div class="panel-body setting-row"><div><strong>自动安装更新</strong><p>按检查频率自动安装客户端管理的 Runtime。</p></div><input type="checkbox" data-pref="runtimeAutoUpdate" aria-label="自动安装更新"></div>` +
-        `<div class="panel-body setting-row"><div><strong>自动重启 Runtime</strong><p>安装完成后优雅停止旧版并启动新版；关闭后新版本在下次启动时生效。</p></div><input type="checkbox" data-pref="runtimeAutoRestart" aria-label="自动重启 Runtime"></div>` +
+        `<div class="panel-body setting-row"><div><strong>自动重启 Runtime</strong><p>安装完成后自动重启；关闭时新版本下次启动生效。</p></div><input type="checkbox" data-pref="runtimeAutoRestart" aria-label="自动重启 Runtime"></div>` +
         `<div class="panel-body setting-row"><div><strong>检查频率</strong><p>自动检查更新的间隔。</p></div><select data-pref="runtimeUpdateInterval"><option value="5m">5 分钟</option><option value="30m">30 分钟</option><option value="1h">1 小时</option><option value="6h">6 小时</option><option value="24h">一天</option></select></div>` +
         channelRow("runtimeChannel") +
         pairs([

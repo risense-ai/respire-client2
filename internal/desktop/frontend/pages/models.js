@@ -51,18 +51,7 @@ export function models(root, ctx) {
         "自定义镜像源",
         "https://",
         { placeholder: "http/https 源站，仅主机名" },
-      )}</div></div><div class="actions"><button type="submit">保存下载来源</button><span class="hint" data-mirror-state></span></div></form><div class="scroll-table" data-variants><p class="hint">正在读取模型目录…</p></div><div class="actions" data-baseline></div><form data-engine class="stack"><div class="form-grid">${select(
-        "engine",
-        "推理引擎",
-        ctx.desktop?.platform?.startsWith("linux")
-          ? [["cpu", "CPU"]]
-          : [
-              ["cpu", "CPU"],
-              ["gpu", "GPU"],
-              ["npu", "NPU"],
-            ],
-        "cpu",
-      )}<label>权重文件<select name="variant" disabled><option>正在读取模型目录…</option></select></label></div><p class="hint">只能选择已下载的权重文件；CPU 默认 quantized，GPU/NPU 默认 fp16。应用引擎立即重载并验证，失败自动回退 CPU。</p><div class="actions"><button type="submit" class="primary">应用引擎（重载并验证）</button><button type="button" data-model="probe">运行实际推理验证</button><button type="button" data-model="providers">安装 NPU 引擎</button></div></form><div class="actions"><button data-model="cancel">取消当前任务</button><button data-model="uninstall" class="danger">卸载全部模型文件</button></div></div>`,
+      )}</div></div><div class="actions"><button type="submit">保存下载来源</button><span class="hint" data-mirror-state></span></div></form><div class="scroll-table" data-variants><p class="hint">正在读取模型目录…</p></div><div class="actions" data-baseline></div><p class="hint">已下载的权重可在操作列切换推理方式：应用立即重载 Runtime 模型并运行真实推理验证，失败自动回退 CPU。GPU 在 Linux 不可用，NPU 仅 Windows 支持。</p><div class="actions"><button type="button" data-model="probe">运行实际推理验证</button><button type="button" data-model="providers">安装 NPU 引擎</button><button data-model="cancel">取消当前任务</button><button data-model="uninstall" class="danger">卸载全部模型文件</button></div></div>`,
     ) +
     panel(
       "检索与后台索引",
@@ -92,46 +81,29 @@ export function models(root, ctx) {
       ? $("[name=mirror-custom]", root).value.trim()
       : value;
   }
-  function syncEngineForm(opActive) {
-    const form = $("[data-engine]", root);
-    if (!form || !inventory) return;
-    const variantSel = $("[name=variant]", form);
-    const wanted = variantSel.value || engineState.model;
-    variantSel.replaceChildren(
-      ...inventory.variants.map((variant) => {
-        const option = new Option(
-          `${variant.name} · ${bytes(variant.size)}${variant.installed ? "" : "（未下载）"}`,
+  // Engine availability mirrors the old form: GPU is off on Linux, NPU only
+  // on Windows; a running download or apply disables switching.
+  function engineEnabled(engine, opActive) {
+    if (opActive) return false;
+    if (engine === "cpu") return true;
+    if (engine === "gpu")
+      return !ctx.desktop?.platform?.startsWith("linux");
+    if (engine === "npu")
+      return ctx.desktop?.platform?.startsWith("windows");
+    return false;
+  }
+  function engineChips(variant, opActive) {
+    return ["cpu", "gpu", "npu"]
+      .map((engine) => {
+        const active =
+          engineState.engine === engine && engineState.model === variant.name;
+        return `<button class="engine-chip${active ? " active" : ""}" data-apply data-engine="${engine}" data-variant="${h(
           variant.name,
-          false,
-          variant.name === wanted,
-        );
-        option.disabled = !variant.installed;
-        return option;
-      }),
-    );
-    if (!variantSel.value || variantSel.selectedOptions[0]?.disabled) {
-      const first = inventory.variants.find((variant) => variant.installed);
-      variantSel.value = first ? first.name : "";
-    }
-    const anyInstalled = inventory.variants.some(
-      (variant) => variant.installed,
-    );
-    const engineSel = $("[name=engine]", form);
-    engineSel.disabled = !anyInstalled;
-    variantSel.disabled = !anyInstalled;
-    $("[type=submit]", form).disabled =
-      !anyInstalled || !variantSel.value || opActive;
-    $("[data-model=cancel]", root).disabled = !opActive || !ctx.status?.summary?.model_operation?.id;
-    $("[data-model=providers]", root).disabled =
-      !ctx.desktop?.platform?.startsWith("windows");
-    $("[name=engine] option[value=gpu]", form)?.toggleAttribute(
-      "disabled",
-      ctx.desktop?.platform?.startsWith("linux"),
-    );
-    $("[name=engine] option[value=npu]", form)?.toggleAttribute(
-      "disabled",
-      !ctx.desktop?.platform?.startsWith("windows"),
-    );
+        )}"${engineEnabled(engine, opActive) ? "" : " disabled"} title="${engine.toUpperCase()} · ${
+          variant.name
+        }">${engine.toUpperCase()}</button>`;
+      })
+      .join("");
   }
   function variantStatus(variant, op, downloading, task) {
     const busy = downloading === variant.name;
@@ -168,11 +140,22 @@ export function models(root, ctx) {
             : variant.name === "fp16"
               ? "GPU/NPU 默认"
               : "";
-        return `<tr><td><span class="variant-name"><strong>${h(variant.name)}</strong>${badge ? `<span class="hint">${badge}</span>` : ""}</span></td><td>${h(bytes(variant.size))}</td><td data-status="${h(variant.name)}">${variantStatus(variant, op, downloading, ctx.desktop?.task)}</td><td><code title="${h(variant.path)}">${h(variant.path)}</code></td><td><button data-model="download" data-variant="${h(variant.name)}"${downloading === variant.name ? " disabled" : ""}>${variant.installed ? "重新下载" : "下载"}</button></td></tr>`;
+        const activeHere = engineState.model === variant.name;
+        const ops = variant.installed
+          ? `<div class="variant-ops">${engineChips(variant, Boolean(op.active))}</div><button data-model="download" data-variant="${h(variant.name)}"${downloading === variant.name ? " disabled" : ""}>${activeHere ? "重新下载" : "下载"}</button>`
+          : `<button data-model="download" data-variant="${h(variant.name)}"${downloading === variant.name ? " disabled" : ""}>下载</button>`;
+        return `<tr><td><span class="variant-name"><strong>${h(variant.name)}</strong>${badge ? `<span class="hint">${badge}${variant.name === "fp16" ? '<span class="warn-tip" title="资源占用较大，谨慎选择">*</span>' : ""}</span>` : ""}</span></td><td>${h(bytes(variant.size))}</td><td data-status="${h(variant.name)}">${variantStatus(variant, op, downloading, ctx.desktop?.task)}</td><td><span class="path-cell"><code title="${h(variant.path)}">${h(variant.path)}</code><button class="link-btn" data-open-dir="${h(variant.path)}">打开</button></span></td><td>${ops}</td></tr>`;
       })
       .join("")}</tbody></table>`;
+    const cancelBtn = $("[data-model=cancel]", root);
+    if (cancelBtn)
+      cancelBtn.disabled =
+        !op.active || !ctx.status?.summary?.model_operation?.id;
+    const providersBtn = $("[data-model=providers]", root);
+    if (providersBtn)
+      providersBtn.disabled =
+        !ctx.desktop?.platform?.startsWith("windows");
     renderBaseline();
-    syncEngineForm(op.active);
   }
   function renderBaseline() {
     const area = $("[data-baseline]", root);
@@ -214,9 +197,17 @@ export function models(root, ctx) {
       if (button)
         button.disabled =
           downloading === variant.name || Boolean(op.active) || clientBusy;
+      for (const chip of document.querySelectorAll(
+        `[data-apply][data-variant="${CSS.escape(variant.name)}"]`,
+      )) {
+        const active =
+          engineState.engine === chip.dataset.engine &&
+          engineState.model === variant.name;
+        chip.classList.toggle("active", active);
+        chip.disabled = !engineEnabled(chip.dataset.engine, Boolean(op.active));
+      }
     }
     renderBaseline();
-    syncEngineForm(op.active);
   }
   function update() {
     const s = ctx.status?.summary || {},
@@ -300,7 +291,6 @@ export function models(root, ctx) {
               ? "fp16"
               : "quantized"),
         };
-        $("[data-engine] [name=engine]", root).value = engineState.engine;
       }
       if (values[2].status === "fulfilled") backend = summary(values[2].value);
       if (values[3].status === "fulfilled") inventory = values[3].value;
@@ -329,6 +319,38 @@ export function models(root, ctx) {
     }
   }
   root.addEventListener("click", (event) => {
+    const apply = event.target.closest("[data-apply]");
+    if (apply) {
+      action(apply, async () => {
+        const envelope = await execute("model_engine_apply", {
+          engine: apply.dataset.engine,
+          model: apply.dataset.variant,
+        });
+        const result = summary(envelope);
+        engineState = { engine: result.engine, model: result.model };
+        if (result.fallback)
+          notify(
+            `${apply.dataset.engine.toUpperCase()} 验证失败，已自动回退 CPU（${result.model}）；详情见应用结果。`,
+            true,
+          );
+        else
+          notify(
+            `已切换到 ${apply.dataset.engine.toUpperCase()} · ${result.model}，实际推理验证通过。`,
+          );
+        if (root.isConnected)
+          $("[data-result]", root).innerHTML = resultView("应用结果", envelope);
+        renderVariants();
+        await ctx.refresh();
+      });
+      return;
+    }
+    const reveal = event.target.closest("[data-open-dir]");
+    if (reveal) {
+      action(reveal, async () => {
+        notify(await api("open-model-dir", { path: reveal.dataset.openDir }));
+      });
+      return;
+    }
     const button = event.target.closest("[data-model]");
     if (!button) return;
     action(button, async () => {
@@ -419,32 +441,6 @@ export function models(root, ctx) {
   });
   $("[data-mirror] [name=mirror]", root).addEventListener("change", (event) => {
     $("[data-mirror-custom]", root).hidden = event.target.value !== "custom";
-  });
-  $("[data-engine]", root).addEventListener("submit", (event) => {
-    event.preventDefault();
-    action($("[type=submit]", event.target), async () => {
-      const data = new FormData(event.target);
-      const envelope = await execute("model_engine_apply", {
-        engine: data.get("engine"),
-        model: data.get("variant"),
-      });
-      const result = summary(envelope);
-      engineState = { engine: result.engine, model: result.model };
-      $("[data-engine] [name=engine]", root).value = result.engine;
-      if (result.fallback)
-        notify(
-          `所选引擎验证失败，已自动回退 CPU（${result.model}）；详情见应用结果。`,
-          true,
-        );
-      else
-        notify(
-          `已切换到 ${String(result.engine).toUpperCase()} · ${result.model}，实际推理验证通过。`,
-        );
-      if (root.isConnected)
-        $("[data-result]", root).innerHTML = resultView("应用结果", envelope);
-      renderVariants();
-      await ctx.refresh();
-    });
   });
   $("[data-recall]", root).addEventListener("submit", (event) => {
     event.preventDefault();

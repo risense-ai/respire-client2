@@ -1174,3 +1174,54 @@ body[data-layout="compact"] #layout-toggle .icon-compact {
 .upd-actions button {
   width: 100%;
 }
+/* model table: engine chips, path cell with reveal button */
+.variant-ops {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 4px;
+}
+.engine-chip {
+  min-height: 1.75rem;
+  padding: 0.1875rem 0.625rem;
+  font-size: 0.75rem;
+  letter-spacing: 0.02em;
+}
+.engine-chip.active {
+  background: var(--text);
+  color: var(--bg);
+  border-color: var(--text);
+}
+.engine-chip.active:hover {
+  background: var(--text);
+  color: var(--bg);
+}
+.path-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.path-cell code {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.link-btn {
+  border: 0;
+  background: none;
+  padding: 0;
+  min-height: 1.25rem;
+  color: var(--muted);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  justify-content: flex-start;
+  font-size: 0.8125rem;
+}
+.link-btn:hover {
+  color: var(--text);
+  background: none;
+}.variant-name .warn-tip {
+  color: var(--amber);
+  font-weight: 700;
+  cursor: help;
+}

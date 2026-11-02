@@ -8,6 +8,9 @@ import (
 	"math"
 	"net/http"
 	"os"
+	"os/exec"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
@@ -66,7 +69,7 @@ func (d *desktop) businessRoute(w http.ResponseWriter, r *http.Request) bool {
 		result = "下载已开始"
 	case r.Method == "GET" && r.URL.Path == "/api/operation":
 		result, err = d.m.Operation(r.URL.Query().Get("id"))
-	case r.URL.Path == "/api/execute" || r.URL.Path == "/api/operation-recover" || r.URL.Path == "/api/operation-ack" || r.URL.Path == "/api/file-dialog" || r.URL.Path == "/api/open-dashboard" || r.URL.Path == "/api/open-main" || r.URL.Path == "/api/panel-size" || r.URL.Path == "/api/cli-language" || r.URL.Path == "/api/plugin-install" || r.URL.Path == "/api/inject-set" || r.URL.Path == "/api/inject-mode" || r.URL.Path == "/api/preferences-export" || r.URL.Path == "/api/preferences-import" || r.URL.Path == "/api/diagnostics-export":
+	case r.URL.Path == "/api/execute" || r.URL.Path == "/api/operation-recover" || r.URL.Path == "/api/operation-ack" || r.URL.Path == "/api/file-dialog" || r.URL.Path == "/api/open-dashboard" || r.URL.Path == "/api/open-main" || r.URL.Path == "/api/panel-size" || r.URL.Path == "/api/cli-language" || r.URL.Path == "/api/plugin-install" || r.URL.Path == "/api/inject-set" || r.URL.Path == "/api/inject-mode" || r.URL.Path == "/api/preferences-export" || r.URL.Path == "/api/preferences-import" || r.URL.Path == "/api/diagnostics-export" || r.URL.Path == "/api/open-model-dir":
 		if r.Method != "POST" || r.Header.Get("X-Respire-Client") != "1" || r.Header.Get("Content-Type") != "application/json" {
 			w.WriteHeader(http.StatusForbidden)
 			err = errors.New("客户端请求被拒绝")
@@ -163,6 +166,32 @@ func (d *desktop) businessRoute(w http.ResponseWriter, r *http.Request) bool {
 			ctx, cancel := context.WithTimeout(r.Context(), 10*time.Minute)
 			defer cancel()
 			result, err = d.InstallPlugin(ctx, input.Target, input.Mirror)
+		case "/api/open-model-dir":
+			// Reveal a model file in the OS file manager; only paths inside the
+			// model directory are accepted.
+			dir := d.m.ModelDir()
+			abs, absErr := filepath.Abs(input.Path)
+			if absErr != nil {
+				err = absErr
+				break
+			}
+			rel, relErr := filepath.Rel(dir, abs)
+			if relErr != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+				err = errors.New("路径不在模型目录内")
+				break
+			}
+			var cmd *exec.Cmd
+			switch runtime.GOOS {
+			case "windows":
+				cmd = exec.Command("explorer", "/select,"+abs)
+			case "darwin":
+				cmd = exec.Command("open", "-R", abs)
+			default:
+				cmd = exec.Command("xdg-open", filepath.Dir(abs))
+			}
+			if err = cmd.Start(); err == nil {
+				result = "已打开文件位置"
+			}
 		case "/api/inject-set":
 			ctx, cancel := context.WithTimeout(r.Context(), 10*time.Minute)
 			defer cancel()
