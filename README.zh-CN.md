@@ -14,9 +14,29 @@
 | --- | --- |
 | ![概览](docs/screenshots/overview-zh.png) | ![记忆](docs/screenshots/memories-zh.png) |
 
-| 模型与索引 | 账户与空间 |
+| 记忆图谱 | 日记 |
 | --- | --- |
-| ![模型与索引](docs/screenshots/models-zh.png) | ![账户与空间](docs/screenshots/accounts-zh.png) |
+| ![记忆图谱](docs/screenshots/graph-zh.png) | ![日记](docs/screenshots/diary-zh.png) |
+
+| 整理 | 模型与索引 |
+| --- | --- |
+| ![整理](docs/screenshots/organize-zh.png) | ![模型与索引](docs/screenshots/models-zh.png) |
+
+| 账户与空间 | 配置Agent |
+| --- | --- |
+| ![账户与空间](docs/screenshots/accounts-zh.png) | ![配置Agent](docs/screenshots/injection-zh.png) |
+
+| 访问授权 | 设置 |
+| --- | --- |
+| ![访问授权](docs/screenshots/grants-zh.png) | ![设置](docs/screenshots/settings-zh.png) |
+
+| 更新 | 操作记录 |
+| --- | --- |
+| ![更新](docs/screenshots/updates-zh.png) | ![操作记录](docs/screenshots/operations-zh.png) |
+
+诊断：
+
+![诊断](docs/screenshots/diagnostics-zh.png)
 
 托盘快捷面板：
 
@@ -28,8 +48,10 @@
 - 侧栏布局或紧凑顶部导航，亮色 / 暗色 / 跟随系统主题并跨重启保存。随附的亮/暗图标会跟随界面、托盘与原生窗口的主题。
 - Dashboard 排版与纸白/炭黑配色，内置字体供离线使用并附带授权文件。
 - 通过本机回环 HTTP RPC 读取 Runtime 健康状态、记忆条数、同步、模型任务、推理队列与检索索引状态。
-- 记忆树形/列表视图、完整阅读、语义召回、新建/编辑、移动、合并、删除/恢复、因果链与子树分享。合并遵循 CLI 契约：存留子节点提升到存留祖先之下。
+- 无边框窗口与自绘窗口控制键（Windows/macOS/Linux 统一渲染）：顶栏拖拽移动、双击最大化、边缘 5px 热区拖拽调整大小；记忆工作区支持一键铺满窗口的专注模式，后台同步刷新无感更新详情区。
+- 记忆树形/列表/图谱视图、完整阅读、语义召回、新建/编辑、移动、合并、删除/恢复、因果链与子树分享。合并遵循 CLI 契约：存留子节点提升到存留祖先之下。
 - 日记日历与片段检索；整理建议、相似检查、结构审计、本地修复预览、经校验的移动方案与可选 AI 分类。
+- 内置嵌入模型目录：BGE-M3（默认）、BGE-base-zh-v1.5 与 BGE-M3-Distill-8L 的多线程下载、SHA-256 校验、档案注册与 CPU/GPU/NPU 推理切换；下载镜像可选官方源、国内镜像或自定义源。
 - 模型/索引准备、取消/重启、推理引擎与权重文件选择、提供方安装、召回服务配置，以及带九轮 Benchmark 的本地/高质量召回验证。
 - 账户、浏览器登录、离线初始化、空间、迁移、同步设置、注入目标、原生文件选择与导入/导出/备份。
 - 首次运行下载 Runtime，SHA-256 校验、有界解压、完整原生库校验、启动/停止与版本更新。
@@ -171,7 +193,7 @@ RPC 工作正在执行或排队时推迟自动切换；检查在下载后运行�
 
 两个通道选择与布局彼此独立，持久化在 `preferences.json`。切换通道只保存策略；不中断进行中的操作，也不自动降级已安装版本。若已安装的 Dev 版本高于 Stable，它会保留安装直到 Stable 追上。更改客户端通道前，先应用已下载的客户端更新。Runtime 任务执行期间禁用通道切换。新的原生/RPC 操作必须遵守这些规则。
 
-RPC 要求协议 `v = 1`。业务动作使用白名单化的 `cli.exec` 参数；模型/索引准备与恢复使用 Runtime 方法 `model.prepare`、`model.control`、`index.prepare` 与 `runtime.result`。不支持的命令与方法保持为可见错误。当前业务 UI 以 CLI `1.0.17-dev.14` 完成验证；不要假定稳定版 CLI 具备全部可选功能。
+RPC 要求协议 `v = 1`。业务动作使用白名单化的 `cli.exec` 参数；模型/索引准备与恢复使用 Runtime 方法 `model.prepare`、`model.control`、`index.prepare` 与 `runtime.result`。多模型切换使用 `model.catalog`、`model.configure`、`model.switch` 与 `model.progress`（需要 `1.0.20-dev.12` 或更新的 Runtime/CLI）。不支持的命令与方法保持为可见错误。当前业务 UI 以 CLI `1.0.17-dev.14` 起完成验证；不要假定稳定版 CLI 具备全部可选功能。
 
 写入只保留一个请求 ID。回执丢失会触发对原始请求的查询，绝不自动重放。完整写入回执在会话期间保留在内存中；重启后仅保留元数据。经验证的 CLI 在内存中保留最近 64 个已完成请求；被驱逐的回执或重启后的 Runtime 可能结果未知，这不能证明其写入未提交。结果未知的宿主动作必须在对应页面复核，因为 Runtime 无法恢复宿主进程的回执。配置错误与缺失模型文件会直接显示。
 

@@ -14,8 +14,10 @@ See [platform support](docs/platforms.md) for architectures, native-library prer
 - Sidebar layout or compact top navigation, plus Light / Dark / System themes, saved across restarts. The supplied light/dark artwork follows the theme in the UI, tray and native window.
 - Dashboard typography and paper/charcoal colors, with fonts embedded for offline use and their licenses included.
 - Runtime health, memory counts, synchronization, model tasks, inference queues and retrieval-index status over loopback HTTP RPC.
-- Memory tree/list, full reading, semantic recall, create/edit, move, merge, delete/restore, causal chains and subtree sharing. Merge follows the CLI contract: surviving children are promoted to surviving ancestors.
+- Frameless window with self-drawn window controls rendered identically on Windows/macOS/Linux: drag the topbar to move, double-click to maximize, 5px edge zones resize with directional cursors. The memory workspace has a one-click focus mode that fills the window, and background syncs refresh the reader without flicker.
+- Memory tree/list/graph, full reading, semantic recall, create/edit, move, merge, delete/restore, causal chains and subtree sharing. Merge follows the CLI contract: surviving children are promoted to surviving ancestors.
 - Diary calendar and fragment search; organization suggestions, similarity checks, audit, local repair preview, validated move plans and optional AI classification.
+- Built-in embedding model catalog: BGE-M3 (default), BGE-base-zh-v1.5 and BGE-M3-Distill-8L with multi-threaded downloads, SHA-256 verification, embedding-profile registration and CPU/GPU/NPU inference switching; mirrors cover the official source, China mirrors or a custom origin.
 - Model/index preparation, cancellation/restart, inference-engine and model-weight selection, provider installation, recall-service configuration and local/quality recall checks with a nine-round Benchmark.
 - Accounts, browser login, offline initialization, spaces, migration, synchronization settings, injection targets, native file selection and import/export/backup.
 - First-run Runtime download, SHA-256 validation, bounded archive extraction, complete native-library validation, start/stop and version updates.
@@ -34,9 +36,29 @@ Version `v0.2.2` recognizes an existing external CLI at `<root>/bin/rsrs[.exe]`,
 | --- | --- |
 | ![Overview](docs/screenshots/overview-en.png) | ![Memories](docs/screenshots/memories-en.png) |
 
-| Models & Index | Accounts & Spaces |
+| Memory graph | Diary |
 | --- | --- |
-| ![Models & Index](docs/screenshots/models-en.png) | ![Accounts & Spaces](docs/screenshots/accounts-en.png) |
+| ![Memory graph](docs/screenshots/graph-en.png) | ![Diary](docs/screenshots/diary-en.png) |
+
+| Organize | Models & Index |
+| --- | --- |
+| ![Organize](docs/screenshots/organize-en.png) | ![Models & Index](docs/screenshots/models-en.png) |
+
+| Accounts & Spaces | Configure Agents |
+| --- | --- |
+| ![Accounts & Spaces](docs/screenshots/accounts-en.png) | ![Configure Agents](docs/screenshots/injection-en.png) |
+
+| Access Grants | Settings |
+| --- | --- |
+| ![Access Grants](docs/screenshots/grants-en.png) | ![Settings](docs/screenshots/settings-en.png) |
+
+| Updates | Operations |
+| --- | --- |
+| ![Updates](docs/screenshots/updates-en.png) | ![Operations](docs/screenshots/operations-en.png) |
+
+Diagnostics:
+
+![Diagnostics](docs/screenshots/diagnostics-en.png)
 
 Tray quick panel:
 
@@ -171,7 +193,7 @@ An automatic switch is deferred while RPC work is executing or queued; the check
 
 The two channel selections and the layout are independent and persist in `preferences.json`. Switching channels saves the policy; it does not interrupt an ongoing operation or automatically downgrade an installed version. If the installed Dev version is ahead of Stable, it remains installed until Stable catches up. Apply an already downloaded client update before changing its channel. Runtime channel selection is disabled during a Runtime task. New native/RPC operations must preserve these rules.
 
-RPC requires protocol `v = 1`. Business actions use allowlisted `cli.exec` arguments; model/index preparation and recovery use the Runtime methods `model.prepare`, `model.control`, `index.prepare` and `runtime.result`. Unsupported commands and methods remain visible errors. The current business UI was exercised with CLI `1.0.17-dev.14`; do not assume the stable CLI has every optional feature.
+RPC requires protocol `v = 1`. Business actions use allowlisted `cli.exec` arguments; model/index preparation and recovery use the Runtime methods `model.prepare`, `model.control`, `index.prepare` and `runtime.result`. Multi-model switching uses `model.catalog`, `model.configure`, `model.switch` and `model.progress` (requires Runtime/CLI `1.0.20-dev.12` or newer). Unsupported commands and methods remain visible errors. The current business UI was exercised with CLI `1.0.17-dev.14` and later; do not assume the stable CLI has every optional feature.
 
 Writes keep one request ID. A lost receipt triggers a lookup of that original request, never an automatic replay. Full write receipts remain in memory during the session; after restart only metadata is retained. The verified CLI retains its last 64 completed requests in memory; an evicted receipt or a restarted Runtime can remain unknown, which is not proof that its write did not commit. Host actions with an unknown outcome must be checked on their corresponding page because Runtime cannot recover a host-process receipt. Configuration errors and missing model files are shown directly.
 
