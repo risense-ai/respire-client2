@@ -30,23 +30,66 @@ func variantFileName(name string) string {
 	return filepath.Join("onnx", "model_"+name+".onnx")
 }
 
-// modelDir resolves the runtime's default BGE-M3 directory
-// (default_user_model_dir: <RSRS_DATA_DIR>/models/bge-m3).
+// modelDir resolves the runtime's BGE-M3 directory the same way the CLI's
+// resolve_model_dir does: <main data dir>/models/bge-m3 first — the
+// RSRS_DATA_DIR root or ~/.rsrs, reported by health as installation_root —
+// then the legacy profile dirs (only for runtimes launched without
+// RSRS_DATA_DIR) and the packaged copy next to the runtime executable.
+// health.data_dir is the workspace profile (client.json data_dir) and must
+// not be used for model files.
 func (m *Manager) modelDir(ctx context.Context) (string, error) {
 	_, body, err := m.Health(ctx)
 	if err != nil {
 		return "", err
 	}
 	var health struct {
-		DataDir string `json:"data_dir"`
+		Exe              string `json:"exe"`
+		InstallationRoot string `json:"installation_root"`
 	}
 	if err = json.Unmarshal(body, &health); err != nil {
 		return "", err
 	}
-	if health.DataDir == "" {
-		return "", os.ErrInvalid
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
 	}
-	return filepath.Join(health.DataDir, "models", "bge-m3"), nil
+	if health.InstallationRoot == "" {
+		health.InstallationRoot = filepath.Join(home, ".rsrs")
+	}
+	// A managed runtime is launched with RSRS_DATA_DIR=installation_root, so
+	// the CLI skips the legacy dirs; external runtimes run without it.
+	return resolveModelDir(health.InstallationRoot, health.Exe, m.Owns(health.Exe), home), nil
+}
+
+// resolveModelDir mirrors crates/core-sdk business::resolve_model_dir.
+func resolveModelDir(installationRoot, exe string, managed bool, home string) string {
+	user := filepath.Join(installationRoot, "models", "bge-m3")
+	candidates := []string{user}
+	if !managed {
+		candidates = append(candidates,
+			filepath.Join(home, ".respire", "models", "bge-m3"),
+			filepath.Join(home, ".onememory", "models", "bge-m3"),
+		)
+	}
+	if exe != "" {
+		candidates = append(candidates, filepath.Join(filepath.Dir(exe), "models", "bge-m3"))
+	}
+	for _, candidate := range candidates {
+		if modelFilesPresent(candidate) {
+			return candidate
+		}
+	}
+	return user
+}
+
+// modelFilesPresent matches the CLI's baseline: tokenizer.json plus the
+// quantized onnx graph.
+func modelFilesPresent(dir string) bool {
+	if info, err := os.Stat(filepath.Join(dir, "tokenizer.json")); err != nil || info.IsDir() {
+		return false
+	}
+	info, err := os.Stat(filepath.Join(dir, variantFileName("quantized")))
+	return err == nil && !info.IsDir()
 }
 
 // installedVariants returns the variants whose onnx file exists with the exact

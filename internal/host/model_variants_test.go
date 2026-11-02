@@ -91,3 +91,51 @@ func TestEngineEnvelope(t *testing.T) {
 		t.Fatalf("unexpected fallback envelope: %s", raw)
 	}
 }
+
+// seedBaseline writes the CLI's baseline file set (tokenizer + quantized onnx)
+// so a candidate directory counts as a model home.
+func seedBaseline(t *testing.T, dir string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Join(dir, "onnx"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "tokenizer.json"), []byte("{}"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, variantFileName("quantized")), []byte("onnx"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestResolveModelDir(t *testing.T) {
+	home := t.TempDir()
+	root := t.TempDir()
+	exeDir := t.TempDir()
+	user := filepath.Join(root, "models", "bge-m3")
+
+	// Nothing installed anywhere: report the expected user location.
+	if got := resolveModelDir(root, filepath.Join(exeDir, "rsrs.exe"), false, home); got != user {
+		t.Fatalf("bare setup must fall back to the user dir, got %q", got)
+	}
+	// Files in the user dir win for both managed and external runtimes.
+	seedBaseline(t, user)
+	if got := resolveModelDir(root, filepath.Join(exeDir, "rsrs.exe"), true, home); got != user {
+		t.Fatalf("user dir must win, got %q", got)
+	}
+	// External runtime without RSRS_DATA_DIR: legacy profile dirs are scanned.
+	if err := os.RemoveAll(user); err != nil {
+		t.Fatal(err)
+	}
+	legacy := filepath.Join(home, ".respire", "models", "bge-m3")
+	seedBaseline(t, legacy)
+	if got := resolveModelDir(root, filepath.Join(exeDir, "rsrs.exe"), false, home); got != legacy {
+		t.Fatalf("external runtime must find the legacy dir, got %q", got)
+	}
+	// Managed runtime runs with RSRS_DATA_DIR set: legacy dirs are skipped and
+	// the packaged copy next to the executable is the remaining fallback.
+	packaged := filepath.Join(exeDir, "models", "bge-m3")
+	seedBaseline(t, packaged)
+	if got := resolveModelDir(root, filepath.Join(exeDir, "rsrs.exe"), true, home); got != packaged {
+		t.Fatalf("managed runtime must use the packaged dir, got %q", got)
+	}
+}
