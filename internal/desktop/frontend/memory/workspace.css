@@ -654,6 +654,27 @@ html[data-theme="dark"] .memory-card[data-kind="knowledge"] {
   user-select: text;
   min-height: 120px;
 }
+/* 【前因】【行为】【后果】 body records: labelled blocks split by hairlines. */
+.reading-content .content-block {
+  padding: 1.125rem 0;
+  border-top: 1px solid var(--line);
+}
+.reading-content .content-block:first-child {
+  border-top: 0;
+  padding-top: 0;
+}
+.reading-content .content-block:last-child {
+  padding-bottom: 0;
+}
+.reading-content .content-block h4 {
+  font: 700 0.75rem/1.2 var(--user-ui-font, var(--font-sans));
+  letter-spacing: 0.1em;
+  color: var(--muted);
+  margin: 0 0 0.5rem;
+}
+.reading-content .content-block p {
+  margin: 0;
+}
 .reader-relations {
   padding: 1rem 1.75rem 1.4375rem;
   display: grid;

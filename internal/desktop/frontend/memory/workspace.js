@@ -328,11 +328,34 @@ export function memoryWorkspace(root, ctx) {
       if (root.isConnected && succeeded) renderTree();
     }
   }
+  // Body records carry literal 【前因】【行为】【后果】 markers; render each
+  // marker section as its own labelled block instead of one dense paragraph.
+  const CONTENT_MARKERS = /(【触发】|【前因】|【行为】|【后果】)/g;
+  function readingBlocks(text) {
+    const source = String(text || "");
+    CONTENT_MARKERS.lastIndex = 0;
+    const marks = [...source.matchAll(CONTENT_MARKERS)];
+    if (!marks.length) return "";
+    const sections = [];
+    const intro = source.slice(0, marks[0].index).trim();
+    if (intro) sections.push({ label: "", body: intro });
+    marks.forEach(([marker], i) => {
+      const end = i + 1 < marks.length ? marks[i + 1].index : source.length;
+      const body = source.slice(marks[i].index + marker.length, end).trim();
+      if (body) sections.push({ label: marker.slice(1, -1), body });
+    });
+    return sections
+      .map(
+        (section) =>
+          `<section class="content-block${section.label ? "" : " plain"}">${section.label ? `<h4>${h(section.label)}</h4>` : ""}<p>${h(section.body)}</p></section>`,
+      )
+      .join("");
+  }
   function renderReader(memory) {
     const metadata = inventory(records),
       parent = metadata.byId.get(memory.parent_id),
       children = metadata.children.get(memory.id) || [];
-    reader.innerHTML = `<div class="reader-heading"><div class="reader-path">${h(parent?.title || memory.parent_id || "顶层记忆")}</div><h2>${h(memory.title)}</h2><div class="reader-meta"><span>${h(kindNames[String(memory.kind || "context").toLowerCase()] || memory.kind)}</span><span>${memory.importance === "trivial" ? "日记" : "主区"}</span><span>${h(date(memory.updated_at || memory.created_at))}</span></div><div class="actions"><button data-edit>编辑</button><button data-child>新建后续记忆</button><button data-move>移动</button><button data-copy>复制</button><button data-share>分享</button><button data-delete class="danger">删除</button></div></div><div class="reading-content">${h(memory.content || "")}</div><div class="reader-relations"><h3>上下游关系</h3>${parent ? `<button data-select="${h(parent.id)}">↑ ${h(parent.title)}</button>` : ""}${children.map((id) => `<button data-select="${h(id)}">↓ ${h(metadata.byId.get(id)?.title || id)}</button>`).join("")}${!parent && !children.length ? '<p class="hint">当前目录中没有上下游节点。</p>' : ""}<button data-chain>查看完整因果链</button></div><details class="technical"><summary>记忆信息</summary><pre>${h(raw({ ...memory, content: undefined }))}</pre></details>`;
+    reader.innerHTML = `<div class="reader-heading"><div class="reader-path">${h(parent?.title || memory.parent_id || "顶层记忆")}</div><h2>${h(memory.title)}</h2><div class="reader-meta"><span>${h(kindNames[String(memory.kind || "context").toLowerCase()] || memory.kind)}</span><span>${memory.importance === "trivial" ? "日记" : "主区"}</span><span>${h(date(memory.updated_at || memory.created_at))}</span></div><div class="actions"><button data-edit>编辑</button><button data-child>新建后续记忆</button><button data-move>移动</button><button data-copy>复制</button><button data-share>分享</button><button data-delete class="danger">删除</button></div></div><div class="reading-content">${readingBlocks(memory.content) || h(memory.content || "")}</div><div class="reader-relations"><h3>上下游关系</h3>${parent ? `<button data-select="${h(parent.id)}">↑ ${h(parent.title)}</button>` : ""}${children.map((id) => `<button data-select="${h(id)}">↓ ${h(metadata.byId.get(id)?.title || id)}</button>`).join("")}${!parent && !children.length ? '<p class="hint">当前目录中没有上下游节点。</p>' : ""}<button data-chain>查看完整因果链</button></div><details class="technical"><summary>记忆信息</summary><pre>${h(raw({ ...memory, content: undefined }))}</pre></details>`;
   }
   async function choose(id, scroll = true) {
     const byId = inventory(records).byId,
