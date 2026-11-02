@@ -55,6 +55,7 @@ type InstalledRuntime struct {
 
 type Manager struct {
 	Root        string
+	DataRoot    string
 	Endpoint    string
 	HTTPClient  *http.Client
 	localClient *http.Client
@@ -85,7 +86,7 @@ func New() (*Manager, error) {
 	if err != nil || n < 1 || n > 65535 {
 		return nil, errors.New("RSRS_RPC_PORT must be a valid TCP port")
 	}
-	m := &Manager{Root: filepath.Join(dataRoot, "client2"), Endpoint: "http://127.0.0.1:" + port,
+	m := &Manager{Root: filepath.Join(dataRoot, "client2"), DataRoot: dataRoot, Endpoint: "http://127.0.0.1:" + port,
 		localClient: &http.Client{Timeout: 30 * time.Second, Transport: &http.Transport{Proxy: nil}, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }},
 		prefs:       Preferences{AutoRuntime: true, AutoUpdate: true, RuntimeChannel: "stable", ClientChannel: "stable", Layout: "sidebar", Theme: "system", Language: ""}, task: TaskState{Stage: "就绪"},
 		HTTPClient: &http.Client{Timeout: 10 * time.Minute, CheckRedirect: func(req *http.Request, via []*http.Request) error {

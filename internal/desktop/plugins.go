@@ -124,29 +124,40 @@ func (d *desktop) PluginStatuses(ctx context.Context) []pluginStatus {
 }
 
 func (d *desktop) InstallPlugin(ctx context.Context, id string, mirror bool) (string, error) {
+	message, _, err := d.ensurePlugin(ctx, id, mirror)
+	return message, err
+}
+
+// ensurePlugin prepares the local plugin source and, when the host CLI allows
+// it, runs the install commands. soft reports "source ready, finish in the
+// host UI" as success instead of an error (interface-installed hosts).
+func (d *desktop) ensurePlugin(ctx context.Context, id string, mirror bool) (string, bool, error) {
 	spec, ok := pluginByID(id)
 	if !ok {
-		return "", fmt.Errorf("未知插件")
+		return "", false, fmt.Errorf("未知插件")
 	}
 	path := d.pluginPath(id)
 	if err := updatePluginSource(ctx, path, pluginRepo(id, mirror)); err != nil {
-		return "", err
+		return "", false, err
+	}
+	if !pluginAuto(id) {
+		return fmt.Sprintf("%s 需要在宿主插件界面安装；源目录已准备：%s", spec.name, path), true, nil
 	}
 	commands, err := d.pluginCommands(spec, path)
 	if err != nil {
-		return "", err
+		return "", false, err
 	}
 	var out pluginOutput
 	for _, command := range commands {
 		if err = runPluginCommand(ctx, command, &out); err != nil {
-			return "", err
+			return "", false, err
 		}
 	}
 	message := "插件安装请求已完成"
 	if text := strings.TrimSpace(out.String()); text != "" {
 		message += "：" + text
 	}
-	return message, nil
+	return message, false, nil
 }
 
 func (d *desktop) pluginCommands(spec pluginSpec, path string) ([]pluginCommand, error) {

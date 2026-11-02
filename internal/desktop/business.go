@@ -30,6 +30,10 @@ func (d *desktop) businessRoute(w http.ResponseWriter, r *http.Request) bool {
 		ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
 		defer cancel()
 		result = d.PluginStatuses(ctx)
+	case r.Method == "GET" && r.URL.Path == "/api/inject-targets":
+		ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+		defer cancel()
+		result, err = d.InjectTargetsView(ctx)
 	case r.Method == "GET" && r.URL.Path == "/api/runtime-release":
 		ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 		defer cancel()
@@ -42,7 +46,7 @@ func (d *desktop) businessRoute(w http.ResponseWriter, r *http.Request) bool {
 		result, err = d.m.ModelVariants(ctx)
 	case r.Method == "GET" && r.URL.Path == "/api/operation":
 		result, err = d.m.Operation(r.URL.Query().Get("id"))
-	case r.URL.Path == "/api/execute" || r.URL.Path == "/api/operation-recover" || r.URL.Path == "/api/operation-ack" || r.URL.Path == "/api/file-dialog" || r.URL.Path == "/api/open-dashboard" || r.URL.Path == "/api/open-main" || r.URL.Path == "/api/panel-size" || r.URL.Path == "/api/cli-language" || r.URL.Path == "/api/plugin-install" || r.URL.Path == "/api/preferences-export" || r.URL.Path == "/api/preferences-import" || r.URL.Path == "/api/diagnostics-export":
+	case r.URL.Path == "/api/execute" || r.URL.Path == "/api/operation-recover" || r.URL.Path == "/api/operation-ack" || r.URL.Path == "/api/file-dialog" || r.URL.Path == "/api/open-dashboard" || r.URL.Path == "/api/open-main" || r.URL.Path == "/api/panel-size" || r.URL.Path == "/api/cli-language" || r.URL.Path == "/api/plugin-install" || r.URL.Path == "/api/inject-set" || r.URL.Path == "/api/inject-mode" || r.URL.Path == "/api/preferences-export" || r.URL.Path == "/api/preferences-import" || r.URL.Path == "/api/diagnostics-export":
 		if r.Method != "POST" || r.Header.Get("X-Respire-Client") != "1" || r.Header.Get("Content-Type") != "application/json" {
 			w.WriteHeader(http.StatusForbidden)
 			err = errors.New("客户端请求被拒绝")
@@ -60,6 +64,9 @@ func (d *desktop) businessRoute(w http.ResponseWriter, r *http.Request) bool {
 			Mirror    bool            `json:"mirror"`
 			Path      string          `json:"path"`
 			Height    float64         `json:"height"`
+			Enable    bool            `json:"enable"`
+			Mode      string          `json:"mode"`
+			Scope     string          `json:"scope"`
 		}
 		decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20))
 		decoder.DisallowUnknownFields()
@@ -136,6 +143,14 @@ func (d *desktop) businessRoute(w http.ResponseWriter, r *http.Request) bool {
 			ctx, cancel := context.WithTimeout(r.Context(), 10*time.Minute)
 			defer cancel()
 			result, err = d.InstallPlugin(ctx, input.Target, input.Mirror)
+		case "/api/inject-set":
+			ctx, cancel := context.WithTimeout(r.Context(), 10*time.Minute)
+			defer cancel()
+			result, err = d.InjectSet(ctx, input.ID, input.Enable, input.Mirror, input.Scope)
+		case "/api/inject-mode":
+			ctx, cancel := context.WithTimeout(r.Context(), 2*time.Minute)
+			defer cancel()
+			result, err = d.InjectSetMode(ctx, input.Mode)
 		case "/api/preferences-export":
 			err = writeSettingsExport(input.Path, d.m.Preferences())
 			result = "设置已导出"

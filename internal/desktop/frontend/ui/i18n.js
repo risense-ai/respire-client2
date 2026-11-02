@@ -654,6 +654,11 @@ export const ZH_TO_EN = [
   ["当前 Runtime 不支持此目标的文件预览。确认后由 CLI 更新本机配置。", "The current Runtime does not support file preview for this target. CLI updates the local configuration after confirmation."],
   ["自动安装会先准备本机源目录，再调用宿主命令。界面安装型宿主会准备目录并显示下一步。", "Automatic install prepares the local source directory and calls the host command. Manual-install hosts prepare the directory and show next steps."],
   ["先设置提示词模式并分发到已检测的应用，再安装各宿主的 Respire 插件。", "Set prompt mode and distribute it to detected apps, then install Respire plugins for each host."],
+  ["按 Agent 逐一启用：开启后 Client2 直接写入提示词，并释放该宿主的 Respire 插件；关闭即移除注入内容。", "Enable agents one by one: turning one on has the client write its prompt directly and release the host's Respire plugin; turning it off removes the injected content."],
+  ["开启 = 写入提示词 + 安装 / 更新该宿主插件；关闭 = 移除注入内容（插件保留）。", "On = write the prompt and install / update the host plugin; off = remove the injected content (the plugin stays)."],
+  ["切换模式后，已启用 Agent 的提示词会按新模式重写；插件不受影响。", "After a mode switch, enabled agents' prompts are rewritten in the new edition; plugins are untouched."],
+  ["应用并更新已启用的提示词", "Apply and rewrite enabled prompts"],
+  ["详情", "Details"],
   ["把日常，留在日历里。", "Keep daily activity on a calendar."],
   ["让记忆各归其位。", "Put every memory in its place."],
   ["你的记忆，清晰可见。", "Your memory, clearly visible."],
@@ -714,6 +719,8 @@ export const EN_TO_ZH = new Map([
 ]);
 
 const PHRASES = [
+  [/显示其余 (\d+) 个/g, "Show $1 more", "显示其余 $1 个"],
+  [/收起 (\d+) 个/g, "Fold $1", "收起 $1 个"],
   [/(\d[\d,]*) 条记忆/g, "$1 memories", "$1 条记忆"],
   [/总(计)? (\d[\d,]*) 条，包含已删除记录/g, "Total $2 records, including deleted records", "总$1 $2 条，包含已删除记录"],
   [/(\d[\d,]*) 项冲突/g, "$1 conflicts", "$1 项冲突"],
