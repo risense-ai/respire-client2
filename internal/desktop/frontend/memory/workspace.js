@@ -443,6 +443,24 @@ export function memoryWorkspace(root, ctx) {
   });
   // Anchor for Shift range selection: last row chosen with a plain click.
   let selectionAnchor = null;
+  // Double-click folding: the first click re-renders the tree, so the
+  // browser never synthesizes a dblclick across the replaced node — detect
+  // two clicks on the same row ourselves instead.
+  let lastFoldClick = { id: "", at: 0 };
+  const isDoubleTap = (id) => {
+    const now = Date.now();
+    const double = lastFoldClick.id === id && now - lastFoldClick.at < 500;
+    lastFoldClick = { id, at: now };
+    return double;
+  };
+  const foldToggle = (row) => {
+    const toggle = row.querySelector("[data-expand]");
+    if (!toggle || toggle.disabled) return;
+    const id = toggle.dataset.expand;
+    if (expanded.has(id)) expanded.delete(id);
+    else expanded.add(id);
+    renderTree();
+  };
   // Select a whole row: plain click resets to just this row, Ctrl/Cmd toggles
   // it in the multi-select set, Shift selects the inclusive visible range
   // between the anchor and this row.
@@ -498,14 +516,21 @@ export function memoryWorkspace(root, ctx) {
           selectRow(row, { ctrl: event.ctrlKey || event.metaKey, shift: event.shiftKey });
           return;
         }
-        // A plain title click selects the row and opens it in the reader.
+        // A plain title click selects the row and opens it in the reader;
+        // a double-click on an expandable row folds it instead of reopening.
         selectRow(row, { ctrl: false, shift: false });
-        choose(row.dataset.id);
+        if (isDoubleTap(row.dataset.id)) {
+          foldToggle(row);
+          return;
+        }
+        if (event.detail <= 1) choose(row.dataset.id);
         return;
       }
       if (!button) {
-        // Clicking anywhere else on the row selects the whole row.
+        // Clicking anywhere else on the row selects the whole row, and a
+        // double-click folds or unfolds an expandable row.
         selectRow(row, { ctrl: event.ctrlKey || event.metaKey, shift: event.shiftKey });
+        if (isDoubleTap(row.dataset.id)) foldToggle(row);
         return;
       }
       // Other buttons (tree expand toggles) fall through to their handlers.
