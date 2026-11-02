@@ -45,6 +45,7 @@ export function memoryWorkspace(root, ctx) {
   let records = [],
     selected = ctx.params?.get("node") || "",
     selectedEntry = null,
+    renderedEntry = null,
     expanded = new Set(),
     filter = "",
     mode = "tree",
@@ -69,7 +70,7 @@ export function memoryWorkspace(root, ctx) {
     `<div class="memory-toolbar"><div class="search-field"><input data-search placeholder="筛选标题 / ID，或回车检索整库" aria-label="搜索记忆"><button data-search-submit>检索整库</button></div><div class="tabs view-tabs" role="tablist" aria-label="视图切换">${VIEW_MODES.map(
       ([value, label]) =>
         `<button role="tab" data-view="${value}" aria-selected="${value === mode}" class="${value === mode ? "active" : ""}">${label}</button>`,
-    ).join("")}</div><button data-merge disabled>合并所选</button><button data-more>载入更多</button></div><div class="memory-caption"><span data-count>正在读取…</span><button data-clear-search hidden>返回目录</button></div><div class="memory-layout"><div class="memory-index" role="tree" aria-label="记忆树"></div><div id="memory-resizer" aria-hidden="true"></div><article class="memory-reader"><div class="empty">选择左侧记忆，查看完整内容。</div></article></div>`;
+    ).join("")}</div><button data-merge disabled>合并所选</button><button data-more>载入更多</button></div><div class="memory-caption"><span data-count>正在读取…</span><button data-clear-search hidden>返回目录</button><button data-focus title="铺满窗口" aria-label="铺满窗口" aria-pressed="false"><svg class="icon-expand" width="14" height="14" viewBox="0 0 16 16" aria-hidden="true"><path d="M2 6V2h4M10 2h4v4M14 10v4h-4M6 14H2v-4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg><svg class="icon-restore" width="14" height="14" viewBox="0 0 16 16" aria-hidden="true"><path d="M6 2v4H2M14 6h-4V2M10 14v-4h4M2 10h4v4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></button></div><div class="memory-layout"><div class="memory-index" role="tree" aria-label="记忆树"></div><div id="memory-resizer" aria-hidden="true"></div><article class="memory-reader"><div class="empty">选择左侧记忆，查看完整内容。</div></article></div>`;
   const tree = $(".memory-index", root),
     reader = $(".memory-reader", root),
     count = $("[data-count]", root);
@@ -116,6 +117,18 @@ export function memoryWorkspace(root, ctx) {
   undoButton.dataset.undo = "";
   undoButton.title = "Ctrl / Command Z：撤销未发生冲突的操作";
   $(".memory-toolbar", root).append(undoButton);
+  // Focus mode: the tree and reader fill the window until toggled back.
+  function setFocusMode(on) {
+    root.classList.toggle("focus-mode", on);
+    document.body.classList.toggle("memory-focus", on);
+    const button = $("[data-focus]", root);
+    button.title = on ? "退出铺满窗口" : "铺满窗口";
+    button.setAttribute("aria-label", button.title);
+    button.setAttribute("aria-pressed", String(on));
+  }
+  $("[data-focus]", root).addEventListener("click", () =>
+    setFocusMode(root.classList.contains("focus-mode") ? false : true),
+  );
   const textMatch = (row) =>
     `${row.title || ""} ${row.id}`.toLowerCase().includes(filter.trim().toLowerCase());
   const paged = (values) => {
@@ -375,29 +388,37 @@ export function memoryWorkspace(root, ctx) {
     selectedEntry = null;
     const version = ++selectionVersion;
     renderTree();
-    reader.innerHTML = '<div class="empty">正在读取完整内容…</div>';
+    // A background refresh of the visible record must not flash a loading
+    // placeholder: keep the current content until the fresh copy differs.
+    const viewing = renderedEntry?.id === id;
+    const previous = renderedEntry;
+    if (!viewing)
+      reader.innerHTML = '<div class="empty">正在读取完整内容…</div>';
     try {
       const memory = entry(await execute("memory_show", { id }));
       if (!root.isConnected || version !== selectionVersion) return;
       selectedEntry = memory;
-      renderReader(memory);
-      const listed = byId.get(id);
-      $(".reader-meta", reader).insertAdjacentHTML(
-        "beforeend",
-        `<span>召回 ${h(listed?.recall_count ?? "—")} 次</span><span>${h(memory.project || "未指定项目")}</span><span>${h((memory.tags || []).join(" · "))}</span>`,
-      );
-      memoryTools(reader, memory, {
-        changed: async () => {
-          selected = "";
-          selectedEntry = null;
-          selectionVersion++;
-          reader.innerHTML =
-            '<div class="empty">操作已完成，请重新选择记忆。</div>';
-          await load();
-          await ctx.refresh();
-        },
-      });
-      if (scroll) reader.scrollTop = 0;
+      if (!(viewing && previous.updated_at === memory.updated_at)) {
+        renderReader(memory);
+        const listed = byId.get(id);
+        $(".reader-meta", reader).insertAdjacentHTML(
+          "beforeend",
+          `<span>召回 ${h(listed?.recall_count ?? "—")} 次</span><span>${h(memory.project || "未指定项目")}</span><span>${h((memory.tags || []).join(" · "))}</span>`,
+        );
+        memoryTools(reader, memory, {
+          changed: async () => {
+            selected = "";
+            selectedEntry = null;
+            selectionVersion++;
+            reader.innerHTML =
+              '<div class="empty">操作已完成，请重新选择记忆。</div>';
+            await load();
+            await ctx.refresh();
+          },
+        });
+        if (scroll) reader.scrollTop = 0;
+      }
+      renderedEntry = memory;
     } catch (error) {
       if (root.isConnected && version === selectionVersion)
         reader.innerHTML = `<div class="empty danger-text">${h(error.message)}</div>`;
@@ -723,6 +744,7 @@ export function memoryWorkspace(root, ctx) {
         const techButton = $("[data-tech-full]", technical);
         if (techButton) techButton.textContent = t("铺满窗口");
       }
+      if (root.classList.contains("focus-mode")) setFocusMode(false);
       return;
     }
     if (event.key !== "Enter" && event.key !== " ") return;
@@ -778,6 +800,7 @@ export function memoryWorkspace(root, ctx) {
     refresh: load,
     dispose: () => {
       dispose();
+      document.body.classList.remove("memory-focus");
       if (graphState.raf) cancelAnimationFrame(graphState.raf);
       graphState.raf = 0;
       graphState.dom = null;

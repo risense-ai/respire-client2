@@ -511,6 +511,37 @@ html[data-theme="dark"] .memory-card[data-kind="knowledge"] {
   padding: 2px 7px;
   font-size: 0.6875rem;
 }
+/* Focus mode: the tree and reader fill the whole window. */
+[data-focus] svg {
+  display: block;
+}
+[data-focus] .icon-restore {
+  display: none;
+}
+.focus-mode [data-focus] .icon-expand {
+  display: none;
+}
+.focus-mode [data-focus] .icon-restore {
+  display: block;
+}
+.focus-mode .page-heading,
+.focus-mode .memory-toolbar {
+  display: none;
+}
+.focus-mode .memory-caption {
+  margin-bottom: 8px;
+}
+body.memory-focus {
+  /* the shell grid keeps a sidebar track; collapse it while hidden */
+  grid-template-columns: minmax(0, 1fr);
+}
+body.memory-focus .topbar,
+body.memory-focus .sidebar {
+  display: none;
+}
+body.memory-focus #view {
+  padding: 0.625rem 0.75rem 0.75rem;
+}
 .memory-layout {
   display: grid;
   grid-template-columns: minmax(185px, 0.35fr) minmax(0, 1fr);
