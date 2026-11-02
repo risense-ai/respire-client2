@@ -301,6 +301,54 @@ main {
   min-height: 1.875rem;
   padding: 5px 9px;
 }
+/* Self-drawn topbar dropdowns: one look on every platform. */
+.dropdown {
+  position: relative;
+}
+.top-actions .dropdown-toggle {
+  font-size: 0.8125rem;
+  min-height: 1.875rem;
+  padding: 5px 9px;
+  gap: 7px;
+}
+.dropdown-toggle .chevron {
+  flex-shrink: 0;
+  opacity: 0.7;
+}
+.dropdown-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  min-width: 100%;
+  margin: 0;
+  padding: 4px;
+  list-style: none;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  box-shadow: 0 8px 24px rgb(0 0 0 / 0.14);
+  z-index: 90;
+}
+.dropdown-menu li {
+  padding: 6px 10px;
+  border-radius: 4px;
+  font-size: 0.8125rem;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.dropdown-menu li:hover,
+.dropdown-menu li:focus {
+  background: var(--hover);
+  outline: none;
+}
+.dropdown-menu li[aria-selected="true"] {
+  font-weight: 600;
+}
+/* Tighter label/value rows for the account identity panel. */
+.compact-facts .facts > div {
+  padding: 0.4375rem 1.125rem;
+  gap: 14px;
+}
 .view-scroll {
   min-height: 0;
   flex: 1;

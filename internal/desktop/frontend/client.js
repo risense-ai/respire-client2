@@ -41,6 +41,9 @@ const definitions = {
 let current,
   view,
   refreshing = false;
+// Set once the topbar dropdowns are wired; appearance() runs earlier, so it
+// only syncs the theme value when the dropdown already exists.
+let themeDropdown = null;
 const ctx = {
   desktop: null,
   status: null,
@@ -63,7 +66,7 @@ function appearance() {
   document.documentElement.dataset.theme = resolved;
   $("#brand-icon").src =
     resolved === "dark" ? "brand/respire.svg" : "brand/respire-light.svg";
-  $("#theme").value = theme;
+  themeDropdown?.set(theme);
   document.body.dataset.layout = prefs.layout || "sidebar";
   const toggle = $("#layout-toggle");
   const title = prefs.layout === "compact" ? "切换为侧栏布局" : "切换为紧凑布局";
@@ -82,7 +85,8 @@ async function savePreferences(patch) {
   const preferences = { ...ctx.desktop.preferences, ...patch };
   await api("preferences", preferences);
   ctx.desktop.preferences = preferences;
-  localStorage.setItem("respire-theme", preferences.theme);
+  if (preferences.theme)
+    localStorage.setItem("respire-theme", preferences.theme);
   appearance();
 }
 async function changeLanguage(value) {
@@ -202,14 +206,88 @@ async function refresh() {
 all("nav [data-page]").forEach((button) =>
   button.addEventListener("click", () => navigate(button.dataset.page)),
 );
-$("#theme").addEventListener("change", async (event) => {
+// Self-drawn dropdowns: native selects render with dated system chrome on
+// some platforms, so the topbar controls draw their own listbox.
+function initDropdown(dropdown, onChange) {
+  const toggle = $(".dropdown-toggle", dropdown),
+    menu = $(".dropdown-menu", dropdown),
+    value = $(".dropdown-value", dropdown);
+  const options = all("[role=option]", menu);
+  const close = () => {
+    menu.hidden = true;
+    toggle.setAttribute("aria-expanded", "false");
+  };
+  const pick = (option) => {
+    options.forEach((item) =>
+      item.setAttribute("aria-selected", String(item === option)),
+    );
+    value.textContent = option.textContent;
+    close();
+    onChange(option.dataset.value);
+  };
+  toggle.addEventListener("click", () => {
+    menu.hidden = !menu.hidden;
+    toggle.setAttribute("aria-expanded", String(!menu.hidden));
+    if (!menu.hidden)
+      (
+        options.find((item) => item.getAttribute("aria-selected") === "true") ||
+        options[0]
+      )?.focus();
+  });
+  menu.addEventListener("click", (event) => {
+    const option = event.target.closest("[role=option]");
+    if (option) pick(option);
+  });
+  menu.addEventListener("keydown", (event) => {
+    const index = options.indexOf(document.activeElement);
+    if (event.key === "Escape") {
+      close();
+      toggle.focus();
+    } else if (event.key === "ArrowDown") {
+      event.preventDefault();
+      options[Math.min(options.length - 1, index + 1)]?.focus();
+    } else if (event.key === "ArrowUp") {
+      event.preventDefault();
+      options[Math.max(0, index - 1)]?.focus();
+    } else if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      const option = document.activeElement?.closest("[role=option]");
+      if (option) pick(option);
+    }
+  });
+  document.addEventListener("click", (event) => {
+    if (!dropdown.contains(event.target)) close();
+  });
+  return {
+    set(next) {
+      const option = options.find((item) => item.dataset.value === next);
+      if (!option) return;
+      options.forEach((item) =>
+        item.setAttribute("aria-selected", String(item === option)),
+      );
+      value.textContent = option.textContent;
+    },
+  };
+}
+themeDropdown = initDropdown($("#theme-dropdown"), async (value) => {
   try {
-    await savePreferences({ theme: event.target.value });
+    await savePreferences({ theme: value });
   } catch (error) {
     notify(error.message, true);
     appearance();
   }
 });
+const languageDropdown = initDropdown(
+  $("#language-dropdown"),
+  async (value) => {
+    try {
+      await changeLanguage(value);
+    } catch (error) {
+      notify(error.message, true);
+      languageDropdown.set(currentLanguage());
+    }
+  },
+);
 $("#layout-toggle").addEventListener("click", async () => {
   try {
     await savePreferences({
@@ -246,14 +324,6 @@ $("#sidebar-resizer").addEventListener("mousedown", (event) => {
   };
   window.addEventListener("mousemove", move);
   window.addEventListener("mouseup", up);
-});
-$("#language").addEventListener("change", async (event) => {
-  try {
-    await changeLanguage(event.target.value);
-  } catch (error) {
-    notify(error.message, true);
-    event.target.value = currentLanguage();
-  }
 });
 all("#first-language [data-language]").forEach((button) =>
   button.addEventListener("click", async () => {
@@ -302,7 +372,7 @@ async function poll() {
       "";
     if (preferred) {
       setLanguage(preferred);
-      $("#language").value = preferred;
+      languageDropdown.set(preferred);
     } else {
       $("#first-language").hidden = false;
     }
