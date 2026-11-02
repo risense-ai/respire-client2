@@ -56,7 +56,12 @@ export function diary(root, ctx) {
       const entries = groups.get(day) || [];
       $("[data-entries]", root).className = "";
       $("[data-entries]", root).innerHTML = entries.length
-        ? `<ul class="clean">${entries.map((item) => `<li><button data-entry="${h(item.id)}">${h(item.title)}</button></li>`).join("")}</ul>`
+        ? `<ol class="timeline">${entries
+            .map((item) => {
+              const time = String(item.created_at || "").slice(11, 16);
+              return `<li class="timeline-item"><span class="timeline-dot" aria-hidden="true"></span><div class="timeline-body"><button data-entry="${h(item.id)}">${h(item.title)}</button>${time ? `<small>${time}</small>` : ""}</div></li>`;
+            })
+            .join("")}</ol>`
         : '<div class="empty">当天没有返回日记记录</div>';
     }
     $("[data-calendar]", root).onclick = (event) => {
