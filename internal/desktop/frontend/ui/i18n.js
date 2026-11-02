@@ -34,6 +34,8 @@ export const ZH_TO_EN = [
   ["行为", "Action"],
   ["后果", "Effect"],
   ["触发", "Trigger"],
+  ["铺满窗口", "Fill window"],
+  ["退出铺满窗口", "Exit full window"],
   ["正在同步", "Syncing"],
   ["同步完成", "Sync complete"],
   ["同步失败", "Sync failed"],
@@ -765,6 +767,10 @@ export const EN_TO_ZH = new Map([
   ["Connecting to Runtime", "正在连接 Runtime"],
   ["Reading local status", "正在读取本机状态"],
   ["Sync status pending", "同步状态待确认"],
+  ["Cause", "前因"],
+  ["Action", "行为"],
+  ["Result", "后果"],
+  ["Trigger", "触发"],
 ]);
 
 const PHRASES = [

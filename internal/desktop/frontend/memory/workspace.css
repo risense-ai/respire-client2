@@ -675,6 +675,28 @@ html[data-theme="dark"] .memory-card[data-kind="knowledge"] {
 .reading-content .content-block p {
   margin: 0;
 }
+/* 记忆信息 technical block: expandable to fill the whole window. */
+.technical .technical-bar {
+  display: flex;
+  justify-content: flex-end;
+  margin: 0 0 7px;
+}
+.technical .technical-bar button {
+  font-size: 0.6875rem;
+  min-height: 1.6875rem;
+  padding: 3px 8px;
+}
+.technical.fullscreen {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  background: var(--bg);
+  overflow: auto;
+  padding: 1.25rem 1.5rem;
+}
+.technical.fullscreen pre {
+  max-height: none;
+}
 .reader-relations {
   padding: 1rem 1.75rem 1.4375rem;
   display: grid;
