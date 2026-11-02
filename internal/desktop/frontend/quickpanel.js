@@ -32,7 +32,7 @@ const phases = {
 };
 const phase = (value) => phases[value] || value || "—";
 
-const state = { desktop: null, status: null, statusError: "", syncing: false };
+const state = { desktop: null, status: null, syncing: false };
 
 const systemTheme = matchMedia("(prefers-color-scheme: dark)");
 function appearance() {
@@ -77,7 +77,7 @@ function render() {
         ],
         ["账户", session.user || "本机离线"],
         ["服务地址", s.server_addr],
-      ]) + (sync.error ? `<div class="panel-body form-error">${h(sync.error)}</div>` : ""),
+      ]),
     ) +
     panel(
       "推理与索引",
@@ -93,10 +93,7 @@ function render() {
         (op.active
           ? `<div class="panel-body">${`<div class="progress-label"><span>${h(op.item || op.phase)}</span><span>${h(bytes(op.done))} / ${h(bytes(op.total))}</span></div><progress ${op.total ? `value="${h(op.done)}" max="${h(op.total)}"` : ""}></progress>`}</div>`
           : ""),
-    ) +
-    (state.statusError
-      ? `<p class="form-error qp-error" title="状态读取失败：${h(state.statusError)}">状态读取失败</p>`
-      : "");
+    );
   $("#qp-sync").disabled = state.syncing || !connected;
   $("#qp-sync").textContent = state.syncing ? "同步中…" : "立即同步";
   applyTranslations();
@@ -133,20 +130,9 @@ async function refresh() {
   try {
     state.desktop = await api("state");
     appearance();
-    if (state.desktop.connected) {
-      try {
-        state.status = await api("runtime-status");
-        state.statusError = "";
-      } catch (error) {
-        state.status = null;
-        state.statusError = error.message;
-      }
-    } else {
-      state.status = null;
-      state.statusError = state.desktop.connectionError || "Runtime 未连接";
-    }
-  } catch (error) {
-    state.statusError = error.message;
+    state.status = state.desktop.connected ? await api("runtime-status") : null;
+  } catch {
+    // a failed poll keeps the last rendered values; the next poll corrects them
   }
   render();
 }
