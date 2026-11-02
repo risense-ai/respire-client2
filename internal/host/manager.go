@@ -1,6 +1,7 @@
 package host
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -124,6 +125,8 @@ type Manager struct {
 	mu              sync.Mutex
 	prefs           Preferences
 	task            TaskState
+	taskCancel      context.CancelFunc
+	taskPause       bool
 	jobs            map[string]*Operation
 }
 
@@ -253,6 +256,59 @@ func (m *Manager) RunTask(stage string, action func() error) error {
 		m.task.Stage = "完成"
 	}
 	return err
+}
+
+// RunTaskCancellable runs action with a cancellable context so a download
+// can be paused (canceled while keeping partial chunks) or aborted.
+func (m *Manager) RunTaskCancellable(stage string, action func(ctx context.Context) error) {
+	m.mu.Lock()
+	if m.task.Busy {
+		m.mu.Unlock()
+		m.progress(stage, 0, 0)
+		m.mu.Lock()
+		m.task.Stage = "已有操作正在执行"
+		m.task.Error = "请等待当前任务完成或取消后再试"
+		m.mu.Unlock()
+		return
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	m.taskCancel = cancel
+	m.taskPause = false
+	m.task = TaskState{Busy: true, Stage: stage}
+	m.mu.Unlock()
+	err := action(ctx)
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.taskCancel = nil
+	m.task.Busy = false
+	paused := m.taskPause && errors.Is(err, context.Canceled)
+	m.taskPause = false
+	switch {
+	case err == nil:
+		m.task.Stage = "完成"
+		m.task.Error = ""
+	case paused:
+		m.task.Stage = "已暂停"
+		m.task.Error = ""
+	case errors.Is(err, context.Canceled):
+		m.task.Stage = "已取消"
+		m.task.Error = ""
+	default:
+		m.task.Stage = "操作失败"
+		m.task.Error = err.Error()
+	}
+}
+
+// CancelTask aborts the running task; pause keeps partial chunks so the
+// next run resumes from where it stopped.
+func (m *Manager) CancelTask(pause bool) {
+	m.mu.Lock()
+	m.taskPause = pause
+	cancel := m.taskCancel
+	m.mu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
 }
 
 func (m *Manager) TaskSnapshot() TaskState { m.mu.Lock(); defer m.mu.Unlock(); return m.task }

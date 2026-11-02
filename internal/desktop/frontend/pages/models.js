@@ -477,6 +477,143 @@ export function models(root, ctx) {
       }
     }
   }
+  // Download progress modal: live bytes, pause / resume / cancel, result.
+  function openDownloadModal(model, variant, label) {
+    const element = document.createElement("dialog");
+    element.className = "dialog";
+    const subject = variant === "baseline" ? "基础文件（quantized + 分词器）" : variant;
+    element.innerHTML = `<form method="dialog"><div class="dialog-heading"><h2>下载权重文件</h2><button type="button" class="icon-button" data-close aria-label="关闭">×</button></div><div class="dialog-body"><p class="hint">${h(label)} · ${h(subject)}</p><div class="progress-label"><span data-dl-stage>正在连接下载源…</span><span data-dl-bytes></span></div><progress data-dl-bar style="width:100%"></progress><p class="form-error" role="alert" hidden data-dl-error></p></div><footer><button type="button" data-dl="pause" hidden>暂停</button><button type="button" data-dl="resume" class="primary" hidden>继续下载</button><button type="button" data-dl="cancel" hidden>取消下载</button><button type="button" data-dl="retry" class="primary" hidden>重新下载</button><button type="button" data-dl="dismiss" class="primary" hidden>关闭</button></footer></form>`;
+    document.body.append(element);
+    element.showModal();
+    const stageNode = $("[data-dl-stage]", element),
+      bytesNode = $("[data-dl-bytes]", element),
+      bar = $("[data-dl-bar]", element),
+      errorNode = $("[data-dl-error]", element);
+    const buttons = {
+      pause: $('[data-dl="pause"]', element),
+      resume: $('[data-dl="resume"]', element),
+      cancel: $('[data-dl="cancel"]', element),
+      retry: $('[data-dl="retry"]', element),
+      dismiss: $('[data-dl="dismiss"]', element),
+    };
+    function setMode(mode) {
+      for (const [name, button] of Object.entries(buttons))
+        button.hidden = true;
+      if (mode === "downloading") buttons.pause.hidden = false, buttons.cancel.hidden = false;
+      else if (mode === "paused") buttons.resume.hidden = false, buttons.cancel.hidden = false;
+      else if (mode === "done") buttons.dismiss.hidden = false;
+      else if (mode === "failed") buttons.retry.hidden = false, buttons.dismiss.hidden = false;
+      else if (mode === "cancelled") buttons.retry.hidden = false, buttons.dismiss.hidden = false;
+    }
+    let timer = null;
+    let startPromise = Promise.resolve();
+    function start() {
+      errorNode.hidden = true;
+      setMode("downloading");
+      startPromise = api("model-download", {
+        model,
+        variant,
+        ...(currentMirror() && currentMirror() !== "auto"
+          ? { mirror: currentMirror() }
+          : {}),
+      }).catch((error) => {
+        // The bridge rejects with 409 when another task is running.
+        stageNode.textContent = "无法开始下载";
+        errorNode.textContent = error.message;
+        errorNode.hidden = false;
+        setMode("failed");
+        throw error;
+      });
+      return startPromise;
+    }
+    function applyTask(task) {
+      stageNode.textContent = task.stage || "";
+      bytesNode.textContent = task.total
+        ? `${bytes(task.done)} / ${bytes(task.total)}`
+        : "";
+      if (task.total) {
+        bar.value = task.done;
+        bar.max = task.total;
+      }
+    }
+    async function poll() {
+      try {
+        const state = await api("state");
+        const task = state.task || {};
+        applyTask(task);
+        if (task.busy) return;
+        // The download ended: success, paused, cancelled or failed.
+        clearInterval(timer);
+        timer = null;
+        if (task.stage === "已暂停") {
+          setMode("paused");
+          stageNode.textContent = "已暂停 · 已下载部分保留，可继续";
+        } else if (task.stage === "完成") {
+          setMode("done");
+          stageNode.textContent = "下载完成，校验通过";
+          bar.value = bar.max = task.total || 1;
+          load();
+        } else if (task.stage === "已取消") {
+          setMode("cancelled");
+          stageNode.textContent = "已取消";
+        } else {
+          setMode("failed");
+          stageNode.textContent = "下载失败";
+          errorNode.textContent = task.error || "下载失败，请重试";
+          errorNode.hidden = false;
+        }
+      } catch {
+        // transient state poll failure: keep the modal as-is
+      }
+    }
+    element.addEventListener("click", (event) => {
+      const button = event.target.closest("[data-dl]");
+      if (!button || button.hidden) return;
+      const act = button.dataset.dl;
+      if (act === "pause")
+        action(button, async () => {
+          await api("model-download-cancel", { pause: true });
+        });
+      else if (act === "resume") {
+        setMode("downloading");
+        action(button, async () => {
+          await start();
+          if (!timer) timer = setInterval(poll, 700);
+        });
+      } else if (act === "cancel")
+        action(button, async () => {
+          await api("model-download-cancel", { pause: false });
+          element.close();
+        });
+      else if (act === "retry") {
+        setMode("downloading");
+        action(button, async () => {
+          await start();
+          if (!timer) timer = setInterval(poll, 700);
+        });
+      } else if (act === "dismiss") element.close();
+    });
+    element.addEventListener(
+      "close",
+      () => {
+        if (timer) {
+          clearInterval(timer);
+          timer = null;
+        }
+        // Closing the modal does not stop the download; the table status
+        // cell keeps showing its progress until it finishes.
+        load();
+      },
+      { once: true },
+    );
+    setMode("downloading");
+    start()
+      .then(() => {
+        timer = setInterval(poll, 700);
+        poll();
+      })
+      .catch(() => {});
+  }
   root.addEventListener("click", (event) => {
     const apply = event.target.closest("[data-apply]");
     if (apply) {
@@ -546,12 +683,8 @@ export function models(root, ctx) {
           ))
         )
           return;
-        await api("model-download", {
-          variant: "baseline",
-          ...(mirror && mirror !== "auto" ? { mirror } : {}),
-        });
         sawMissingBaseline = true;
-        notify("下载已开始，完成后自动构建索引");
+        openDownloadModal(modelID, "baseline", "基础文件（quantized + 分词器）");
         await ctx.refresh();
       } else if (operation === "download") {
         const variant = button.dataset.variant;
@@ -568,12 +701,7 @@ export function models(root, ctx) {
           ))
         )
           return;
-        await api("model-download", {
-          model: modelID,
-          variant,
-          ...(mirror && mirror !== "auto" ? { mirror } : {}),
-        });
-        notify("下载已开始，进度显示在状态列");
+        openDownloadModal(modelID, variant, label);
         await ctx.refresh();
       } else if (operation === "cancel") {
         const id = ctx.status?.summary?.model_operation?.id;

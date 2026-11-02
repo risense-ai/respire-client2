@@ -112,14 +112,32 @@ func (d *desktop) businessRoute(w http.ResponseWriter, r *http.Request) bool {
 		if body.Model == "" {
 			body.Model = "m3"
 		}
+		if d.m.TaskSnapshot().Busy {
+			w.WriteHeader(http.StatusConflict)
+			err = errors.New("已有下载任务正在执行")
+			break
+		}
 		model := body.Model
 		variant := body.Variant
-		go d.task("下载模型 "+variant, func() error {
-			ctx, cancel := context.WithTimeout(context.Background(), 60*time.Minute)
+		mirror := body.Mirror
+		d.m.RunTaskCancellable("下载模型 "+variant, func(ctx context.Context) error {
+			ctx, cancel := context.WithTimeout(ctx, 60*time.Minute)
 			defer cancel()
-			return d.m.DownloadModel(ctx, model, variant, body.Mirror)
+			return d.m.DownloadModel(ctx, model, variant, mirror)
 		})
 		result = "下载已开始"
+	case r.URL.Path == "/api/model-download-cancel":
+		if r.Method != "POST" || r.Header.Get("X-Respire-Client") != "1" {
+			w.WriteHeader(http.StatusForbidden)
+			err = errors.New("客户端请求被拒绝")
+			break
+		}
+		var body struct {
+			Pause bool `json:"pause"`
+		}
+		_ = json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&body)
+		d.m.CancelTask(body.Pause)
+		result = "已停止下载"
 	case r.Method == "GET" && r.URL.Path == "/api/operation":
 		result, err = d.m.Operation(r.URL.Query().Get("id"))
 	case r.URL.Path == "/api/execute" || r.URL.Path == "/api/operation-recover" || r.URL.Path == "/api/operation-ack" || r.URL.Path == "/api/file-dialog" || r.URL.Path == "/api/open-dashboard" || r.URL.Path == "/api/open-main" || r.URL.Path == "/api/panel-size" || r.URL.Path == "/api/cli-language" || r.URL.Path == "/api/plugin-install" || r.URL.Path == "/api/inject-set" || r.URL.Path == "/api/inject-mode" || r.URL.Path == "/api/preferences-export" || r.URL.Path == "/api/preferences-import" || r.URL.Path == "/api/diagnostics-export" || r.URL.Path == "/api/open-model-dir" || r.URL.Path == "/api/window-minimise" || r.URL.Path == "/api/window-toggle-maximise" || r.URL.Path == "/api/window-close":
