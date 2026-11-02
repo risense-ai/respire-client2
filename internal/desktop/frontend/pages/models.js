@@ -184,7 +184,9 @@ export function models(root, ctx) {
             ? "CPU 默认"
             : variant.name === "fp16"
               ? "GPU/NPU 默认"
-              : "";
+              : variant.name === "fp32"
+                ? "完整精度"
+                : "";
         const activeHere = engineState.model === variant.name;
         const ops = variant.installed
           ? `<div class="variant-ops">${engineChips(variant, Boolean(op.active) || switchInFlight)}</div><button data-model="download" data-variant="${h(variant.name)}"${downloading === variant.name ? " disabled" : ""}>${activeHere ? "重新下载" : "下载"}</button>`

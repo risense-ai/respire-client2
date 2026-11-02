@@ -31,6 +31,9 @@ type modelDefinition struct {
 	Variants []modelVariantFile
 	// Hashes keyed by variant name.
 	Hashes map[string]string
+	// Rel overrides the default onnx/model_<name>.onnx layout per variant
+	// (fp32 ships as onnx/model.onnx in some repositories).
+	Rel map[string]string
 	// Legacy models use the CLI variant table (model.apply-engine) and the
 	// bge-m3 directory resolution; profile models use the profile registry.
 	Legacy bool
@@ -58,7 +61,9 @@ var modelCatalog = []modelDefinition{
 		Dimensions: 768, MaxTokens: 512,
 		QueryPrefix: "为这个句子生成表示以用于检索相关文章：",
 		Tokenizer:   modelFileSpec{rel: "tokenizer.json", sha256: "7dfbf1966ebf99d471c3796e9b457329d2b2182b817e144f1e904b957745c839", size: 439124},
+		Rel:         map[string]string{"fp32": "onnx/model.onnx"},
 		Variants: []modelVariantFile{
+			{"fp32", 406953171},
 			{"quantized", 102868746},
 			{"fp16", 203679052},
 			{"int8", 102407793},
@@ -67,6 +72,7 @@ var modelCatalog = []modelDefinition{
 			{"q4f16", 81549931},
 		},
 		Hashes: map[string]string{
+			"fp32":      "5e5619f7cca7380b824d329c157dba10bee7cc00d0c139e82fdb7906051b8e4f",
 			"quantized": "b665f3bba56c3119bc76ba131ebcc544d720a7408cb11581bdf354aaa0198d43",
 			"fp16":      "9ed3f10ed06aafe0320567019d18fdec255339350525a33ae18f85f4def288f0",
 			"int8":      "c11bdcfad37eaf53e43362885cbe5fad1b44d5b704da753a04f8c0b2f7768064",
@@ -80,7 +86,9 @@ var modelCatalog = []modelDefinition{
 		Repo: "xnohat/bge-m3-distill-8l", Revision: "bbf72a07734915b3fa813cadc46f11414d2b4c25",
 		Dimensions: 1024, MaxTokens: 512,
 		Tokenizer: modelFileSpec{rel: "tokenizer.json", sha256: "e4f7e21bec3fb0044ca0bb2d50eb5d4d8c596273c422baef84466d2c73748b9c", size: 17083053},
+		Rel:       map[string]string{"fp32": "onnx/model.onnx"},
 		Variants: []modelVariantFile{
+			{"fp32", 1460960727},
 			{"quantized", 366226833},
 			{"fp16", 730630097},
 			{"int8", 366226833},
@@ -89,6 +97,7 @@ var modelCatalog = []modelDefinition{
 			{"q4f16", 585933772},
 		},
 		Hashes: map[string]string{
+			"fp32":      "a654a1b766d425218a5ee9026e3c7a77a23c4384b1b0cac06730354b964bde44",
 			"quantized": "05e237aa057bc3f21cfeb48651a768f9ae8001907132b29fc27ae58aae27a052",
 			"fp16":      "34a8df87404689e366c8bdfab6b094efedf4be3c1ae8f1125cbe02ec65425aa0",
 			"int8":      "05e237aa057bc3f21cfeb48651a768f9ae8001907132b29fc27ae58aae27a052",
@@ -122,7 +131,11 @@ func (definition modelDefinition) modelFileSpecFor(variant string) (modelFileSpe
 	}
 	for _, candidate := range definition.Variants {
 		if candidate.Name == variant {
-			return modelFileSpec{rel: variantFileName(variant), sha256: hash, size: candidate.Size}, nil
+			rel := definition.Rel[variant]
+			if rel == "" {
+				rel = variantFileName(variant)
+			}
+			return modelFileSpec{rel: rel, sha256: hash, size: candidate.Size}, nil
 		}
 	}
 	return modelFileSpec{}, errors.New("未知模型文件: " + variant)
