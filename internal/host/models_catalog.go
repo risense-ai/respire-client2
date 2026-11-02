@@ -129,11 +129,11 @@ func (definition modelDefinition) modelFileSpecFor(variant string) (modelFileSpe
 }
 
 // ConfigurePayload builds the model.configure argument for a profile model.
-func (definition modelDefinition) ConfigurePayload(weightsPath string) (string, error) {
+func (definition modelDefinition) ConfigurePayload(variant, weightsPath string) (string, error) {
 	if definition.Legacy {
 		return "", errors.New("m3 使用内置变体表，无需注册档案")
 	}
-	quantized, err := definition.modelFileSpecFor("quantized")
+	weights, err := definition.modelFileSpecFor(variant)
 	if err != nil {
 		return "", err
 	}
@@ -159,7 +159,7 @@ func (definition modelDefinition) ConfigurePayload(weightsPath string) (string, 
 				"output":         "last_hidden_state",
 			},
 			"weights": map[string]any{
-				"path": weightsPath, "size": quantized.size, "sha256": quantized.sha256,
+				"path": weightsPath, "size": weights.size, "sha256": weights.sha256,
 			},
 			"tokenizer": map[string]any{
 				"path": filepath.Join(filepath.Dir(weightsPath), "..", "tokenizer.json"), "size": definition.Tokenizer.size, "sha256": definition.Tokenizer.sha256,
@@ -244,12 +244,15 @@ func (m *Manager) ModelCatalogRPC(ctx context.Context) (json.RawMessage, error) 
 }
 
 // ModelConfigure registers a profile model's resources with the runtime.
-func (m *Manager) ModelConfigure(ctx context.Context, model string) error {
+func (m *Manager) ModelConfigure(ctx context.Context, model, variant string) error {
 	definition, err := modelDefinitionByID(model)
 	if err != nil {
 		return err
 	}
-	payload, err := definition.ConfigurePayload(filepath.Join(m.ProfileDir(model), "onnx", "model_quantized.onnx"))
+	if variant == "" {
+		variant = "quantized"
+	}
+	payload, err := definition.ConfigurePayload(variant, filepath.Join(m.ProfileDir(model), variantFileName(variant)))
 	if err != nil {
 		return err
 	}

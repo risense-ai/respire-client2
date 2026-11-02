@@ -53,6 +53,7 @@ export function models(root, ctx) {
     modelID = localStorage.getItem("respire-model") || "m3",
     profileState = null,
     switchInFlight = false,
+    switchingVariant = "",
     switchTimer = null;
   root.innerHTML =
     heading("模型与索引", "查看真实加载与下载进度，管理推理引擎和检索方式。") +
@@ -74,7 +75,7 @@ export function models(root, ctx) {
         "自定义镜像源",
         "https://",
         { placeholder: "http/https 源站，仅主机名" },
-      )}</div></div><div class="actions"><button type="submit">保存下载来源</button><span class="hint" data-mirror-state></span></div></form><div data-switch-progress hidden></div><div class="scroll-table" data-variants><p class="hint">正在读取模型目录…</p></div><div class="actions" data-baseline></div><p class="hint" data-engine-hint>已下载的权重可在操作列切换推理方式：应用立即重载 Runtime 模型并运行真实推理验证，失败自动回退 CPU。GPU 在 Linux 不可用，NPU 仅 Windows 支持。</p><div class="actions"><button type="button" data-model="probe">运行实际推理验证</button><button type="button" data-model="providers">安装 NPU 引擎</button><button data-model="cancel">取消当前任务</button><button data-model="uninstall" class="danger">卸载全部模型文件</button></div></div>`,
+      )}</div></div><div class="actions"><button type="submit">保存下载来源</button><span class="hint" data-mirror-state></span></div></form><div class="scroll-table" data-variants><p class="hint">正在读取模型目录…</p></div><div class="actions" data-baseline></div><p class="hint" data-engine-hint>已下载的权重可在操作列切换推理方式：应用立即重载 Runtime 模型并运行真实推理验证，失败自动回退 CPU。GPU 在 Linux 不可用，NPU 仅 Windows 支持。</p><div class="actions"><button type="button" data-model="probe">运行实际推理验证</button><button type="button" data-model="providers">安装 NPU 引擎</button><button data-model="cancel">取消当前任务</button><button data-model="uninstall" class="danger">卸载全部模型文件</button></div></div>`,
     ) +
     panel(
       "检索与后台索引",
@@ -153,85 +154,44 @@ export function models(root, ctx) {
   function isProfileModel() {
     return modelID !== "m3";
   }
-  function switchChips(opActive) {
-    const ready =
-      inventory?.tokenizer_installed &&
-      (inventory?.variants || []).some(
-        (variant) => variant.name === "quantized" && variant.installed,
-      );
-    const state = profileState || {};
-    const active =
-      (state.active_model || state.model || "") === modelID && !switchInFlight;
-    return ["cpu", "gpu", "npu"]
-      .map((engine) => {
-        const enabled =
-          ready && !opActive && !switchInFlight && engineEnabled(engine, false);
-        return `<button class="engine-chip${active && (state.engine || "cpu") === engine ? " active" : ""}" data-profile-switch data-engine="${engine}"${enabled ? "" : " disabled"} title="${engine.toUpperCase()} · 切换使用 ${h(
-          modelID,
-        )}">${engine.toUpperCase()}</button>`;
-      })
-      .join("");
-  }
-  function switchProgressHTML() {
-    if (!switchInFlight) return "";
-    const state = profileState || {};
-    const details = state.progress || {};
-    const phase =
-      details.phase || details.state || details.status || "进行中";
-    const pct =
-      details.percent !== undefined && details.percent !== null
-        ? ` ${Math.round(details.percent)}%`
-        : "";
-    return `<p class="hint" data-switch-state>切换任务：${h(
-      String(phase),
-    )}${pct}（完成后自动刷新；失败会回退原模型）</p>`;
+  function variantStatus(variant, op, downloading, task) {
+    const busy = downloading === variant.name;
+    const current = engineState.model === variant.name;
+    if (switchInFlight && switchingVariant === variant.name) {
+      const details = progressDetails(profileState);
+      const phase = details.phase || details.state || "进行中";
+      const pct =
+        details.percent !== undefined && details.percent !== null
+          ? ` ${Math.round(details.percent)}%`
+          : "";
+      return `<strong>切换中 · ${h(String(phase))}${pct}</strong>`;
+    }
+    if (variant.installed)
+      return `<span class="variant-status"><strong>${current ? "使用中 · 已下载" : "已下载"}</strong><span class="hint">${h(bytes(variant.bytes))} · 大小一致</span></span>`;
+    return "未下载";
   }
   function renderVariants() {
     const node = $("[data-variants]", root);
     if (!node || !inventory) return;
     const op = ctx.status?.summary?.model_operation || {};
     const downloading = op.active ? variantFromItem(op.item) : "";
-    const profile = isProfileModel();
     const hint = $("[data-model-hint]", root);
     if (hint) hint.textContent = MODEL_HINTS[modelID] || MODEL_HINTS.m3;
-    const engineHint = $("[data-engine-hint]", root);
-    if (engineHint) engineHint.hidden = profile;
-    for (const name of ["probe", "providers", "uninstall"]) {
-      const button = $(`[data-model="${name}"]`, root);
-      if (button) button.hidden = profile;
-    }
-    const switchRow = profile
-      ? `<div class="panel-body stack" data-model-switch><div class="actions"><span class="hint">切换使用 ${h(
-          modelID,
-        )}（quantized 权重）：</span>${switchChips(
-          Boolean(op.active),
-        )}</div>${switchProgressHTML()}${
-          inventory.tokenizer_installed
-            ? ""
-            : '<p class="hint">分词器尚未下载：先下载任一权重文件会自动带上分词器。</p>'
-        }</div>`
-      : "";
-    node.innerHTML =
-      switchRow +
-      `<table><thead><tr><th>权重文件</th><th>大小</th><th>状态</th><th>本机位置</th><th>操作</th></tr></thead><tbody>${inventory.variants
-        .map((variant) => {
-          const badge =
-            variant.name === "quantized"
-              ? profile
-                ? "切换默认"
-                : "CPU 默认"
-              : variant.name === "fp16"
-                ? "GPU/NPU 默认"
-                : "";
-          const activeHere = engineState.model === variant.name;
-          const ops = !profile
-            ? variant.installed
-              ? `<div class="variant-ops">${engineChips(variant, Boolean(op.active))}</div><button data-model="download" data-variant="${h(variant.name)}"${downloading === variant.name ? " disabled" : ""}>${activeHere ? "重新下载" : "下载"}</button>`
-              : `<button data-model="download" data-variant="${h(variant.name)}"${downloading === variant.name ? " disabled" : ""}>下载</button>`
-            : `<button data-model="download" data-variant="${h(variant.name)}"${downloading === variant.name ? " disabled" : ""}>${variant.installed ? "重新下载" : "下载"}</button>`;
-          return `<tr><td><span class="variant-name"><strong>${h(variant.name)}</strong>${badge ? `<span class="hint">${badge}${variant.name === "fp16" ? '<span class="warn-tip" title="资源占用较大，谨慎选择">*</span>' : ""}</span>` : ""}</span></td><td>${h(bytes(variant.size))}</td><td data-status="${h(variant.name)}">${variantStatus(variant, op, downloading, ctx.desktop?.task)}</td><td><span class="path-cell"><code title="${h(variant.path)}">${h(variant.path)}</code><button class="link-btn" data-open-dir="${h(variant.path)}">打开</button></span></td><td>${ops}</td></tr>`;
-        })
-        .join("")}</tbody></table>`;
+    node.innerHTML = `<table><thead><tr><th>权重文件</th><th>大小</th><th>状态</th><th>本机位置</th><th>操作</th></tr></thead><tbody>${inventory.variants
+      .map((variant) => {
+        const badge =
+          variant.name === "quantized"
+            ? "CPU 默认"
+            : variant.name === "fp16"
+              ? "GPU/NPU 默认"
+              : "";
+        const activeHere = engineState.model === variant.name;
+        const ops = variant.installed
+          ? `<div class="variant-ops">${engineChips(variant, Boolean(op.active) || switchInFlight)}</div><button data-model="download" data-variant="${h(variant.name)}"${downloading === variant.name ? " disabled" : ""}>${activeHere ? "重新下载" : "下载"}</button>`
+          : `<button data-model="download" data-variant="${h(variant.name)}"${downloading === variant.name ? " disabled" : ""}>下载</button>`;
+        return `<tr><td><span class="variant-name"><strong>${h(variant.name)}</strong>${badge ? `<span class="hint">${badge}${variant.name === "fp16" ? '<span class="warn-tip" title="资源占用较大，谨慎选择">*</span>' : ""}</span>` : ""}</span></td><td>${h(bytes(variant.size))}</td><td data-status="${h(variant.name)}">${variantStatus(variant, op, downloading, ctx.desktop?.task)}</td><td><span class="path-cell"><code title="${h(variant.path)}">${h(variant.path)}</code><button class="link-btn" data-open-dir="${h(variant.path)}">打开</button></span></td><td>${ops}</td></tr>`;
+      })
+      .join("")}</tbody></table>`;
     const cancelBtn = $("[data-model=cancel]", root);
     if (cancelBtn)
       cancelBtn.disabled =
@@ -245,12 +205,6 @@ export function models(root, ctx) {
   function renderBaseline() {
     const area = $("[data-baseline]", root);
     if (!area || !inventory) return;
-    if (isProfileModel()) {
-      area.innerHTML = inventory.tokenizer_installed
-        ? `<span class="hint">分词器已就绪 · 模型目录 <code>${h(inventory.model_dir)}</code></span>`
-        : "";
-      return;
-    }
     const task = ctx.desktop?.task || {};
     const baseBusy =
       task.busy &&
@@ -264,7 +218,13 @@ export function models(root, ctx) {
     }
     area.innerHTML = inventory.tokenizer_installed
       ? `<span class="hint">基础文件已就绪 · 模型目录 <code>${h(inventory.model_dir)}</code></span>`
-      : `<button data-model="prepare" class="primary">下载并准备基础模型</button><span class="hint">首次使用需下载基础文件（quantized 权重 + 分词器，约 543 MiB）并构建索引。</span>`;
+      : `<button data-model="prepare" class="primary">下载并准备基础模型</button><span class="hint">首次使用需下载基础文件（quantized 权重 + 分词器，约 ${h(bytes(quantizedBytes()))}）并构建索引。</span>`;
+  }
+  function quantizedBytes() {
+    const quantized = (inventory?.variants || []).find(
+      (variant) => variant.name === "quantized",
+    );
+    return quantized?.size || 0;
   }
   // Polling refreshes status cells in place; rebuilding the whole table would
   // replace buttons mid-click every 3 seconds.
@@ -295,7 +255,7 @@ export function models(root, ctx) {
           engineState.engine === chip.dataset.engine &&
           engineState.model === variant.name;
         chip.classList.toggle("active", active);
-        chip.disabled = !engineEnabled(chip.dataset.engine, Boolean(op.active));
+        chip.disabled = !engineEnabled(chip.dataset.engine, Boolean(op.active) || switchInFlight);
       }
     }
     renderBaseline();
@@ -397,23 +357,24 @@ export function models(root, ctx) {
         }
       }
       if (values[4].status === "fulfilled") {
-        profileState = summary(values[4].value);
-        // An active profile selection is what the runtime actually uses.
-        const activeModel =
-          profileState.active_model ||
-          profileState.model ||
-          profileState.selection?.model ||
-          "";
-        if (
-          activeModel &&
-          MODEL_OPTIONS.some(([id]) => id === activeModel) &&
-          !switchInFlight
-        ) {
-          modelID = activeModel;
-          if (modelID !== (inventory?.model || "")) {
-            inventory = await api(
-              "model-variants?model=" + encodeURIComponent(modelID),
-            );
+        profileState = values[4].value;
+        // An active profile selection is what the runtime actually uses; the
+        // selector keeps an explicit local choice when one exists.
+        const details = progressDetails(profileState);
+        const activeModel = details.active_model || details.model || "";
+        if (activeModel && !switchInFlight) {
+          const known = MODEL_OPTIONS.some(([id]) => id === activeModel);
+          if (!savedModel && known) modelID = activeModel;
+          if (modelID === activeModel) {
+            if (modelID !== (inventory?.model || "")) {
+              inventory = await api(
+                "model-variants?model=" + encodeURIComponent(modelID),
+              );
+            }
+            engineState = {
+              engine: details.engine || "cpu",
+              model: details.active_variant || "quantized",
+            };
           }
         }
       } else {
@@ -433,7 +394,7 @@ export function models(root, ctx) {
             ? "系统凭据库已配置密钥"
             : "未检测到所选服务的密钥";
       for (const [index, result] of values.entries()) {
-        if (result.status === "rejected" && index !== 3 && index !== 4)
+        if (result.status === "rejected" && index !== 1 && index !== 3 && index !== 4)
           notify(result.reason.message, true);
       }
       renderVariants();
@@ -465,33 +426,48 @@ export function models(root, ctx) {
       }
     })();
   });
+  // The runtime reports the active selection in either details or summary;
+  // read both so either shape works.
+  function progressDetails(state) {
+    const progress = state?.progress || {};
+    return progress.details || progress.summary || {};
+  }
   async function refreshProfileState() {
     if (!isProfileModel()) {
       profileState = null;
-      renderVariants();
+      updateVariantsProgress();
       return;
     }
     try {
-      profileState = summary(await api("model-profile-state"));
+      profileState = await api("model-profile-state");
     } catch {
       profileState = null;
     }
-    renderVariants();
+    const details = progressDetails(profileState);
+    const activeModel = details.active_model || details.model || "";
+    if (activeModel === modelID) {
+      engineState = {
+        engine: details.engine || "cpu",
+        model: details.active_variant || switchingVariant || "quantized",
+      };
+    }
+    // In-place status refresh: rebuilding the table would break clicks.
+    updateVariantsProgress();
+    renderBaseline();
     if (switchInFlight) {
-      const progress = profileState?.progress || {};
-      const details = progress.details || progress;
       const stateText = String(
         details.state || details.phase || details.status || "",
       );
       if (/ready|failed|完成|失败/i.test(stateText)) {
         switchInFlight = false;
+        switchingVariant = "";
         clearInterval(switchTimer);
         switchTimer = null;
         const failed = /failed|失败/i.test(stateText);
         notify(
           failed
             ? "模型切换失败，Runtime 已回退原模型；详情见切换状态。"
-            : `已切换使用 ${modelID}，真实推理验证通过。`,
+            : `已切换使用 ${modelID} · ${engineState.model}，真实推理验证通过。`,
           failed,
         );
         renderVariants();
@@ -500,27 +476,30 @@ export function models(root, ctx) {
     }
   }
   root.addEventListener("click", (event) => {
-    const profileSwitch = event.target.closest("[data-profile-switch]");
-    if (profileSwitch && !profileSwitch.disabled) {
-      action(profileSwitch, async () => {
-        const engine = profileSwitch.dataset.engine || "cpu";
-        await api("model-configure", { model: modelID });
-        await api("model-switch", {
-          model: modelID,
-          engine,
-          variant: "quantized",
-        });
-        switchInFlight = true;
-        if (!switchTimer)
-          switchTimer = setInterval(() => refreshProfileState(), 3000);
-        await refreshProfileState();
-        notify("切换任务已提交；Runtime 正在验证并加载模型。");
-      });
-      return;
-    }
     const apply = event.target.closest("[data-apply]");
     if (apply) {
       action(apply, async () => {
+        if (isProfileModel()) {
+          const engine = apply.dataset.engine;
+          const variant = apply.dataset.variant;
+          switchingVariant = variant;
+          switchInFlight = true;
+          if (!switchTimer)
+            switchTimer = setInterval(() => refreshProfileState(), 3000);
+          try {
+            await api("model-configure", { model: modelID, variant });
+            await api("model-switch", { model: modelID, engine, variant });
+            notify("切换任务已提交；Runtime 正在验证并加载模型。");
+          } catch (error) {
+            switchInFlight = false;
+            switchingVariant = "";
+            clearInterval(switchTimer);
+            switchTimer = null;
+            throw error;
+          }
+          await refreshProfileState();
+          return;
+        }
         const envelope = await execute("model_engine_apply", {
           engine: apply.dataset.engine,
           model: apply.dataset.variant,

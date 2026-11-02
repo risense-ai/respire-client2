@@ -64,14 +64,15 @@ func (d *desktop) businessRoute(w http.ResponseWriter, r *http.Request) bool {
 			break
 		}
 		var body struct {
-			Model string `json:"model"`
+			Model   string `json:"model"`
+			Variant string `json:"variant"`
 		}
 		if err = json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&body); err != nil {
 			break
 		}
 		ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
 		defer cancel()
-		err = d.m.ModelConfigure(ctx, body.Model)
+		err = d.m.ModelConfigure(ctx, body.Model, body.Variant)
 		result = "模型档案已注册"
 	case r.URL.Path == "/api/model-switch":
 		if r.Method != "POST" || r.Header.Get("X-Respire-Client") != "1" {
