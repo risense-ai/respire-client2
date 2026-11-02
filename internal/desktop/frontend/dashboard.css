@@ -785,13 +785,26 @@ td code {
   border-bottom-color: var(--text);
 }
 progress {
+  -webkit-appearance: none;
+  appearance: none;
   display: block;
   width: 100%;
   height: 6px;
   border: 0;
   border-radius: 4px;
-  accent-color: var(--green);
+  overflow: hidden;
   background: var(--soft);
+  accent-color: var(--amber);
+}
+progress::-webkit-progress-bar {
+  background: var(--soft);
+}
+progress::-webkit-progress-value {
+  background: var(--amber);
+  transition: width 0.4s ease;
+}
+progress::-moz-progress-bar {
+  background: var(--amber);
 }
 .progress-label {
   display: flex;
@@ -799,6 +812,17 @@ progress {
   font-size: 0.6875rem;
   color: var(--muted);
   margin: 9px 0;
+}
+/* Task progress row: aligned with the facts rows, hairline on top. */
+.model-progress {
+  padding: 0.625rem 1.125rem 0.75rem;
+  border-top: 1px solid var(--line);
+}
+.model-progress .progress-label {
+  margin: 0 0 7px;
+}
+.model-progress .actions {
+  margin-top: 10px;
 }
 ul.clean {
   list-style: none;

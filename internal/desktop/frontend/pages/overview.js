@@ -102,7 +102,7 @@ export function overview(root, ctx) {
             op.active ? `${phase(op.phase)} · ${op.item || ""}` : "当前无任务",
           ],
         ]) +
-          `<div class="panel-body">${op.active ? `<div class="progress-label"><span>${h(op.item || op.phase)}</span><span>${h(bytes(op.done))} / ${h(bytes(op.total))}</span></div><progress ${op.total ? `value="${h(op.done)}" max="${h(op.total)}"` : ""}></progress>` : ""}<button data-go="models">管理模型与索引</button></div>`,
+          `<div class="model-progress">${op.active ? `<div class="progress-label"><span>${h(op.item || op.phase)}</span><span>${h(bytes(op.done))} / ${h(bytes(op.total))}</span></div><progress ${op.total ? `value="${h(op.done)}" max="${h(op.total)}"` : ""}></progress>` : ""}<div class="actions"><button data-go="models">管理模型与索引</button></div></div>`,
       )}</div>` +
       panel(
         "Runtime",
@@ -123,7 +123,7 @@ export function overview(root, ctx) {
           ],
           ["客户端当前操作", nowTask.stage || "—"],
         ]) +
-          `<div class="panel-body">${nowTask.busy && nowTask.total ? `<div class="progress-label"><span>${h(nowTask.stage)}</span><span>${h(bytes(nowTask.done))} / ${h(bytes(nowTask.total))}</span></div><progress value="${h(nowTask.done)}" max="${h(nowTask.total)}"></progress>` : ""}<div class="actions"><button data-host="start" ${nowTask.busy ? "disabled" : ""}>启动 Runtime</button><button data-host="stop" ${nowTask.busy || !state.connected ? "disabled" : ""}>停止 Runtime</button><button data-go="updates">安装与更新</button></div>${nowTask.error ? `<div class="panel-body form-error">${h(nowTask.error)}</div>` : ""}</div>`,
+          `${nowTask.busy && nowTask.total ? `<div class="model-progress"><div class="progress-label"><span>${h(nowTask.stage)}</span><span>${h(bytes(nowTask.done))} / ${h(bytes(nowTask.total))}</span></div><progress value="${h(nowTask.done)}" max="${h(nowTask.total)}"></progress></div>` : ""}<div class="panel-body"><div class="actions"><button data-host="start" ${nowTask.busy ? "disabled" : ""}>启动 Runtime</button><button data-host="stop" ${nowTask.busy || !state.connected ? "disabled" : ""}>停止 Runtime</button><button data-go="updates">安装与更新</button></div>${nowTask.error ? `<div class="panel-body form-error">${h(nowTask.error)}</div>` : ""}</div>`,
       );
     // First-run checklist: each step clears by real state, and the whole card
     // disappears once everything is done.
