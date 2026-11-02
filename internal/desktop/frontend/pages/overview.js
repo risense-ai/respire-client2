@@ -30,6 +30,8 @@ export function heading(title, description, actions = "") {
   return `<div class="page-heading"><div><div class="eyebrow">RESPIRE / LOCAL WORKSPACE</div><h1>${h(title)}</h1><p>${h(description)}</p></div><div class="heading-actions">${actions}</div></div>`;
 }
 export function overview(root, ctx) {
+  // Onboarding: prompt/plugin readiness is checked once per page visit.
+  let promptsReady = null;
   function update() {
     const state = ctx.desktop || {},
       s = ctx.status?.summary || {},
@@ -40,6 +42,18 @@ export function overview(root, ctx) {
       op = s.model_operation || {},
       session = s.session || {};
     const nowTask = state.task || {};
+    if (promptsReady === null && state.connected)
+      ctx
+        .api("inject-targets")
+        .then((r) => {
+          promptsReady = (r.targets || []).some(
+            (t) => t.state === "fresh" || !!t.plugin?.source,
+          );
+          if (root.isConnected) update();
+        })
+        .catch(() => {
+          promptsReady = false;
+        });
     root.innerHTML =
       heading(
         "记忆，保持就绪。",
@@ -109,12 +123,59 @@ export function overview(root, ctx) {
           ],
           ["客户端当前操作", nowTask.stage || "—"],
         ]) +
-          `<div class="panel-body actions"><button data-host="start" ${nowTask.busy ? "disabled" : ""}>启动 Runtime</button><button data-host="stop" ${nowTask.busy || !state.connected ? "disabled" : ""}>停止 Runtime</button><button data-go="updates">安装与更新</button></div>${nowTask.error ? `<div class="panel-body form-error">${h(nowTask.error)}</div>` : ""}`,
+          `<div class="panel-body">${nowTask.busy && nowTask.total ? `<div class="progress-label"><span>${h(nowTask.stage)}</span><span>${h(bytes(nowTask.done))} / ${h(bytes(nowTask.total))}</span></div><progress value="${h(nowTask.done)}" max="${h(nowTask.total)}"></progress>` : ""}<div class="actions"><button data-host="start" ${nowTask.busy ? "disabled" : ""}>启动 Runtime</button><button data-host="stop" ${nowTask.busy || !state.connected ? "disabled" : ""}>停止 Runtime</button><button data-go="updates">安装与更新</button></div>${nowTask.error ? `<div class="panel-body form-error">${h(nowTask.error)}</div>` : ""}</div>`,
       );
-    if (!session.has_local_keys && state.connected)
+    // First-run checklist: each step clears by real state, and the whole card
+    // disappears once everything is done.
+    const steps = [
+      {
+        done: state.connected,
+        title: "连接 Runtime",
+        desc: nowTask.busy
+          ? nowTask.stage
+          : state.connected
+            ? "本机 Runtime 已就绪"
+            : "客户端会自动下载并启动本机 Runtime",
+        action: nowTask.busy
+          ? null
+          : { go: "updates", label: "安装与更新" },
+      },
+      {
+        done: Boolean(session.user),
+        title: "登录或注册账户",
+        desc: "云端同步与多设备共享从这里开始",
+        action: { go: "accounts", label: "前往账户" },
+      },
+      {
+        done: Boolean(session.has_local_keys),
+        title: "保存本机安全密钥",
+        desc: "密钥只留在本机，用于加密记忆库",
+        action: { go: "accounts", label: "前往账户" },
+      },
+      {
+        done: Boolean(promptsReady),
+        title: "写入提示词 / 安装插件",
+        desc: "按 Agent 启用记忆提示词，并释放对应插件",
+        action: { go: "injection", label: "前往安装" },
+      },
+    ];
+    if (!steps.every((step) => step.done))
       root.insertAdjacentHTML(
         "beforeend",
-        `<div class="panel section-gap"><div class="panel-body row spread"><div><strong>开始使用你的本机记忆库</strong><p class="hint">登录账户，或初始化离线记忆库。</p></div><button data-go="accounts">账户与本机密钥</button></div></div>`,
+        `<div class="panel section-gap"><div class="panel-heading"><h2>开始使用</h2></div><div class="panel-body stack">${steps
+          .map(
+            (step) =>
+              `<div class="row spread"><div class="row-copy"><strong><span class="dot ${
+                step.done ? "online" : ""
+              }" style="margin-right:8px"></span>${h(step.title)}</strong><small>${h(step.desc)}</small></div>${
+                step.done
+                  ? '<small>已完成</small>'
+                  : step.action
+                    ? `<button data-go="${h(step.action.go)}">${h(step.action.label)}</button>`
+                    : ""
+              }</div>`,
+          )
+          .join("")}</div></div>`,
       );
     if (ctx.statusError)
       root.insertAdjacentHTML(

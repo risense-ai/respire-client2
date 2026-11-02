@@ -111,15 +111,16 @@ type InstalledRuntime struct {
 }
 
 type Manager struct {
-	Root        string
-	DataRoot    string
-	Endpoint    string
-	HTTPClient  *http.Client
-	localClient *http.Client
-	mu          sync.Mutex
-	prefs       Preferences
-	task        TaskState
-	jobs        map[string]*Operation
+	Root            string
+	DataRoot        string
+	Endpoint        string
+	HTTPClient      *http.Client
+	modelHTTPClient *http.Client
+	localClient     *http.Client
+	mu              sync.Mutex
+	prefs           Preferences
+	task            TaskState
+	jobs            map[string]*Operation
 }
 
 func New() (*Manager, error) {
@@ -147,7 +148,8 @@ func New() (*Manager, error) {
 		localClient: &http.Client{Timeout: 30 * time.Second, Transport: &http.Transport{Proxy: nil}, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }},
 		prefs: Preferences{AutoRuntime: true, AutoUpdate: true, RuntimeChannel: "stable", ClientChannel: "stable", Layout: "sidebar", Theme: "system", Language: "",
 			ClientUpdateInterval: "6h", RuntimeUpdateInterval: "6h", ClientAutoUpdate: true, RuntimeAutoUpdate: true,
-			ClientAutoRestart: true}, task: TaskState{Stage: "就绪"},
+			ClientAutoRestart: true},
+		modelHTTPClient: &http.Client{Transport: &http.Transport{Proxy: nil}}, task: TaskState{Stage: "就绪"},
 		HTTPClient: &http.Client{Timeout: 10 * time.Minute, CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			if len(via) >= 5 {
 				return errors.New("too many redirects")

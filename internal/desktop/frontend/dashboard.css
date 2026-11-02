@@ -1150,3 +1150,18 @@ body[data-layout="compact"] #layout-toggle .icon-compact {
 .nav-ic {
   flex: none;
 }
+/* model variants: name and badge stack instead of crowding one line */
+[data-variants] .variant-name {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+[data-variants] .variant-status {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+[data-variants] .variant-status strong {
+  font-weight: 500;
+}

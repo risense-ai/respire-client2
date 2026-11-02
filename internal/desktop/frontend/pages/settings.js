@@ -48,7 +48,7 @@ export function settings(root, ctx) {
         ),
     ) +
     panel(
-      "启动与更新",
+      "启动",
       setting(
         "登录系统后启动",
         "系统登录时以托盘方式启动客户端。",
@@ -56,38 +56,8 @@ export function settings(root, ctx) {
       ) +
         setting(
           "自动连接 Runtime",
-          "没有可连接的 Runtime 时启动客户端管理的版本。",
+          "没有可连接的 Runtime 时启动客户端管理的版本。自动安装与更新设置在更新页。",
           '<input data-pref="autoRuntime" type="checkbox" aria-label="自动连接 Runtime">',
-        ) +
-        setting(
-          "自动检查和下载更新",
-          "客户端与 Runtime 的更新频率在更新页调整。",
-          '<input data-pref="autoUpdate" type="checkbox" aria-label="自动更新">',
-        ) +
-        setting(
-          "客户端自动下载更新",
-          "按检查频率自动发现并下载新版本；频率在更新页调整。",
-          '<input data-pref="clientAutoUpdate" type="checkbox" aria-label="客户端自动下载更新">',
-        ) +
-        setting(
-          "客户端自动重启",
-          "下载完成后自动重启应用；关闭后在更新页手动重启。",
-          '<input data-pref="clientAutoRestart" type="checkbox" aria-label="客户端自动重启">',
-        ) +
-        setting(
-          "Runtime 自动更新",
-          "按检查频率自动安装客户端管理的 Runtime。",
-          '<input data-pref="runtimeAutoUpdate" type="checkbox" aria-label="Runtime 自动更新">',
-        ) +
-        setting(
-          "CLI 发布通道",
-          "切换通道不会自动降级已经安装的版本。",
-          '<select data-pref="runtimeChannel"><option value="stable">Stable</option><option value="dev">Dev</option></select>',
-        ) +
-        setting(
-          "客户端发布通道",
-          "下载完成后由你选择重启并应用。",
-          '<select data-pref="clientChannel"><option value="stable">Stable</option><option value="dev">Dev</option></select>',
         ),
     ) +
     panel(
@@ -272,6 +242,8 @@ export function updates(root, ctx) {
       u = state.clientUpdate || {},
       task = state.task || {},
       p = state.preferences || {};
+    const channelRow = (pref) =>
+      `<div class="panel-body setting-row"><div><strong>发布通道</strong><p>切换通道不会自动降级已经安装的版本。</p></div><select data-pref="${pref}"><option value="stable">Stable</option><option value="dev">Dev</option></select></div>`;
     root.innerHTML =
       heading(
         "保持更新",
@@ -282,35 +254,37 @@ export function updates(root, ctx) {
         `<div class="panel-body setting-row"><div><strong>自动下载更新</strong><p>按检查频率自动发现并下载新版本。</p></div><input type="checkbox" data-pref="clientAutoUpdate" aria-label="自动下载更新"></div>` +
         `<div class="panel-body setting-row"><div><strong>自动重启应用</strong><p>下载完成后自动重启；关闭后由你点「重启并应用」。</p></div><input type="checkbox" data-pref="clientAutoRestart" aria-label="自动重启应用"></div>` +
         `<div class="panel-body setting-row"><div><strong>检查频率</strong><p>自动检查更新的间隔。</p></div><select data-pref="clientUpdateInterval"><option value="5m">5 分钟</option><option value="30m">30 分钟</option><option value="1h">1 小时</option><option value="6h">6 小时</option><option value="24h">一天</option></select></div>` +
+        channelRow("clientChannel") +
         pairs([
           ["当前版本", state.version],
-          ["发布通道", p.clientChannel],
           ["状态", updateNames[u.state] || u.state || "—"],
           ["可用版本", u.latest || "—"],
           ["更新来源", u.source || "—"],
         ]) +
-          `<div class="panel-body actions"><button data-update="client-check">检查更新</button><button data-update="client-download" ${u.state === "ready" ? "disabled" : ""}>${u.error ? "重试下载" : "下载更新"}</button><button class="primary" data-update="client-restart" ${u.state !== "ready" ? "disabled" : ""}>重启并应用</button>${u.cancellable ? `<button data-update="client-cancel">取消更新</button>` : ""}<button data-open-releases="client">GitHub Releases</button><button data-open-releases="client-mirror">国内镜像</button></div>${u.error ? `<div class="panel-body form-error">${h(u.error)}</div>` : ""}${u.notes ? `<details class="panel-body section-gap"><summary>版本说明</summary><pre class="release-notes">${h(u.notes)}</pre></details>` : ""}`,
+          `<div class="panel-body actions"><button data-update="client-check">检查更新</button><button class="primary" data-update="client-download" ${u.state === "ready" ? "disabled" : ""}>${u.error ? "重试下载" : "下载更新"}</button><button data-update="client-restart" ${u.state !== "ready" ? "disabled" : ""}>重启并应用</button>${u.cancellable ? `<button data-update="client-cancel">取消更新</button>` : ""}<button data-open-releases="client">GitHub Releases</button><button data-open-releases="client-mirror">国内镜像</button></div>${u.error ? `<div class="panel-body form-error">${h(u.error)}</div>` : ""}${u.notes ? `<details class="panel-body section-gap"><summary>版本说明</summary><pre class="release-notes">${h(u.notes)}</pre></details>` : ""}`,
       )}
       ${panel(
         "CLI / Runtime",
         `<div class="panel-body setting-row"><div><strong>自动安装更新</strong><p>按检查频率自动安装客户端管理的 Runtime。</p></div><input type="checkbox" data-pref="runtimeAutoUpdate" aria-label="自动安装更新"></div>` +
         `<div class="panel-body setting-row"><div><strong>检查频率</strong><p>自动检查更新的间隔。</p></div><select data-pref="runtimeUpdateInterval"><option value="5m">5 分钟</option><option value="30m">30 分钟</option><option value="1h">1 小时</option><option value="6h">6 小时</option><option value="24h">一天</option></select></div>` +
+        channelRow("runtimeChannel") +
         pairs([
           ["当前运行", state.health?.bin || "未连接"],
           ["已安装", state.installed?.version || (state.externalRuntime ? `${state.externalRuntime.version}（本机 bin）` : "未安装")],
-          ["发布通道", p.runtimeChannel],
           ["可用版本", latest?.version || "尚未检查"],
+          ["更新来源", latest?.channel || "—"],
         ]) +
-          `<div class="panel-body actions"><button data-cli-check>检查 CLI 版本</button><button class="primary" data-update="runtime-update" ${task.busy ? "disabled" : ""}>安装 / 更新 CLI</button><button data-open-releases="cli">GitHub Releases</button><button data-open-releases="cli-mirror">国内镜像</button></div>`,
+          `<div class="panel-body actions"><button data-cli-check>检查更新</button><button class="primary" data-update="runtime-update" ${task.busy ? "disabled" : ""}>下载并安装</button><button data-open-releases="cli">GitHub Releases</button><button data-open-releases="cli-mirror">国内镜像</button></div>`,
       )}</div>` +
       panel(
         "当前操作",
         `<div class="panel-body"><p>${h(task.stage || "就绪")}</p>${task.total ? `<div class="progress-label"><span>${h(bytes(task.done))} / ${h(bytes(task.total))}</span></div><progress value="${h(task.done)}" max="${h(task.total)}"></progress>` : ""}${task.error ? `<p class="form-error section-gap">${h(task.error)}</p>` : ""}</div>`,
       ) +
-      `<p class="hint section-gap">更换通道请到设置。自动重启关闭时，下载完成后在「重启并应用」确认；业务操作执行期间不会应用客户端更新。</p>`;
+      `<p class="hint section-gap">发布通道在上方选择。自动重启关闭时，下载完成后在「重启并应用」确认；业务操作执行期间不会应用客户端更新。</p>`;
     all("[data-pref]", root).forEach((node) => {
       const value = p[node.dataset.pref];
       if (node.type === "checkbox") node.checked = Boolean(value);
+      else if (node.dataset.pref.endsWith("Channel")) node.value = value || "stable";
       else node.value = value || "6h";
     });
   }

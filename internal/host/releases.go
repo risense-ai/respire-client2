@@ -41,6 +41,20 @@ func validVersion(v string) bool { return semver.IsValid("v"+v) && !strings.Cont
 func validHash(v string) bool    { b, e := hex.DecodeString(v); return e == nil && len(b) == sha256.Size }
 
 func (m *Manager) fetchJSON(ctx context.Context, url string, v any) error {
+	err := m.fetchJSONOnce(ctx, url, v)
+	if err == nil {
+		return nil
+	}
+	// Blocked or flaky GitHub: retry once through the gh-proxy mirror.
+	if mirrored := mirrorURL(url); mirrored != url {
+		if retryErr := m.fetchJSONOnce(ctx, mirrored, v); retryErr == nil {
+			return nil
+		}
+	}
+	return err
+}
+
+func (m *Manager) fetchJSONOnce(ctx context.Context, url string, v any) error {
 	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
 		return err
@@ -62,6 +76,14 @@ func (m *Manager) fetchJSON(ctx context.Context, url string, v any) error {
 		return errors.New("release metadata too large")
 	}
 	return json.Unmarshal(b, v)
+}
+
+// mirrorURL routes a github.com URL through the gh-proxy download mirror.
+func mirrorURL(url string) string {
+	if strings.HasPrefix(url, "https://github.com/") || strings.HasPrefix(url, "https://api.github.com/") {
+		return "https://gh-proxy.com/" + url
+	}
+	return url
 }
 
 func (m *Manager) LatestRuntime(ctx context.Context) (githubRelease, cliMetadata, error) {
@@ -143,6 +165,21 @@ func fileHash(path string) (string, error) {
 }
 
 func (m *Manager) download(ctx context.Context, url, dest, hash string, max int64) error {
+	err := m.downloadOnce(ctx, url, dest, hash, max)
+	if err == nil {
+		return nil
+	}
+	// Blocked or flaky GitHub: retry once through the gh-proxy mirror.
+	if mirrored := mirrorURL(url); mirrored != url {
+		_ = os.Remove(dest)
+		if retryErr := m.downloadOnce(ctx, mirrored, dest, hash, max); retryErr == nil {
+			return nil
+		}
+	}
+	return err
+}
+
+func (m *Manager) downloadOnce(ctx context.Context, url, dest, hash string, max int64) error {
 	if !validHash(hash) {
 		return errors.New("missing artifact SHA256")
 	}

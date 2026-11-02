@@ -44,6 +44,26 @@ func (d *desktop) businessRoute(w http.ResponseWriter, r *http.Request) bool {
 		ctx, cancel := context.WithTimeout(r.Context(), 4*time.Second)
 		defer cancel()
 		result, err = d.m.ModelVariants(ctx)
+	case r.URL.Path == "/api/model-download":
+		if r.Method != "POST" || r.Header.Get("X-Respire-Client") != "1" {
+			w.WriteHeader(http.StatusForbidden)
+			err = errors.New("客户端请求被拒绝")
+			break
+		}
+		var body struct {
+			Variant string `json:"variant"`
+			Mirror  string `json:"mirror"`
+		}
+		if err = json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&body); err != nil {
+			break
+		}
+		variant := body.Variant
+		go d.task("下载模型 "+variant, func() error {
+			ctx, cancel := context.WithTimeout(context.Background(), 60*time.Minute)
+			defer cancel()
+			return d.m.DownloadModel(ctx, variant, body.Mirror)
+		})
+		result = "下载已开始"
 	case r.Method == "GET" && r.URL.Path == "/api/operation":
 		result, err = d.m.Operation(r.URL.Query().Get("id"))
 	case r.URL.Path == "/api/execute" || r.URL.Path == "/api/operation-recover" || r.URL.Path == "/api/operation-ack" || r.URL.Path == "/api/file-dialog" || r.URL.Path == "/api/open-dashboard" || r.URL.Path == "/api/open-main" || r.URL.Path == "/api/panel-size" || r.URL.Path == "/api/cli-language" || r.URL.Path == "/api/plugin-install" || r.URL.Path == "/api/inject-set" || r.URL.Path == "/api/inject-mode" || r.URL.Path == "/api/preferences-export" || r.URL.Path == "/api/preferences-import" || r.URL.Path == "/api/diagnostics-export":

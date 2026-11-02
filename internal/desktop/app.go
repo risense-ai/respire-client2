@@ -278,7 +278,13 @@ func (d *desktop) background() {
 			h, _, err := d.m.Health(ctx)
 			cancel()
 			if err == nil && d.m.Owns(h.Exe) {
-				d.task("检查 Runtime 更新", func() error { return d.m.InstallRuntime(true) })
+				d.task("检查 Runtime 更新", func() error {
+					// Direct GitHub first; the mirror covers blocked networks.
+					if err := d.m.InstallRuntime(true); err != nil {
+						return d.m.InstallRuntime(false)
+					}
+					return nil
+				})
 			}
 		}
 		delay := 30 * time.Second

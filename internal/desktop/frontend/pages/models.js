@@ -33,7 +33,9 @@ export function models(root, ctx) {
     engineState = { engine: "cpu", model: "quantized" },
     inventory = null,
     loaded = false,
-    loading = false;
+    loading = false,
+    sawMissingBaseline = false,
+    baselinePrepared = false;
   root.innerHTML =
     heading("模型与索引", "查看真实加载与下载进度，管理推理引擎和检索方式。") +
     `<div data-live></div>` +
@@ -131,16 +133,26 @@ export function models(root, ctx) {
       !ctx.desktop?.platform?.startsWith("windows"),
     );
   }
-  function variantStatus(variant, op, downloading) {
+  function variantStatus(variant, op, downloading, task) {
     const busy = downloading === variant.name;
     const current = engineState.model === variant.name;
     const pct = op.total
       ? Math.min(100, Math.round((op.done / op.total) * 100))
       : 0;
+    // Client-side parallel download: progress rides the client task.
+    if (
+      task?.busy &&
+      String(task.stage || "").includes("model_" + variant.name + ".onnx")
+    ) {
+      const tPct = task.total
+        ? Math.min(100, Math.round((task.done / task.total) * 100))
+        : 0;
+      return `<strong>并行下载中 ${tPct}%</strong><progress ${task.total ? `value="${h(task.done)}" max="${h(task.total)}"` : ""}></progress>`;
+    }
     if (busy)
       return `<strong>${op.phase === "verify" ? "校验中" : "下载中"} ${pct}%</strong><progress ${op.total ? `value="${h(op.done)}" max="${h(op.total)}"` : ""}></progress>`;
     if (variant.installed)
-      return `${current ? "使用中 · " : ""}已下载<span class="hint">${h(bytes(variant.bytes))} · 大小一致</span>`;
+      return `<span class="variant-status"><strong>${current ? "使用中 · 已下载" : "已下载"}</strong><span class="hint">${h(bytes(variant.bytes))} · 大小一致</span></span>`;
     return "未下载";
   }
   function renderVariants() {
@@ -156,33 +168,54 @@ export function models(root, ctx) {
             : variant.name === "fp16"
               ? "GPU/NPU 默认"
               : "";
-        return `<tr><td><strong>${h(variant.name)}</strong>${badge ? `<span class="hint">${badge}</span>` : ""}</td><td>${h(bytes(variant.size))}</td><td data-status="${h(variant.name)}">${variantStatus(variant, op, downloading)}</td><td><code title="${h(variant.path)}">${h(variant.path)}</code></td><td><button data-model="download" data-variant="${h(variant.name)}"${downloading === variant.name ? " disabled" : ""}>${variant.installed ? "重新下载" : "下载"}</button></td></tr>`;
+        return `<tr><td><span class="variant-name"><strong>${h(variant.name)}</strong>${badge ? `<span class="hint">${badge}</span>` : ""}</span></td><td>${h(bytes(variant.size))}</td><td data-status="${h(variant.name)}">${variantStatus(variant, op, downloading, ctx.desktop?.task)}</td><td><code title="${h(variant.path)}">${h(variant.path)}</code></td><td><button data-model="download" data-variant="${h(variant.name)}"${downloading === variant.name ? " disabled" : ""}>${variant.installed ? "重新下载" : "下载"}</button></td></tr>`;
       })
       .join("")}</tbody></table>`;
-    $("[data-baseline]", root).innerHTML = inventory.tokenizer_installed
+    renderBaseline();
+    syncEngineForm(op.active);
+  }
+  function renderBaseline() {
+    const area = $("[data-baseline]", root);
+    if (!area || !inventory) return;
+    const task = ctx.desktop?.task || {};
+    const baseBusy =
+      task.busy &&
+      /下载 (tokenizer\.json|model_quantized\.onnx)/.test(task.stage || "");
+    if (baseBusy) {
+      const pct = task.total
+        ? Math.min(100, Math.round((task.done / task.total) * 100))
+        : 0;
+      area.innerHTML = `<div class="stack" style="flex:1"><strong>并行下载基础文件 ${pct}%</strong><progress ${task.total ? `value="${h(task.done)}" max="${h(task.total)}"` : ""}></progress></div>`;
+      return;
+    }
+    area.innerHTML = inventory.tokenizer_installed
       ? `<span class="hint">基础文件已就绪 · 模型目录 <code>${h(inventory.model_dir)}</code></span>`
       : `<button data-model="prepare" class="primary">下载并准备基础模型</button><span class="hint">首次使用需下载基础文件（quantized 权重 + 分词器，约 543 MiB）并构建索引。</span>`;
-    syncEngineForm(op.active);
   }
   // Polling refreshes status cells in place; rebuilding the whole table would
   // replace buttons mid-click every 3 seconds.
   function updateVariantsProgress() {
     if (!inventory) return;
     const op = ctx.status?.summary?.model_operation || {};
+    const task = ctx.desktop?.task || {};
     const downloading = op.active ? variantFromItem(op.item) : "";
     for (const variant of inventory.variants) {
       const cell = $(`[data-status="${CSS.escape(variant.name)}"]`, root);
       if (!cell) continue;
-      const html = variantStatus(variant, op, downloading);
+      const html = variantStatus(variant, op, downloading, task);
       if (cell.innerHTML !== html) cell.innerHTML = html;
       const button = $(
         `[data-variant="${CSS.escape(variant.name)}"]`,
         root,
       );
+      const clientBusy =
+        task.busy &&
+        String(task.stage || "").includes("model_" + variant.name + ".onnx");
       if (button)
         button.disabled =
-          downloading === variant.name || Boolean(op.active);
+          downloading === variant.name || Boolean(op.active) || clientBusy;
     }
+    renderBaseline();
     syncEngineForm(op.active);
   }
   function update() {
@@ -215,6 +248,20 @@ export function models(root, ctx) {
       ]),
     )}${panel("模型任务", `<div class="panel-body"><p>${h(op.active ? `${phase(op.phase)} · ${op.item || ""}` : "当前没有模型任务")}</p>${op.active ? `<div class="progress-label"><span>${h(bytes(op.done))} / ${h(bytes(op.total))}</span><span>${h(op.elapsed_secs !== undefined ? op.elapsed_secs + " 秒" : "")}</span></div><progress ${op.total ? `value="${h(op.done)}" max="${h(op.total)}"` : ""}></progress>` : ""}${index.error ? `<p class="form-error section-gap">${h(index.error)}</p>` : ""}</div><details class="technical"><summary>推理与索引详情</summary><pre>${h(raw({ inference, index, model: op }))}</pre></details>`)}</div>`;
     updateVariantsProgress();
+    // The client downloaded the baseline files: have the Runtime build the
+    // index once, right after the tokenizer shows up.
+    if (inventory) {
+      if (!inventory.tokenizer_installed) sawMissingBaseline = true;
+      else if (sawMissingBaseline && !baselinePrepared) {
+        baselinePrepared = true;
+        const mirror = currentMirror();
+        execute("model_prepare", {
+          mirror: mirror && mirror !== "auto" ? mirror : "auto",
+        })
+          .then(() => notify("基础模型已就绪，索引已安排"))
+          .catch((error) => notify(error.message, true));
+      }
+    }
   }
   async function load() {
     if (loading || !ctx.desktop?.connected) return;
@@ -291,15 +338,19 @@ export function models(root, ctx) {
       if (operation === "prepare") {
         if (
           !(await confirm(
-            "准备基础模型",
-            "将下载 quantized 权重与分词器（约 543 MiB），并由 Runtime 构建索引。已校验的文件会保留。",
-            "开始准备",
+            "下载基础模型",
+            "将多线程并行下载 quantized 权重与分词器（约 543 MiB）到本机模型目录；完成后自动构建索引。已校验的文件会跳过。",
+            "开始下载",
           ))
         )
           return;
-        result = await execute("model_prepare", {
-          mirror: mirror && mirror !== "auto" ? mirror : "auto",
+        await api("model-download", {
+          variant: "baseline",
+          ...(mirror && mirror !== "auto" ? { mirror } : {}),
         });
+        sawMissingBaseline = true;
+        notify("下载已开始，完成后自动构建索引");
+        await ctx.refresh();
       } else if (operation === "download") {
         const variant = button.dataset.variant;
         const size = inventory?.variants?.find(
@@ -308,15 +359,17 @@ export function models(root, ctx) {
         if (
           !(await confirm(
             "下载权重文件",
-            `将从所选镜像多线程并行下载 BGE-M3 ${variant} 权重（约 ${bytes(size)}）到 ${inventory?.model_dir || "本机模型目录"}；已验证的文件会跳过。`,
+            `将多线程并行下载 BGE-M3 ${variant} 权重（约 ${bytes(size)}）到 ${inventory?.model_dir || "本机模型目录"}；已验证的文件会跳过。`,
             "开始下载",
           ))
         )
           return;
-        result = await execute("model_install", {
-          model: variant,
+        await api("model-download", {
+          variant,
           ...(mirror && mirror !== "auto" ? { mirror } : {}),
         });
+        notify("下载已开始，进度显示在状态列");
+        await ctx.refresh();
       } else if (operation === "cancel") {
         const id = ctx.status?.summary?.model_operation?.id;
         if (!id) throw new Error("没有正在运行的模型任务");

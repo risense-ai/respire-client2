@@ -26,6 +26,15 @@ function activityDayOf(title) {
   return /^活动轨迹 (\d{4}-\d{2}-\d{2})$/.exec(title || "")?.[1] || "";
 }
 
+// Built-in taxonomy categories (crates/app/src/taxonomy.rs). Empty ones stay
+// out of the tree, matching the dashboard; categories with children still show.
+const BUILTIN_CATEGORIES = new Set([
+  "家庭亲友", "健康医疗", "财务理财", "饮食烹饪", "住房家居", "出行交通",
+  "购物消费", "职业工作", "任务计划", "编程开发", "学习成长", "兴趣娱乐",
+  "电子游戏", "运动健身", "社交网络", "旅行游历", "宠物植物", "情感心境",
+  "习惯养成", "灵感创意", "技能库", "经验库", "踩坑录",
+]);
+
 /** Build parent-to-child and diary-date-to-entry indexes in O(n). */
 export function buildIndex(memories = []) {
   const ids = new Set(memories.map((m) => m.id));
@@ -87,6 +96,7 @@ export function childrenOf(index, nodeId) {
     if (kids > 0) return true;
     if (contentless.has(r.id)) return false;
     if (categoryRoot.has(r.id)) return false;
+    if (BUILTIN_CATEGORIES.has(r.title)) return false;
     return true;
   };
   if (!nodeId || nodeId === ROOT_ID) {
