@@ -234,7 +234,7 @@ func (d *desktop) background() {
 					_, _, healthErr := d.m.Health(ctx)
 					cancel()
 					if host.IsUnavailable(healthErr) {
-						return d.m.InstallRuntime(false)
+						return d.m.InstallRuntime(false, d.m.Preferences().RuntimeAutoRestart)
 					}
 				}
 			}
@@ -279,9 +279,11 @@ func (d *desktop) background() {
 			cancel()
 			if err == nil && d.m.Owns(h.Exe) {
 				d.task("检查 Runtime 更新", func() error {
-					// Direct GitHub first; the mirror covers blocked networks.
-					if err := d.m.InstallRuntime(true); err != nil {
-						return d.m.InstallRuntime(false)
+					// The restart switch decides whether the running instance
+					// is gracefully rotated onto the new version directory.
+					restart := d.m.Preferences().RuntimeAutoRestart
+					if err := d.m.InstallRuntime(true, restart); err != nil {
+						return d.m.InstallRuntime(false, restart)
 					}
 					return nil
 				})

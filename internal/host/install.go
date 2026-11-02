@@ -180,7 +180,7 @@ func (m *Manager) stageRuntime(ctx context.Context, release githubRelease, meta 
 	return os.Rename(stage, dest)
 }
 
-func (m *Manager) InstallRuntime(automatic bool) error {
+func (m *Manager) InstallRuntime(automatic bool, restart bool) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
 	defer cancel()
 	m.progress("检查 Runtime 发布", 0, 0)
@@ -238,6 +238,12 @@ func (m *Manager) InstallRuntime(automatic bool) error {
 		if *load.RPC.Running > 0 || *load.RPC.Queued > 0 {
 			return errors.New("Runtime 正忙，本次自动更新已延后；已下载版本会保留")
 		}
+	}
+	// Without restart the new files publish under their own version dir and
+	// the running instance stays on the old one until the next start.
+	if !restart {
+		next := InstalledRuntime{Version: meta.Version, SHA256: meta.BinaryHash}
+		return writeJSON(filepath.Join(m.Root, "runtime.json"), next)
 	}
 	m.progress("等待 Runtime 停止", 0, 0)
 	if err = m.Stop(true); err != nil {

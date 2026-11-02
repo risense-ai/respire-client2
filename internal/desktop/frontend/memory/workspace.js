@@ -54,6 +54,7 @@ export function memoryWorkspace(root, ctx) {
     listPage = 1,
     selectionVersion = 0,
     revision = "",
+    autoReloadAt = 0,
     loaded = false,
     searchCaption = "";
   let metadataCap = null;
@@ -158,6 +159,7 @@ export function memoryWorkspace(root, ctx) {
     }</small></div>`;
   };
   function renderTree(searchRows) {
+    const keptScroll = tree.scrollTop;
     const filtered = filterRecords(searchRows || records, filters);
     root.classList.toggle("graph-mode", mode === "graph");
     root.classList.toggle("wide-mode", mode === "list" || mode === "card");
@@ -222,6 +224,7 @@ export function memoryWorkspace(root, ctx) {
     if (!visible.length)
       tree.innerHTML = '<div class="empty">暂无匹配记忆</div>';
     all(".memory-row", tree).forEach((node) => (node.draggable = true));
+    tree.scrollTop = keptScroll;
     finish();
   }
   function finish() {
@@ -677,6 +680,14 @@ export function memoryWorkspace(root, ctx) {
     const stamp = `${s.data_dir}/${s.local_total}/${s.max_updated_at}`;
     if (stamp !== revision && !busy) {
       revision = stamp;
+      load();
+      return;
+    }
+    // Final-consistency fallback: cloud sync lag or a missed stamp must not
+    // freeze the catalog — quietly re-read it every 30s like the dashboard.
+    const now = Date.now();
+    if (!busy && now >= autoReloadAt) {
+      autoReloadAt = now + 30000;
       load();
     }
   }

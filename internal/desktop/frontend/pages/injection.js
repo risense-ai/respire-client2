@@ -1,6 +1,7 @@
 import { $, all, h, api, action, notify, confirm, panel } from "../ui/core.js";
 import { heading } from "./overview.js";
 import { hostIcons } from "../icons.js";
+import { currentLanguage } from "../ui/i18n.js";
 
 const modes = [
   ["normal", "正常（召回 + 写入）"],
@@ -82,12 +83,16 @@ export function injection(root, ctx) {
       buttons.push(
         `<button data-scope="${h(t.id)}" data-enable="true" data-only="plugin">安装 / 更新插件</button>`,
       );
-    if (t.plugin)
+    if (t.plugin) {
       buttons.push(
-        `<button data-repo="${h(t.plugin.id)}">仓库</button><button data-mirror="${h(
-          t.plugin.id,
-        )}">镜像</button>`,
+        `<button data-repo="${h(t.plugin.id)}">仓库</button>`,
       );
+      // The gh-proxy mirror is a China-only convenience.
+      if (currentLanguage() === "zh")
+        buttons.push(
+          `<button data-mirror="${h(t.plugin.id)}">镜像</button>`,
+        );
+    }
     return buttons.length ? `<div class="actions">${buttons.join("")}</div>` : "";
   };
 

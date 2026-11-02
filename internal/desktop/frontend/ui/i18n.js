@@ -684,6 +684,8 @@ export const ZH_TO_EN = [
   ["自动重启应用", "Auto-restart to apply"],
   ["下载完成后自动重启；关闭后由你点「重启并应用」。", "Restarts automatically after download; when off, confirm with Restart to apply."],
   ["自动安装更新", "Auto-install updates"],
+  ["自动重启 Runtime", "Auto-restart the Runtime"],
+  ["安装完成后优雅停止旧版并启动新版；关闭后新版本在下次启动时生效。", "After install, gracefully stop the old instance and start the new one; when off, the new version applies at the next start."],
   ["按检查频率自动安装客户端管理的 Runtime。", "Installs the client-managed Runtime on the check interval."],
   ["客户端自动下载更新", "Client auto-download updates"],
   ["按检查频率自动发现并下载新版本；频率在更新页调整。", "Finds and downloads new versions on the check interval; set the interval on Updates."],

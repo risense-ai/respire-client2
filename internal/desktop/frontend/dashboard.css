@@ -1165,3 +1165,12 @@ body[data-layout="compact"] #layout-toggle .icon-compact {
 [data-variants] .variant-status strong {
   font-weight: 500;
 }
+/* updates page: symmetric action rows (primary ops, then release links) */
+.upd-actions {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 0.5rem;
+}
+.upd-actions button {
+  width: 100%;
+}

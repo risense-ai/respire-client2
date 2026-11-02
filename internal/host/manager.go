@@ -27,6 +27,7 @@ type Preferences struct {
 	ClientAutoUpdate      bool   `json:"clientAutoUpdate"`
 	ClientAutoRestart     bool   `json:"clientAutoRestart"`
 	RuntimeAutoUpdate     bool   `json:"runtimeAutoUpdate"`
+	RuntimeAutoRestart    bool   `json:"runtimeAutoRestart"`
 	SidebarWidth          int    `json:"sidebarWidth"`
 	MemoryIndexWidth      int    `json:"memoryIndexWidth"`
 }
@@ -54,6 +55,9 @@ func MigratePreferences(p Preferences, stored map[string]json.RawMessage) Prefer
 	}
 	if _, ok := stored["runtimeAutoUpdate"]; !ok {
 		p.RuntimeAutoUpdate = p.AutoUpdate
+	}
+	if _, ok := stored["runtimeAutoRestart"]; !ok {
+		p.RuntimeAutoRestart = true
 	}
 	if !updateIntervalValues[p.ClientUpdateInterval] {
 		p.ClientUpdateInterval = "6h"
@@ -148,7 +152,7 @@ func New() (*Manager, error) {
 		localClient: &http.Client{Timeout: 30 * time.Second, Transport: &http.Transport{Proxy: nil}, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }},
 		prefs: Preferences{AutoRuntime: true, AutoUpdate: true, RuntimeChannel: "stable", ClientChannel: "stable", Layout: "sidebar", Theme: "system", Language: "",
 			ClientUpdateInterval: "6h", RuntimeUpdateInterval: "6h", ClientAutoUpdate: true, RuntimeAutoUpdate: true,
-			ClientAutoRestart: true},
+			ClientAutoRestart: true, RuntimeAutoRestart: true},
 		modelHTTPClient: &http.Client{Transport: &http.Transport{Proxy: nil}}, task: TaskState{Stage: "就绪"},
 		HTTPClient: &http.Client{Timeout: 10 * time.Minute, CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			if len(via) >= 5 {

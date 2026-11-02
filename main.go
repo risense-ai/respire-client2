@@ -54,7 +54,9 @@ func headless(m *host.Manager) {
 	case "stop":
 		err = m.RunTask("停止 Runtime", func() error { return m.Stop(false) })
 	case "install-runtime":
-		err = m.RunTask("安装 Runtime", func() error { return m.InstallRuntime(false) })
+		err = m.RunTask("安装 Runtime", func() error {
+			return m.InstallRuntime(false, m.Preferences().RuntimeAutoRestart)
+		})
 	case "runtime-release":
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()

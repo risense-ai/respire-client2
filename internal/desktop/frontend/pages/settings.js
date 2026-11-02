@@ -20,6 +20,7 @@ import {
 import { heading } from "./overview.js";
 import { typographyPanel } from "../ui/typography.js";
 import { storagePanel } from "./storage.js";
+import { currentLanguage } from "../ui/i18n.js";
 
 function setting(label, description, control) {
   return `<div class="setting-row"><div><strong>${h(label)}</strong><p>${h(description)}</p></div>${control}</div>`;
@@ -244,6 +245,11 @@ export function updates(root, ctx) {
       p = state.preferences || {};
     const channelRow = (pref) =>
       `<div class="panel-body setting-row"><div><strong>发布通道</strong><p>切换通道不会自动降级已经安装的版本。</p></div><select data-pref="${pref}"><option value="stable">Stable</option><option value="dev">Dev</option></select></div>`;
+    // The gh-proxy release mirror is a China-only convenience.
+    const mirrorButton = (target) =>
+      currentLanguage() === "zh"
+        ? `<button data-open-releases="${h(target)}">国内镜像</button>`
+        : "";
     root.innerHTML =
       heading(
         "保持更新",
@@ -261,11 +267,12 @@ export function updates(root, ctx) {
           ["可用版本", u.latest || "—"],
           ["更新来源", u.source || "—"],
         ]) +
-          `<div class="panel-body actions"><button data-update="client-check">检查更新</button><button class="primary" data-update="client-download" ${u.state === "ready" ? "disabled" : ""}>${u.error ? "重试下载" : "下载更新"}</button><button data-update="client-restart" ${u.state !== "ready" ? "disabled" : ""}>重启并应用</button>${u.cancellable ? `<button data-update="client-cancel">取消更新</button>` : ""}<button data-open-releases="client">GitHub Releases</button><button data-open-releases="client-mirror">国内镜像</button></div>${u.error ? `<div class="panel-body form-error">${h(u.error)}</div>` : ""}${u.notes ? `<details class="panel-body section-gap"><summary>版本说明</summary><pre class="release-notes">${h(u.notes)}</pre></details>` : ""}`,
+          `<div class="panel-body upd-actions"><button data-update="client-check">检查更新</button><button class="primary" data-update="client-download" ${u.state === "ready" ? "disabled" : ""}>${u.error ? "重试下载" : "下载更新"}</button><button data-update="client-restart" ${u.state !== "ready" ? "disabled" : ""}>重启并应用</button>${u.cancellable ? `<button data-update="client-cancel">取消更新</button>` : ""}</div><div class="panel-body upd-actions upd-links"><button data-open-releases="client">GitHub Releases</button>${mirrorButton("client-mirror")}</div>${u.error ? `<div class="panel-body form-error">${h(u.error)}</div>` : ""}${u.notes ? `<details class="panel-body section-gap"><summary>版本说明</summary><pre class="release-notes">${h(u.notes)}</pre></details>` : ""}`,
       )}
       ${panel(
         "CLI / Runtime",
         `<div class="panel-body setting-row"><div><strong>自动安装更新</strong><p>按检查频率自动安装客户端管理的 Runtime。</p></div><input type="checkbox" data-pref="runtimeAutoUpdate" aria-label="自动安装更新"></div>` +
+        `<div class="panel-body setting-row"><div><strong>自动重启 Runtime</strong><p>安装完成后优雅停止旧版并启动新版；关闭后新版本在下次启动时生效。</p></div><input type="checkbox" data-pref="runtimeAutoRestart" aria-label="自动重启 Runtime"></div>` +
         `<div class="panel-body setting-row"><div><strong>检查频率</strong><p>自动检查更新的间隔。</p></div><select data-pref="runtimeUpdateInterval"><option value="5m">5 分钟</option><option value="30m">30 分钟</option><option value="1h">1 小时</option><option value="6h">6 小时</option><option value="24h">一天</option></select></div>` +
         channelRow("runtimeChannel") +
         pairs([
@@ -274,13 +281,13 @@ export function updates(root, ctx) {
           ["可用版本", latest?.version || "尚未检查"],
           ["更新来源", latest?.channel || "—"],
         ]) +
-          `<div class="panel-body actions"><button data-cli-check>检查更新</button><button class="primary" data-update="runtime-update" ${task.busy ? "disabled" : ""}>下载并安装</button><button data-open-releases="cli">GitHub Releases</button><button data-open-releases="cli-mirror">国内镜像</button></div>`,
+          `<div class="panel-body upd-actions"><button data-cli-check>检查更新</button><button class="primary" data-update="runtime-update" ${task.busy ? "disabled" : ""}>下载并安装</button><button data-update="runtime-restart" ${task.busy || !state.installed?.version || state.installed.version === (state.health?.bin || "") ? "disabled" : ""}>重启并应用</button></div><div class="panel-body upd-actions upd-links"><button data-open-releases="cli">GitHub Releases</button>${mirrorButton("cli-mirror")}</div>`,
       )}</div>` +
       panel(
         "当前操作",
         `<div class="panel-body"><p>${h(task.stage || "就绪")}</p>${task.total ? `<div class="progress-label"><span>${h(bytes(task.done))} / ${h(bytes(task.total))}</span></div><progress value="${h(task.done)}" max="${h(task.total)}"></progress>` : ""}${task.error ? `<p class="form-error section-gap">${h(task.error)}</p>` : ""}</div>`,
       ) +
-      `<p class="hint section-gap">发布通道在上方选择。自动重启关闭时，下载完成后在「重启并应用」确认；业务操作执行期间不会应用客户端更新。</p>`;
+      `<p class="hint section-gap">发布通道在上方选择。自动重启关闭时：客户端下载完成后在「重启并应用」确认；Runtime 新版本在下次启动时生效。业务操作执行期间不会应用客户端更新。</p>`;
     all("[data-pref]", root).forEach((node) => {
       const value = p[node.dataset.pref];
       if (node.type === "checkbox") node.checked = Boolean(value);
