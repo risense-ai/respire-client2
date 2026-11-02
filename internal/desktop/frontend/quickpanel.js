@@ -95,7 +95,7 @@ function render() {
           : ""),
     ) +
     (state.statusError
-      ? `<p class="form-error">状态读取失败：${h(state.statusError)}</p>`
+      ? `<p class="form-error qp-error" title="状态读取失败：${h(state.statusError)}">状态读取失败</p>`
       : "");
   $("#qp-sync").disabled = state.syncing || !connected;
   $("#qp-sync").textContent = state.syncing ? "同步中…" : "立即同步";
