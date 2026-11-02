@@ -130,3 +130,11 @@ body.quickpanel .facts dd {
 .qp-footer button {
   flex: 1;
 }
+/* status errors stay one clipped line: the full text lives in the tooltip,
+   so a failed poll can never stretch the popup */
+.qp-error {
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

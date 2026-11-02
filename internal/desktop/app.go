@@ -142,6 +142,14 @@ func Run(m *host.Manager, buildVersion string) {
 	// toggles the quick panel next to the icon, right click opens the menu.
 	tray.AttachWindow(d.panel)
 	tray.WindowOffset(8)
+	// Double click jumps straight to the main window, panel tucked away.
+	tray.OnDoubleClick(func() {
+		if d.panel != nil {
+			d.panel.Hide()
+		}
+		d.window.Show()
+		d.window.Focus()
+	})
 	d.app.Event.OnApplicationEvent(events.Common.ApplicationStarted, func(*application.ApplicationEvent) { d.applyAppearance(); go d.background() })
 	d.app.Event.OnApplicationEvent(events.Common.ThemeChanged, func(*application.ApplicationEvent) { d.applyAppearance() })
 	if err = d.app.Run(); err != nil {
