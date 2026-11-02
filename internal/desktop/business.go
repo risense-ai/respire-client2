@@ -165,8 +165,11 @@ func (d *desktop) businessRoute(w http.ResponseWriter, r *http.Request) bool {
 				err = errors.New("设置文件过大")
 				break
 			}
-			if err = json.Unmarshal(data, &p); err == nil {
-				err = d.savePreferences(p)
+			var stored map[string]json.RawMessage
+			if err = json.Unmarshal(data, &stored); err == nil {
+				if err = json.Unmarshal(data, &p); err == nil {
+					err = d.savePreferences(host.MigratePreferences(p, stored))
+				}
 			}
 			result = "设置已导入"
 		case "/api/diagnostics-export":

@@ -50,7 +50,7 @@ body {
 }
 body {
   display: grid;
-  grid-template-columns: 210px minmax(0, 1fr);
+  grid-template-columns: var(--sidebar-w, 210px) minmax(0, 1fr);
   background: var(--bg);
   color: var(--text);
 }
@@ -241,7 +241,7 @@ nav button.active {
   background: var(--soft);
   color: var(--text);
 }
-nav button span {
+nav button [id$="-count"] {
   margin-left: auto;
   font: 0.6875rem ui-monospace,
     monospace;
@@ -853,7 +853,7 @@ body[data-layout="compact"] nav button {
   padding: 5px 8px;
   font-size: 0.8125rem;
 }
-body[data-layout="compact"] nav button span {
+body[data-layout="compact"] nav button [id$="-count"] {
   display: none;
 }
 body[data-layout="compact"] .nav-bottom {
@@ -1105,4 +1105,48 @@ body[data-layout="compact"] h1 {
   height: 1.25rem;
   object-fit: contain;
   display: block;
+}
+/* ── sidebar: drag handle and layout icon toggle ── */
+.sidebar {
+  position: relative;
+  overflow-x: hidden;
+}
+#sidebar-resizer {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  right: 0;
+  width: 8px;
+  cursor: col-resize;
+  z-index: 30;
+}
+#sidebar-resizer:hover {
+  background: linear-gradient(to right, transparent, var(--line));
+}
+body.resizing {
+  cursor: col-resize;
+  user-select: none;
+}
+body.resizing #sidebar-resizer {
+  background: var(--line);
+}
+body[data-layout="compact"] #sidebar-resizer {
+  display: none;
+}
+#layout-toggle {
+  padding: 0.3125rem 0.5rem;
+  min-height: 2.125rem;
+}
+#layout-toggle svg {
+  display: none;
+}
+body:not([data-layout="compact"]) #layout-toggle .icon-sidebar {
+  display: block;
+}
+body[data-layout="compact"] #layout-toggle .icon-compact {
+  display: block;
+}
+/* sidebar nav icons (magpie-style stroke marks) */
+.nav-ic {
+  flex: none;
 }

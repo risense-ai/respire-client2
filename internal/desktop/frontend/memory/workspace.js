@@ -69,10 +69,48 @@ export function memoryWorkspace(root, ctx) {
     `<div class="memory-toolbar"><div class="search-field"><input data-search placeholder="筛选标题 / ID，或回车检索整库" aria-label="搜索记忆"><button data-search-submit>检索整库</button></div><div class="tabs view-tabs" role="tablist" aria-label="视图切换">${VIEW_MODES.map(
       ([value, label]) =>
         `<button role="tab" data-view="${value}" aria-selected="${value === mode}" class="${value === mode ? "active" : ""}">${label}</button>`,
-    ).join("")}</div><button data-merge disabled>合并所选</button><button data-more>载入更多</button></div><div class="memory-caption"><span data-count>正在读取…</span><button data-clear-search hidden>返回目录</button></div><div class="memory-layout"><div class="memory-index" role="tree" aria-label="记忆树"></div><article class="memory-reader"><div class="empty">选择左侧记忆，查看完整内容。</div></article></div>`;
+    ).join("")}</div><button data-merge disabled>合并所选</button><button data-more>载入更多</button></div><div class="memory-caption"><span data-count>正在读取…</span><button data-clear-search hidden>返回目录</button></div><div class="memory-layout"><div class="memory-index" role="tree" aria-label="记忆树"></div><div id="memory-resizer" aria-hidden="true"></div><article class="memory-reader"><div class="empty">选择左侧记忆，查看完整内容。</div></article></div>`;
   const tree = $(".memory-index", root),
     reader = $(".memory-reader", root),
     count = $("[data-count]", root);
+  // Draggable split between the tree index and the reader; width persists in
+  // preferences (0 keeps the proportional default).
+  const INDEX_MIN = 185,
+    INDEX_MAX = 640;
+  const savedIndexWidth = Number(ctx.desktop?.preferences?.memoryIndexWidth) || 0;
+  if (savedIndexWidth >= INDEX_MIN)
+    document.documentElement.style.setProperty(
+      "--memory-index-w",
+      `${savedIndexWidth}px`,
+    );
+  $("#memory-resizer", root).addEventListener("mousedown", (event) => {
+    if (root.classList.contains("graph-mode")) return;
+    event.preventDefault();
+    document.body.classList.add("resizing");
+    const apply = (clientX) => {
+      const layout = $(".memory-layout", root).getBoundingClientRect();
+      const width = Math.round(
+        Math.min(INDEX_MAX, Math.max(INDEX_MIN, clientX - layout.left)),
+      );
+      document.documentElement.style.setProperty(
+        "--memory-index-w",
+        `${width}px`,
+      );
+      return width;
+    };
+    const move = (e) => apply(e.clientX);
+    const up = (e) => {
+      window.removeEventListener("mousemove", move);
+      window.removeEventListener("mouseup", up);
+      document.body.classList.remove("resizing");
+      const width = apply(e.clientX);
+      ctx
+        .savePreferences({ memoryIndexWidth: width })
+        .catch((error) => notify(error.message, true));
+    };
+    window.addEventListener("mousemove", move);
+    window.addEventListener("mouseup", up);
+  });
   const undoButton = document.createElement("button");
   undoButton.textContent = "撤销";
   undoButton.dataset.undo = "";
@@ -239,6 +277,31 @@ export function memoryWorkspace(root, ctx) {
       records = list(data).map((row) =>
         metadataCap ? { ...row, content: undefined } : row,
       );
+      // A paginated catalog flattens subtrees whose parent is not loaded yet:
+      // buildIndex drops orphans to the top level. The metadata edition is
+      // cheap, so top it up until the whole library is in memory.
+      if (metadataCap) {
+        const alive = Number(ctx.status?.summary?.local_alive) || 0;
+        let fetched = limit;
+        while (
+          alive &&
+          records.length < alive &&
+          records.length >= fetched / 2 &&
+          fetched < 100000
+        ) {
+          count.textContent = `已载入 ${number(records.length)} / ${number(alive)} 条，正在补全目录…`;
+          fetched = Math.min(fetched * 2, 100000);
+          const more = await execute("memory_list", {
+            limit: fetched,
+            metadata: true,
+          });
+          if (!root.isConnected) return;
+          const rows = list(more);
+          if (rows.length <= records.length) break; // server has no more
+          records = rows.map((row) => ({ ...row, content: undefined }));
+        }
+        limit = Math.max(limit, fetched);
+      }
       loaded = true;
       succeeded = true;
       // A reader still showing the pre-unlock lock screen resets to the idle hint.

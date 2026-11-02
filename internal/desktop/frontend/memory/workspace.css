@@ -795,3 +795,26 @@ html[data-theme="dark"] .memory-card[data-kind="knowledge"] {
 body[data-layout="compact"] .memory-layout {
 
 }
+/* draggable split between the tree index and the reader */
+.memory-layout {
+  position: relative;
+  grid-template-columns: var(--memory-index-w, minmax(185px, 0.35fr)) minmax(0, 1fr);
+}
+#memory-resizer {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: calc(var(--memory-index-w, 26%) - 4px);
+  width: 8px;
+  cursor: col-resize;
+  z-index: 6;
+}
+#memory-resizer:hover,
+body.resizing #memory-resizer {
+  background: linear-gradient(to right, transparent, var(--line), transparent);
+}
+.graph-mode #memory-resizer,
+.wide-mode #memory-resizer,
+body[data-layout="compact"] #memory-resizer {
+  display: none;
+}

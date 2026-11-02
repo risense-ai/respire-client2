@@ -20,6 +20,54 @@ type Preferences struct {
 	Layout         string `json:"layout"`
 	Theme          string `json:"theme"`
 	Language       string `json:"language"`
+	// Per-component update settings; AutoUpdate above is the legacy master
+	// switch kept only to migrate older preference files.
+	ClientUpdateInterval  string `json:"clientUpdateInterval"`
+	RuntimeUpdateInterval string `json:"runtimeUpdateInterval"`
+	ClientAutoUpdate      bool   `json:"clientAutoUpdate"`
+	ClientAutoRestart     bool   `json:"clientAutoRestart"`
+	RuntimeAutoUpdate     bool   `json:"runtimeAutoUpdate"`
+	SidebarWidth          int    `json:"sidebarWidth"`
+	MemoryIndexWidth      int    `json:"memoryIndexWidth"`
+}
+
+// updateIntervalValues are the cadences the updates page offers.
+var updateIntervalValues = map[string]bool{
+	"5m": true, "30m": true, "1h": true, "6h": true, "24h": true,
+}
+
+// migratePreferences fills settings that older preference files predate: the
+// per-component auto-update switches inherit the legacy master switch, and
+// unset intervals take the historical six-hour cadence.
+func migratePreferences(p Preferences, stored map[string]json.RawMessage) Preferences {
+	return MigratePreferences(p, stored)
+}
+
+// MigratePreferences is the exported form used when importing preference
+// backups produced by older builds.
+func MigratePreferences(p Preferences, stored map[string]json.RawMessage) Preferences {
+	if _, ok := stored["clientAutoUpdate"]; !ok {
+		p.ClientAutoUpdate = p.AutoUpdate
+	}
+	if _, ok := stored["clientAutoRestart"]; !ok {
+		p.ClientAutoRestart = true
+	}
+	if _, ok := stored["runtimeAutoUpdate"]; !ok {
+		p.RuntimeAutoUpdate = p.AutoUpdate
+	}
+	if !updateIntervalValues[p.ClientUpdateInterval] {
+		p.ClientUpdateInterval = "6h"
+	}
+	if !updateIntervalValues[p.RuntimeUpdateInterval] {
+		p.RuntimeUpdateInterval = "6h"
+	}
+	if p.SidebarWidth < 0 {
+		p.SidebarWidth = 0
+	}
+	if p.MemoryIndexWidth < 0 {
+		p.MemoryIndexWidth = 0
+	}
+	return p
 }
 
 func (p Preferences) validate() error {
@@ -36,6 +84,15 @@ func (p Preferences) validate() error {
 		if channel != "stable" && channel != "dev" {
 			return errors.New("更新通道必须是 stable 或 dev")
 		}
+	}
+	if !updateIntervalValues[p.ClientUpdateInterval] || !updateIntervalValues[p.RuntimeUpdateInterval] {
+		return errors.New("更新频率必须是 5m、30m、1h、6h 或 24h")
+	}
+	if p.SidebarWidth < 0 {
+		return errors.New("侧栏宽度无效")
+	}
+	if p.MemoryIndexWidth < 0 {
+		return errors.New("记忆树宽度无效")
 	}
 	return nil
 }
@@ -88,7 +145,9 @@ func New() (*Manager, error) {
 	}
 	m := &Manager{Root: filepath.Join(dataRoot, "client2"), DataRoot: dataRoot, Endpoint: "http://127.0.0.1:" + port,
 		localClient: &http.Client{Timeout: 30 * time.Second, Transport: &http.Transport{Proxy: nil}, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }},
-		prefs:       Preferences{AutoRuntime: true, AutoUpdate: true, RuntimeChannel: "stable", ClientChannel: "stable", Layout: "sidebar", Theme: "system", Language: ""}, task: TaskState{Stage: "就绪"},
+		prefs: Preferences{AutoRuntime: true, AutoUpdate: true, RuntimeChannel: "stable", ClientChannel: "stable", Layout: "sidebar", Theme: "system", Language: "",
+			ClientUpdateInterval: "6h", RuntimeUpdateInterval: "6h", ClientAutoUpdate: true, RuntimeAutoUpdate: true,
+			ClientAutoRestart: true}, task: TaskState{Stage: "就绪"},
 		HTTPClient: &http.Client{Timeout: 10 * time.Minute, CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			if len(via) >= 5 {
 				return errors.New("too many redirects")
@@ -103,7 +162,13 @@ func New() (*Manager, error) {
 	}
 	b, err := os.ReadFile(filepath.Join(m.Root, "preferences.json"))
 	if err == nil {
-		err = json.Unmarshal(b, &m.prefs)
+		var stored map[string]json.RawMessage
+		if err = json.Unmarshal(b, &stored); err == nil {
+			err = json.Unmarshal(b, &m.prefs)
+			if err == nil {
+				m.prefs = migratePreferences(m.prefs, stored)
+			}
+		}
 	}
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return nil, fmt.Errorf("read preferences: %w", err)

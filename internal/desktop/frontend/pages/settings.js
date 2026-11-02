@@ -61,8 +61,23 @@ export function settings(root, ctx) {
         ) +
         setting(
           "自动检查和下载更新",
-          "客户端和 CLI 分别使用下面选择的通道。",
+          "客户端与 Runtime 的更新频率在更新页调整。",
           '<input data-pref="autoUpdate" type="checkbox" aria-label="自动更新">',
+        ) +
+        setting(
+          "客户端自动下载更新",
+          "按检查频率自动发现并下载新版本；频率在更新页调整。",
+          '<input data-pref="clientAutoUpdate" type="checkbox" aria-label="客户端自动下载更新">',
+        ) +
+        setting(
+          "客户端自动重启",
+          "下载完成后自动重启应用；关闭后在更新页手动重启。",
+          '<input data-pref="clientAutoRestart" type="checkbox" aria-label="客户端自动重启">',
+        ) +
+        setting(
+          "Runtime 自动更新",
+          "按检查频率自动安装客户端管理的 Runtime。",
+          '<input data-pref="runtimeAutoUpdate" type="checkbox" aria-label="Runtime 自动更新">',
         ) +
         setting(
           "CLI 发布通道",
@@ -264,6 +279,9 @@ export function updates(root, ctx) {
       ) +
       `<div class="grid">${panel(
         "桌面客户端",
+        `<div class="panel-body setting-row"><div><strong>自动下载更新</strong><p>按检查频率自动发现并下载新版本。</p></div><input type="checkbox" data-pref="clientAutoUpdate" aria-label="自动下载更新"></div>` +
+        `<div class="panel-body setting-row"><div><strong>自动重启应用</strong><p>下载完成后自动重启；关闭后由你点「重启并应用」。</p></div><input type="checkbox" data-pref="clientAutoRestart" aria-label="自动重启应用"></div>` +
+        `<div class="panel-body setting-row"><div><strong>检查频率</strong><p>自动检查更新的间隔。</p></div><select data-pref="clientUpdateInterval"><option value="5m">5 分钟</option><option value="30m">30 分钟</option><option value="1h">1 小时</option><option value="6h">6 小时</option><option value="24h">一天</option></select></div>` +
         pairs([
           ["当前版本", state.version],
           ["发布通道", p.clientChannel],
@@ -275,6 +293,8 @@ export function updates(root, ctx) {
       )}
       ${panel(
         "CLI / Runtime",
+        `<div class="panel-body setting-row"><div><strong>自动安装更新</strong><p>按检查频率自动安装客户端管理的 Runtime。</p></div><input type="checkbox" data-pref="runtimeAutoUpdate" aria-label="自动安装更新"></div>` +
+        `<div class="panel-body setting-row"><div><strong>检查频率</strong><p>自动检查更新的间隔。</p></div><select data-pref="runtimeUpdateInterval"><option value="5m">5 分钟</option><option value="30m">30 分钟</option><option value="1h">1 小时</option><option value="6h">6 小时</option><option value="24h">一天</option></select></div>` +
         pairs([
           ["当前运行", state.health?.bin || "未连接"],
           ["已安装", state.installed?.version || (state.externalRuntime ? `${state.externalRuntime.version}（本机 bin）` : "未安装")],
@@ -287,8 +307,24 @@ export function updates(root, ctx) {
         "当前操作",
         `<div class="panel-body"><p>${h(task.stage || "就绪")}</p>${task.total ? `<div class="progress-label"><span>${h(bytes(task.done))} / ${h(bytes(task.total))}</span></div><progress value="${h(task.done)}" max="${h(task.total)}"></progress>` : ""}${task.error ? `<p class="form-error section-gap">${h(task.error)}</p>` : ""}</div>`,
       ) +
-      `<p class="hint section-gap">更换通道请到设置。客户端下载后会自动重启；业务操作执行期间不会应用客户端更新。</p>`;
+      `<p class="hint section-gap">更换通道请到设置。自动重启关闭时，下载完成后在「重启并应用」确认；业务操作执行期间不会应用客户端更新。</p>`;
+    all("[data-pref]", root).forEach((node) => {
+      const value = p[node.dataset.pref];
+      if (node.type === "checkbox") node.checked = Boolean(value);
+      else node.value = value || "6h";
+    });
   }
+  root.addEventListener("change", (event) => {
+    const control = event.target;
+    if (!control.dataset.pref) return;
+    action(control, async () => {
+      await ctx.savePreferences({
+        [control.dataset.pref]:
+          control.type === "checkbox" ? control.checked : control.value,
+      });
+      notify("设置已保存");
+    });
+  });
   root.addEventListener("click", (event) => {
     const button = event.target.closest("button");
     if (!button) return;

@@ -95,15 +95,16 @@ func Run(m *host.Manager, buildVersion string) {
 	if theme == "dark" || theme == "system" && d.app.Env.IsDarkMode() {
 		background = application.NewRGB(36, 37, 31)
 	}
-	d.window = d.app.Window.NewWithOptions(application.WebviewWindowOptions{Name: "main", Title: "Respire", Width: 1180, Height: 800, MinWidth: 800, MinHeight: 600, URL: "/workspace.html", Hidden: hasArg("--tray"), BackgroundColour: background})
+	d.window = d.app.Window.NewWithOptions(application.WebviewWindowOptions{Name: "main", Title: "Respire", Width: 1180, Height: 800, MinWidth: 800, MinHeight: 600, URL: "/workspace.html", Hidden: hasArg("--tray"), DefaultContextMenuDisabled: true, BackgroundColour: background})
 	// Tray quick panel: a frameless popup anchored to the tray icon; it hides
 	// itself on focus loss so a tray click toggles it like a flyout.
 	d.panel = d.app.Window.NewWithOptions(application.WebviewWindowOptions{
 		Name: "quickpanel", Title: "Respire", Width: 360, Height: 540,
 		URL: "/quickpanel.html", Hidden: true, Frameless: true, AlwaysOnTop: true,
 		DisableResize: true, HideOnFocusLost: true, HideOnEscape: true,
-		Windows:          application.WindowsWindow{HiddenOnTaskbar: true},
-		BackgroundColour: background,
+		DefaultContextMenuDisabled: true,
+		Windows:                    application.WindowsWindow{HiddenOnTaskbar: true},
+		BackgroundColour:           background,
 	})
 	d.notifier = notifier
 	for name, action := range map[string]func(){
@@ -206,6 +207,23 @@ func (d *desktop) restartClient() error {
 	return err
 }
 
+// updateInterval resolves the configured check cadence; unknown values fall
+// back to the historical six-hour default.
+func updateInterval(value string) time.Duration {
+	switch value {
+	case "5m":
+		return 5 * time.Minute
+	case "30m":
+		return 30 * time.Minute
+	case "1h":
+		return time.Hour
+	case "24h":
+		return 24 * time.Hour
+	default:
+		return 6 * time.Hour
+	}
+}
+
 func (d *desktop) background() {
 	if d.m.Preferences().AutoRuntime {
 		d.task("连接 Runtime", func() error {
@@ -223,6 +241,9 @@ func (d *desktop) background() {
 			return err
 		})
 	}
+	// Client and Runtime update on their own cadences (update page); a staged
+	// client update re-checks every minute so it applies once operations end.
+	var lastClient, lastRuntime time.Time
 	timer := time.NewTimer(10 * time.Second)
 	defer timer.Stop()
 	for {
@@ -231,18 +252,28 @@ func (d *desktop) background() {
 			return
 		case <-timer.C:
 		}
-		if d.m.Preferences().AutoUpdate {
+		now := time.Now()
+		prefs := d.m.Preferences()
+		if prefs.ClientAutoUpdate {
 			if d.app.Updater.State() == updater.StateReady {
-				if d.canRestartClient() {
-					if err := d.restartClient(); err != nil {
-						log.Printf("client update restart: %v", err)
+				if prefs.ClientAutoRestart && now.Sub(lastClient) >= time.Minute {
+					lastClient = now
+					if d.canRestartClient() {
+						if err := d.restartClient(); err != nil {
+							log.Printf("client update restart: %v", err)
+						}
 					}
 				}
-			} else {
+			} else if lastClient.IsZero() || now.Sub(lastClient) >= updateInterval(prefs.ClientUpdateInterval) {
+				lastClient = now
 				if err := d.checkClient(true); err != nil {
 					log.Printf("client update: %v", err)
 				}
 			}
+		}
+		if prefs.RuntimeAutoUpdate &&
+			(lastRuntime.IsZero() || now.Sub(lastRuntime) >= updateInterval(prefs.RuntimeUpdateInterval)) {
+			lastRuntime = now
 			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 			h, _, err := d.m.Health(ctx)
 			cancel()
@@ -250,8 +281,7 @@ func (d *desktop) background() {
 				d.task("检查 Runtime 更新", func() error { return d.m.InstallRuntime(true) })
 			}
 		}
-		// A staged update can wait while a business operation finishes.
-		delay := 6 * time.Hour
+		delay := 30 * time.Second
 		if d.app.Updater.State() == updater.StateReady {
 			delay = time.Minute
 		}

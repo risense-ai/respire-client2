@@ -81,6 +81,14 @@ func (d *desktop) handler(static http.Handler) http.Handler {
 				Layout         string `json:"layout"`
 				Theme          string `json:"theme"`
 				Language       string `json:"language"`
+
+				ClientUpdateInterval  string `json:"clientUpdateInterval"`
+				RuntimeUpdateInterval string `json:"runtimeUpdateInterval"`
+				ClientAutoUpdate      bool   `json:"clientAutoUpdate"`
+				ClientAutoRestart     bool   `json:"clientAutoRestart"`
+				RuntimeAutoUpdate     bool   `json:"runtimeAutoUpdate"`
+				SidebarWidth          int    `json:"sidebarWidth"`
+				MemoryIndexWidth      int    `json:"memoryIndexWidth"`
 			}
 			decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096))
 			decoder.DisallowUnknownFields()
@@ -133,7 +141,8 @@ func (d *desktop) handler(static http.Handler) http.Handler {
 					if input.Theme == "" {
 						input.Theme = d.m.Preferences().Theme
 					}
-					err = d.savePreferences(host.Preferences{AutoRuntime: input.AutoRuntime, AutoUpdate: input.AutoUpdate, RuntimeChannel: input.RuntimeChannel, ClientChannel: input.ClientChannel, Layout: input.Layout, Theme: input.Theme, Language: input.Language})
+					err = d.savePreferences(host.Preferences{AutoRuntime: input.AutoRuntime, AutoUpdate: input.AutoUpdate, RuntimeChannel: input.RuntimeChannel, ClientChannel: input.ClientChannel, Layout: input.Layout, Theme: input.Theme, Language: input.Language,
+						ClientUpdateInterval: input.ClientUpdateInterval, RuntimeUpdateInterval: input.RuntimeUpdateInterval, ClientAutoUpdate: input.ClientAutoUpdate, ClientAutoRestart: input.ClientAutoRestart, RuntimeAutoUpdate: input.RuntimeAutoUpdate, SidebarWidth: input.SidebarWidth, MemoryIndexWidth: input.MemoryIndexWidth})
 					result = "设置已保存"
 				case "/api/rpc":
 					result, err = d.m.RPC(input.Command)

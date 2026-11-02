@@ -16,6 +16,8 @@ import {
 import { applyTypography } from "./ui/typography.js";
 import { applyTranslations, setLanguage } from "./ui/i18n.js";
 applyTypography();
+// App surface, not a browser page: no native context menu.
+document.addEventListener("contextmenu", (event) => event.preventDefault());
 
 const phases = {
   idle: "空闲",

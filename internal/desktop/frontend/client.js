@@ -1,4 +1,4 @@
-import { $, all, api, execute, notify, number } from "./ui/core.js";
+import { $, all, api, execute, notify, number, rows } from "./ui/core.js";
 import { overview } from "./pages/overview.js";
 import { memoryWorkspace } from "./memory/workspace.js";
 import { diary } from "./memory/diary.js";
@@ -21,6 +21,8 @@ import {
   t,
 } from "./ui/i18n.js";
 applyTypography();
+// The window is an app surface, not a browser page: no native context menu.
+document.addEventListener("contextmenu", (event) => event.preventDefault());
 
 const definitions = {
   overview: ["概览", overview],
@@ -63,8 +65,15 @@ function appearance() {
     resolved === "dark" ? "brand/respire.svg" : "brand/respire-light.svg";
   $("#theme").value = theme;
   document.body.dataset.layout = prefs.layout || "sidebar";
-  $("#layout-toggle").textContent =
-    prefs.layout === "compact" ? "Sidebar layout" : "Compact layout";
+  const toggle = $("#layout-toggle");
+  const title = prefs.layout === "compact" ? "切换为侧栏布局" : "切换为紧凑布局";
+  toggle.title = t(title);
+  toggle.setAttribute("aria-label", t(title));
+  const width = Number(prefs.sidebarWidth) || 0;
+  document.documentElement.style.setProperty(
+    "--sidebar-w",
+    width ? `${width}px` : "",
+  );
 }
 appearance();
 systemTheme.addEventListener("change", appearance);
@@ -117,6 +126,34 @@ function route() {
   view = definitions[page][1](root, ctx);
   document.querySelector(".view-scroll").scrollTop = 0;
 }
+// Sidebar nav counts: memories come from the status summary; diary (today)
+// and organize (pending suggestions) are RPC-backed and refreshed sparingly.
+const navCounts = { at: 0, running: false };
+async function refreshNavCounts() {
+  if (!ctx.desktop?.connected || navCounts.running) return;
+  if (Date.now() - navCounts.at < 60000) return;
+  navCounts.running = true;
+  navCounts.at = Date.now();
+  try {
+    const day = new Date().toISOString().slice(0, 10);
+    const diaryEnv = await execute("diary_list", { from: day, to: day });
+    if (!document.isConnected) return;
+    $("#nav-diary-count").textContent = number(rows(diaryEnv).length);
+  } catch {
+    $("#nav-diary-count").textContent = "";
+  }
+  try {
+    const suggestEnv = await execute("organize_suggestions", { top: 50 });
+    if (!document.isConnected) return;
+    const items = suggestEnv?.details?.suggests;
+    $("#nav-organize-count").textContent = Array.isArray(items)
+      ? number(items.length)
+      : "";
+  } catch {
+    $("#nav-organize-count").textContent = "";
+  }
+  navCounts.running = false;
+}
 async function refresh() {
   if (refreshing) return;
   refreshing = true;
@@ -160,6 +197,7 @@ async function refresh() {
   } finally {
     refreshing = false;
   }
+  refreshNavCounts();
 }
 all("nav [data-page]").forEach((button) =>
   button.addEventListener("click", () => navigate(button.dataset.page)),
@@ -181,6 +219,33 @@ $("#layout-toggle").addEventListener("click", async () => {
   } catch (error) {
     notify(error.message, true);
   }
+});
+const SIDEBAR_MIN = 170,
+  SIDEBAR_MAX = 380;
+$("#sidebar-resizer").addEventListener("mousedown", (event) => {
+  if (document.body.dataset.layout === "compact") return;
+  event.preventDefault();
+  document.body.classList.add("resizing");
+  const apply = (clientX) =>
+    document.documentElement.style.setProperty(
+      "--sidebar-w",
+      `${Math.min(SIDEBAR_MAX, Math.max(SIDEBAR_MIN, clientX))}px`,
+    );
+  const move = (e) => apply(e.clientX);
+  const up = (e) => {
+    window.removeEventListener("mousemove", move);
+    window.removeEventListener("mouseup", up);
+    document.body.classList.remove("resizing");
+    apply(e.clientX);
+    const width = Math.round(
+      Math.min(SIDEBAR_MAX, Math.max(SIDEBAR_MIN, e.clientX)),
+    );
+    savePreferences({ sidebarWidth: width }).catch((error) =>
+      notify(error.message, true),
+    );
+  };
+  window.addEventListener("mousemove", move);
+  window.addEventListener("mouseup", up);
 });
 $("#language").addEventListener("change", async (event) => {
   try {
