@@ -21,6 +21,9 @@ import {
   t,
 } from "./ui/i18n.js";
 applyTypography();
+// The Wails runtime drives the frameless window: enable its 5px edge
+// resize handles (with cursors) alongside the CSS drag regions.
+window._wails?.setResizable?.(true);
 // The window is an app surface, not a browser page: no native context menu.
 document.addEventListener("contextmenu", (event) => event.preventDefault());
 
