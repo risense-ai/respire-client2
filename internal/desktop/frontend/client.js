@@ -209,6 +209,8 @@ async function refresh() {
 all("nav [data-page]").forEach((button) =>
   button.addEventListener("click", () => navigate(button.dataset.page)),
 );
+// The local-workspace card is a shortcut to the accounts page.
+$("#workspace-entry").addEventListener("click", () => navigate("accounts"));
 // Self-drawn dropdowns: native selects render with dated system chrome on
 // some platforms, so the topbar controls draw their own listbox.
 function initDropdown(dropdown, onChange) {

@@ -39,6 +39,7 @@ export const ZH_TO_EN = [
   ["最小化", "Minimize"],
   ["最大化", "Maximize"],
   ["还原", "Restore"],
+  ["打开账户与空间", "Open Accounts & Spaces"],
   ["模型", "Model"],
   ["切换使用", "Switch to"],
   ["切换任务已提交；Runtime 正在验证并加载模型。", "Switch task submitted; the Runtime is verifying and loading the model."],
