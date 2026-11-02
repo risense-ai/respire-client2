@@ -51,6 +51,19 @@ func (m *Manager) ModelDir() string {
 	return filepath.Join(m.DataRoot, "models", "bge-m3")
 }
 
+// modelDirFor resolves the weight directory for one catalog model: profile
+// models live under models/<id>; m3 keeps the legacy resolution.
+func (m *Manager) modelDirFor(model string) (string, modelDefinition, error) {
+	definition, err := modelDefinitionByID(model)
+	if err != nil {
+		return "", definition, err
+	}
+	if definition.Legacy {
+		return m.ModelDir(), definition, nil
+	}
+	return m.ProfileDir(model), definition, nil
+}
+
 // modelClient streams multi-hundred-MiB chunks: no overall deadline (the
 // request context governs), redirects stay HTTPS-only.
 func (m *Manager) modelClient() *http.Client {
@@ -72,7 +85,11 @@ func modelOrigins(mirror string) []string {
 }
 
 func modelFileURL(origin, rel string) string {
-	return origin + "/" + modelRepo + "/resolve/" + modelRevision + "/" + rel
+	return modelFileURLOf(modelDefinition{Repo: modelRepo, Revision: modelRevision}, origin, rel)
+}
+
+func modelFileURLOf(definition modelDefinition, origin, rel string) string {
+	return origin + "/" + definition.Repo + "/resolve/" + definition.Revision + "/" + rel
 }
 
 // modelMirrorSetting resolves the download source the same way the CLI does:
@@ -121,30 +138,46 @@ func expandTilde(p string) (string, error) {
 	return p, nil
 }
 
-// DownloadModel fetches one pinned file into the model dir. variant is one of
-// the modelFileSpecs keys or "baseline" (tokenizer + quantized weights, the
-// first-run set).
-func (m *Manager) DownloadModel(ctx context.Context, variant, mirror string) error {
+// DownloadModel fetches one pinned file into the model's dir. For m3 the
+// variant is one of the legacy keys or "baseline" (tokenizer + quantized
+// weights, the first-run set); profile models download tokenizer.json plus
+// the chosen onnx variant from their pinned repository.
+func (m *Manager) DownloadModel(ctx context.Context, model, variant, mirror string) error {
+	dir, definition, err := m.modelDirFor(model)
+	if err != nil {
+		return err
+	}
 	var files []modelFileSpec
-	switch variant {
-	case "baseline":
-		files = []modelFileSpec{modelFileSpecs["tokenizer"], modelFileSpecs["quantized"]}
-	default:
-		spec, ok := modelFileSpecs[variant]
-		if !ok {
-			return errors.New("未知模型文件: " + variant)
+	if definition.Legacy {
+		switch variant {
+		case "baseline":
+			files = []modelFileSpec{modelFileSpecs["tokenizer"], modelFileSpecs["quantized"]}
+		default:
+			spec, ok := modelFileSpecs[variant]
+			if !ok {
+				return errors.New("未知模型文件: " + variant)
+			}
+			files = []modelFileSpec{spec}
 		}
-		files = []modelFileSpec{spec}
+	} else {
+		if variant == "baseline" {
+			variant = "quantized"
+		}
+		spec, specErr := definition.modelFileSpecFor(variant)
+		if specErr != nil {
+			return specErr
+		}
+		files = []modelFileSpec{definition.Tokenizer, spec}
 	}
 	origins := modelOrigins(m.modelMirrorSetting(mirror))
 	for _, spec := range files {
-		dest := filepath.Join(m.ModelDir(), filepath.FromSlash(spec.rel))
+		dest := filepath.Join(dir, filepath.FromSlash(spec.rel))
 		if modelFileValid(dest, spec) {
 			continue
 		}
 		var lastErr error
 		for _, origin := range origins {
-			err := m.downloadModelFrom(ctx, modelFileURL(origin, spec.rel), dest, spec)
+			err := m.downloadModelFrom(ctx, modelFileURLOf(definition, origin, spec.rel), dest, spec)
 			if err == nil {
 				break
 			}

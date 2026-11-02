@@ -46,7 +46,54 @@ func (d *desktop) businessRoute(w http.ResponseWriter, r *http.Request) bool {
 	case r.Method == "GET" && r.URL.Path == "/api/model-variants":
 		ctx, cancel := context.WithTimeout(r.Context(), 4*time.Second)
 		defer cancel()
-		result, err = d.m.ModelVariants(ctx)
+		result, err = d.m.ModelVariants(ctx, r.URL.Query().Get("model"))
+	case r.Method == "GET" && r.URL.Path == "/api/model-profile-state":
+		ctx, cancel := context.WithTimeout(r.Context(), 6*time.Second)
+		defer cancel()
+		catalog, catalogErr := d.m.ModelCatalogRPC(ctx)
+		progress, progressErr := d.m.ModelProgress(ctx)
+		result = map[string]any{"catalog": catalog, "progress": progress}
+		err = catalogErr
+		if err == nil {
+			err = progressErr
+		}
+	case r.URL.Path == "/api/model-configure":
+		if r.Method != "POST" || r.Header.Get("X-Respire-Client") != "1" {
+			w.WriteHeader(http.StatusForbidden)
+			err = errors.New("客户端请求被拒绝")
+			break
+		}
+		var body struct {
+			Model string `json:"model"`
+		}
+		if err = json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&body); err != nil {
+			break
+		}
+		ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
+		defer cancel()
+		err = d.m.ModelConfigure(ctx, body.Model)
+		result = "模型档案已注册"
+	case r.URL.Path == "/api/model-switch":
+		if r.Method != "POST" || r.Header.Get("X-Respire-Client") != "1" {
+			w.WriteHeader(http.StatusForbidden)
+			err = errors.New("客户端请求被拒绝")
+			break
+		}
+		var body struct {
+			Model   string `json:"model"`
+			Engine  string `json:"engine"`
+			Variant string `json:"variant"`
+		}
+		if err = json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&body); err != nil {
+			break
+		}
+		if body.Engine == "" {
+			body.Engine = "cpu"
+		}
+		ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+		defer cancel()
+		err = d.m.ModelSwitch(ctx, body.Model, body.Engine, body.Variant)
+		result = "切换任务已提交"
 	case r.URL.Path == "/api/model-download":
 		if r.Method != "POST" || r.Header.Get("X-Respire-Client") != "1" {
 			w.WriteHeader(http.StatusForbidden)
@@ -54,17 +101,22 @@ func (d *desktop) businessRoute(w http.ResponseWriter, r *http.Request) bool {
 			break
 		}
 		var body struct {
+			Model   string `json:"model"`
 			Variant string `json:"variant"`
 			Mirror  string `json:"mirror"`
 		}
 		if err = json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&body); err != nil {
 			break
 		}
+		if body.Model == "" {
+			body.Model = "m3"
+		}
+		model := body.Model
 		variant := body.Variant
 		go d.task("下载模型 "+variant, func() error {
 			ctx, cancel := context.WithTimeout(context.Background(), 60*time.Minute)
 			defer cancel()
-			return d.m.DownloadModel(ctx, variant, body.Mirror)
+			return d.m.DownloadModel(ctx, model, variant, body.Mirror)
 		})
 		result = "下载已开始"
 	case r.Method == "GET" && r.URL.Path == "/api/operation":

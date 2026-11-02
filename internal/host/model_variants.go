@@ -92,11 +92,11 @@ func modelFilesPresent(dir string) bool {
 	return err == nil && !info.IsDir()
 }
 
-// installedVariants returns the variants whose onnx file exists with the exact
-// pinned size under dir.
-func installedVariants(dir string) map[string]int64 {
+// installedVariantsFor returns the variants of one catalog model whose onnx
+// file exists with the exact pinned size under dir.
+func installedVariantsFor(definition modelDefinition, dir string) map[string]int64 {
 	present := map[string]int64{}
-	for _, variant := range modelVariantFiles {
+	for _, variant := range definition.Variants {
 		if info, err := os.Stat(filepath.Join(dir, variantFileName(variant.Name))); err == nil && info.Size() == variant.Size {
 			present[variant.Name] = info.Size()
 		}
@@ -104,16 +104,32 @@ func installedVariants(dir string) map[string]int64 {
 	return present
 }
 
-// ModelVariants reports install state and location for every BGE-M3 variant,
-// powering the client's model table.
-func (m *Manager) ModelVariants(ctx context.Context) (map[string]any, error) {
-	dir, err := m.modelDir(ctx)
+// installedVariants returns the m3 variants whose onnx file exists with the
+// exact pinned size under dir.
+func installedVariants(dir string) map[string]int64 {
+	return installedVariantsFor(modelDefinition{Variants: modelVariantFiles}, dir)
+}
+
+// ModelVariants reports install state and location for every variant of one
+// catalog model, powering the client's model table. m3 keeps the legacy
+// resolution and CLI variant table; profile models read models/<id>.
+func (m *Manager) ModelVariants(ctx context.Context, model string) (map[string]any, error) {
+	definition, err := modelDefinitionByID(model)
 	if err != nil {
 		return nil, err
 	}
-	present := installedVariants(dir)
-	variants := make([]map[string]any, 0, len(modelVariantFiles))
-	for _, variant := range modelVariantFiles {
+	var dir string
+	if definition.Legacy {
+		dir, err = m.modelDir(ctx)
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		dir = m.ProfileDir(model)
+	}
+	present := installedVariantsFor(definition, dir)
+	variants := make([]map[string]any, 0, len(definition.Variants))
+	for _, variant := range definition.Variants {
 		entry := map[string]any{
 			"name":      variant.Name,
 			"size":      variant.Size,
@@ -128,6 +144,7 @@ func (m *Manager) ModelVariants(ctx context.Context) (map[string]any, error) {
 	}
 	_, tokenizerErr := os.Stat(filepath.Join(dir, "tokenizer.json"))
 	return map[string]any{
+		"model":               definition.ID,
 		"model_dir":           dir,
 		"tokenizer_installed": tokenizerErr == nil,
 		"variants":            variants,
