@@ -9,7 +9,6 @@ import {
   action,
   notify,
   panel,
-  pairs,
   input,
   dialog,
   confirm,
@@ -44,13 +43,18 @@ export function accounts(root, ctx) {
       session = s.session || {};
     $("[data-session]", root).innerHTML = panel(
       "当前身份",
-      '<div class="compact-facts">' +
-        pairs([
+      '<div class="identity-grid">' +
+        [
           ["账户", session.user || "本机离线"],
           ["云端会话", session.has_token ? "已登录" : "未登录"],
           ["本机密钥", session.has_local_keys ? "已保存" : "未初始化"],
           ["记忆库", s.data_dir],
-        ]) +
+        ]
+          .map(
+            ([label, value]) =>
+              `<div class="identity-cell"><small>${h(label)}</small><strong>${h(value ?? "—")}</strong></div>`,
+          )
+          .join("") +
         "</div>" +
         `<div class="panel-body actions"><button data-account="login" class="primary">浏览器登录</button><button data-account="dashboard">打开 dashboard</button><button data-account="keygen" ${session.has_local_keys ? "disabled" : ""}>初始化离线记忆库</button><button data-account="keys" ${!session.has_local_keys ? "disabled" : ""}>导出密钥</button><button data-account="logout" ${!session.has_token ? "disabled" : ""}>退出云端会话</button></div>`,
     );

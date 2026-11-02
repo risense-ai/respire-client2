@@ -383,10 +383,30 @@ main {
 .dropdown-menu li[aria-selected="true"] {
   font-weight: 600;
 }
-/* Tighter label/value rows for the account identity panel. */
-.compact-facts .facts > div {
-  padding: 0.4375rem 1.125rem;
-  gap: 14px;
+/* Account identity: two columns of label/value cards with breathing room. */
+.identity-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1px;
+  background: var(--line);
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+}
+.identity-cell {
+  background: var(--panel);
+  padding: 0.8125rem 1.375rem;
+  display: grid;
+  gap: 3px;
+  align-content: center;
+  min-width: 0;
+}
+.identity-cell small {
+  font-size: 0.75rem;
+  color: var(--muted);
+}
+.identity-cell strong {
+  font-size: 0.9375rem;
+  overflow-wrap: anywhere;
 }
 .view-scroll {
   min-height: 0;
