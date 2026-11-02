@@ -342,6 +342,28 @@ $("#refresh").addEventListener("click", async () => {
   await refresh();
   await view?.refresh?.();
 });
+// Frameless window: the drawn controls drive the main window through the
+// desktop bridge; the maximize button mirrors the restored/maximized icon.
+document.addEventListener("click", (event) => {
+  const button = event.target.closest("[data-win]");
+  if (!button) return;
+  const syncMaxIcons = (maximised) => {
+    all('[data-win="max"]').forEach((maxButton) => {
+      maxButton.title = maximised ? t("还原") : t("最大化");
+      maxButton.querySelectorAll("svg").forEach((icon) =>
+        icon.toggleAttribute("hidden", icon.classList.contains("icon-restore") !== maximised),
+      );
+    });
+  };
+  if (button.dataset.win === "min")
+    api("window-minimise", {}).catch(() => {});
+  else if (button.dataset.win === "close")
+    api("window-close", {}).catch(() => {});
+  else if (button.dataset.win === "max")
+    api("window-toggle-maximise", {})
+      .then((result) => syncMaxIcons(Boolean(result?.maximised)))
+      .catch(() => {});
+});
 window.addEventListener("hashchange", route);
 document.addEventListener("respire-operation", () => refresh());
 let translationScheduled = false;

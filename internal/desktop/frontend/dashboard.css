@@ -301,6 +301,45 @@ main {
   min-height: 1.875rem;
   padding: 5px 9px;
 }
+/* Frameless window: the topbar drags the window, controls stay clickable. */
+.topbar {
+  --wails-draggable: drag;
+}
+.topbar :is(button, input, .dropdown) {
+  --wails-draggable: no-drag;
+}
+.window-controls {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  --wails-draggable: no-drag;
+}
+.window-controls button {
+  border: 0;
+  background: transparent;
+  min-height: 1.875rem;
+  width: 2.375rem;
+  padding: 0;
+  border-radius: 4px;
+  color: var(--muted);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.window-controls button svg {
+  display: block;
+}
+.window-controls svg[hidden] {
+  display: none;
+}
+.window-controls button:hover {
+  background: var(--hover);
+  color: var(--text);
+}
+.window-controls button.close:hover {
+  background: var(--danger);
+  color: #fff;
+}
 /* Self-drawn topbar dropdowns: one look on every platform. */
 .dropdown {
   position: relative;

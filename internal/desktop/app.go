@@ -95,7 +95,8 @@ func Run(m *host.Manager, buildVersion string) {
 	if theme == "dark" || theme == "system" && d.app.Env.IsDarkMode() {
 		background = application.NewRGB(36, 37, 31)
 	}
-	d.window = d.app.Window.NewWithOptions(application.WebviewWindowOptions{Name: "main", Title: "Respire", Width: 1180, Height: 800, MinWidth: 800, MinHeight: 600, URL: "/workspace.html", Hidden: hasArg("--tray"), DefaultContextMenuDisabled: true, BackgroundColour: background})
+	// Frameless: the webview draws its own window controls and drag region.
+	d.window = d.app.Window.NewWithOptions(application.WebviewWindowOptions{Name: "main", Title: "Respire", Width: 1180, Height: 800, MinWidth: 800, MinHeight: 600, Frameless: true, URL: "/workspace.html", Hidden: hasArg("--tray"), DefaultContextMenuDisabled: true, BackgroundColour: background})
 	// Tray quick panel: a frameless popup anchored to the tray icon; it hides
 	// itself on focus loss so a tray click toggles it like a flyout.
 	d.panel = d.app.Window.NewWithOptions(application.WebviewWindowOptions{
