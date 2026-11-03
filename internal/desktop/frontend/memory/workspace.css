@@ -818,6 +818,55 @@ body.memory-focus #view {
 .calendar-blank {
   min-height: 55px;
 }
+/* Diary page fills the scroll viewport like the memory layout, so the day
+   timeline scrolls inside its own panel while the calendar stays put. */
+#view:has(.diary-grid) {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+.view-page:has(.diary-grid) {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+.diary-grid {
+  flex: 1;
+  min-height: 0;
+}
+.diary-grid > .panel {
+  min-height: 0;
+}
+.diary-grid > .panel:first-child {
+  overflow-y: auto;
+  scrollbar-width: thin;
+}
+.diary-day-panel {
+  display: flex;
+  flex-direction: column;
+}
+.diary-entries {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+}
+/* Narrow windows stack the panels; fall back to page flow and just bound
+   the timeline, whose own wheel never chains into the page. */
+@media (max-width: 1000px) {
+  .view-page:has(.diary-grid) {
+    display: block;
+    flex: none;
+  }
+  .diary-grid {
+    flex: none;
+  }
+  .diary-entries {
+    max-height: 60vh;
+  }
+}
 /* Diary fragments: a vertical timeline with one node per entry. */
 .timeline {
   list-style: none;
@@ -860,21 +909,27 @@ body.memory-focus #view {
   gap: 2px;
 }
 .timeline-body button {
-  border: 0;
+  border: 1px solid transparent;
   background: none;
-  padding: 2px 6px;
-  margin: 0 -6px;
-  min-height: 0;
+  padding: 4px 10px;
+  margin: 0 -10px;
+  min-height: 2rem;
   border-radius: 4px;
   justify-content: flex-start;
   text-align: left;
   white-space: normal;
-  width: calc(100% + 12px);
+  width: calc(100% + 20px);
   font-size: 0.9375rem;
   color: var(--text);
 }
 .timeline-body button:hover {
   background: var(--hover);
+}
+/* Selected entry: same highlight language as the memory tree rows. */
+.timeline-body button.active {
+  background: var(--soft);
+  border-color: var(--muted);
+  font-weight: 500;
 }
 .timeline-body small {
   padding-left: 6px;
