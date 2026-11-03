@@ -521,7 +521,7 @@ export function models(root, ctx) {
     })();
   });
   async function refreshProfileState() {
-    if (!isProfileModel()) {
+    if (!isProfileModel(modelID)) {
       profileState = null;
       renderVariants();
       return;
@@ -558,7 +558,7 @@ export function models(root, ctx) {
     const apply = event.target.closest("[data-apply]");
     if (apply) {
       action(apply, async () => {
-        if (isProfileModel()) {
+        if (isProfileModel(modelID)) {
           const engine = apply.dataset.engine;
           const variant = apply.dataset.variant;
           switchingVariant = variant;
