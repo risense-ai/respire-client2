@@ -20,6 +20,7 @@ import {
   setLanguage,
   t,
 } from "./ui/i18n.js";
+import { createWizard } from "./onboarding/wizard.js";
 applyTypography();
 // The Wails runtime drives the frameless window: enable its 5px edge
 // resize handles (with cursors) alongside the CSS drag regions.
@@ -59,6 +60,10 @@ const ctx = {
   changeLanguage,
   savePreferences,
 };
+const wizard = createWizard(ctx, {
+  onFinish: () => route(),
+});
+ctx.openWizard = () => wizard.show({ reopen: true });
 const systemTheme = matchMedia("(prefers-color-scheme: dark)");
 function appearance() {
   const prefs = ctx.desktop?.preferences || {};
@@ -90,6 +95,7 @@ async function savePreferences(patch) {
   ctx.desktop.preferences = preferences;
   if (preferences.theme)
     localStorage.setItem("respire-theme", preferences.theme);
+  if (patch.language) languageDropdown.set(patch.language);
   appearance();
 }
 async function changeLanguage(value) {
@@ -97,18 +103,15 @@ async function changeLanguage(value) {
   setLanguage(value);
   location.reload();
 }
-async function chooseFirstLanguage(value) {
-  const preferences = { ...(ctx.desktop?.preferences || {}), language: value };
-  await api("preferences", preferences);
-  if (ctx.desktop) ctx.desktop.preferences = preferences;
-  localStorage.setItem("respire-language", value);
-  setLanguage(value);
-  $("#first-language").hidden = true;
-}
 function navigate(page) {
+  // While the onboarding wizard owns the screen, ordinary routes cannot be
+  // reached; the wizard navigates through ctx.navigate only after pausing
+  // itself (e.g. the updates entry), when isActive() is already false.
+  if (wizard.isActive()) return;
   location.hash = page;
 }
 function route() {
+  if (wizard.isActive()) return;
   const [page = "overview", query = ""] = (
     location.hash.slice(1) || "overview"
   ).split("?");
@@ -330,19 +333,6 @@ $("#sidebar-resizer").addEventListener("mousedown", (event) => {
   window.addEventListener("mousemove", move);
   window.addEventListener("mouseup", up);
 });
-all("#first-language [data-language]").forEach((button) =>
-  button.addEventListener("click", async () => {
-    try {
-      await chooseFirstLanguage(button.dataset.language);
-      applyTranslations();
-    } catch (error) {
-      notify(error.message, true);
-      setLanguage(button.dataset.language);
-      $("#first-language").hidden = true;
-      applyTranslations();
-    }
-  }),
-);
 $("#refresh").addEventListener("click", async () => {
   await refresh();
   await view?.refresh?.();
@@ -369,7 +359,16 @@ document.addEventListener("click", (event) => {
       .then((result) => syncMaxIcons(Boolean(result?.maximised)))
       .catch(() => {});
 });
-window.addEventListener("hashchange", route);
+// While the wizard is active it owns the screen: hash edits from the
+// keyboard or extensions are rolled back instead of re-routing.
+window.addEventListener("hashchange", () => {
+  if (wizard.isActive()) {
+    if (location.hash.slice(1).split("?")[0] !== current)
+      location.hash = current;
+    return;
+  }
+  route();
+});
 document.addEventListener("respire-operation", () => refresh());
 let translationScheduled = false;
 new MutationObserver(() => {
@@ -400,14 +399,15 @@ async function poll() {
     if (preferred) {
       setLanguage(preferred);
       languageDropdown.set(preferred);
-    } else {
-      $("#first-language").hidden = false;
     }
   } catch {
     const preferred = localStorage.getItem("respire-language");
     if (preferred) setLanguage(preferred);
-    $("#first-language").hidden = Boolean(preferred);
   }
   route();
   poll();
+  // First run: the wizard replaces the old first-language layer and covers
+  // every step from language to model enablement.
+  if (ctx.desktop && !ctx.desktop.preferences?.onboardingCompleted)
+    wizard.show();
 })();

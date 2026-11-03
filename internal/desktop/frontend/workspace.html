@@ -7,6 +7,7 @@
     <title>Respire</title>
     <link rel="stylesheet" href="fonts.css" />
     <link rel="stylesheet" href="dashboard.css" />
+    <link rel="stylesheet" href="onboarding/onboarding.css" />
     <link rel="stylesheet" href="memory/workspace.css" />
     <script type="module" src="/wails/runtime.js"></script>
     <script type="module" src="client.js"></script>
@@ -99,15 +100,6 @@
         ><span id="sync-summary">Sync status pending</span>
       </footer>
     </main>
-    <div id="first-language" class="first-language" hidden>
-      <div class="first-language-card">
-        <h1>Choose your language</h1>
-        <p>You can change this later in Settings or from the top-right corner.</p>
-        <div class="actions">
-          <button class="primary" data-language="en">English</button>
-          <button data-language="zh">中文</button>
-        </div>
-      </div>
-    </div>
+    <div id="onboarding" hidden></div>
   </body>
 </html>

@@ -46,6 +46,11 @@ export function settings(root, ctx) {
           "语言",
           "软件界面语言；右上角也可以快速切换。",
           '<select data-pref="language"><option value="en">English</option><option value="zh">中文</option></select>',
+        ) +
+        setting(
+          "初始化向导",
+          "重新运行首启配置：语言、云端同步、模型与设备。",
+          '<button data-wizard-reopen>重新打开初始化向导</button>',
         ),
     ) +
     panel(
@@ -118,6 +123,10 @@ export function settings(root, ctx) {
   root.addEventListener("click", (event) => {
     const button = event.target.closest("button");
     if (!button) return;
+    if (button.hasAttribute("data-wizard-reopen")) {
+      ctx.openWizard?.();
+      return;
+    }
     if (button.dataset.language)
       action(button, async () => {
         await api("cli-language", { language: button.dataset.language });
