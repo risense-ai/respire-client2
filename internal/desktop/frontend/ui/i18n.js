@@ -756,6 +756,7 @@ export const ZH_TO_EN = [
   ["仅在此设备使用", "Use on this device only"],
   ["不同步；仍可本机记录记忆和语义检索，稍后可在「账户与空间」启用。", "No syncing; local memory recording and semantic retrieval still work. You can enable it later in Accounts & Spaces."],
   ["上一步", "Back"],
+  ["下一步", "Next"],
   ["暂不下载", "Skip for now"],
   ["已有账户", "I have an account"],
   ["登录", "Sign in"],

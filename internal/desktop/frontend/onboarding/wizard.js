@@ -214,8 +214,13 @@ export function createWizard(ctx) {
     return `<h1>${h(title)}</h1>${subtitle ? `<p class="wizard-sub">${h(subtitle)}</p>` : ""}${inner}<div class="wizard-actions">${actions}</div><p class="form-error" role="alert" data-wizard-error ${state.error ? "" : "hidden"}>${h(state.error || "")}</p>`;
   }
 
-  function card(label, detail, value, { disabled = false, badge = "" } = {}) {
-    return `<button type="button" class="wizard-choice" data-choice="${h(value)}"${disabled ? " disabled" : ""}><span class="wizard-choice-copy"><strong>${h(label)}${badge ? `<span class="wizard-badge">${h(badge)}</span>` : ""}</strong><small>${h(detail)}</small></span></button>`;
+  function card(
+    label,
+    detail,
+    value,
+    { disabled = false, badge = "", active = false } = {},
+  ) {
+    return `<button type="button" class="wizard-choice${active ? " active" : ""}" data-choice="${h(value)}"${disabled ? " disabled" : ""}><span class="wizard-choice-copy"><strong>${h(label)}${badge ? `<span class="wizard-badge">${h(badge)}</span>` : ""}</strong><small>${h(detail)}</small></span></button>`;
   }
 
   function backButton(step) {
@@ -235,33 +240,38 @@ export function createWizard(ctx) {
   // ----------------------------------------------------------------- steps
 
   function renderLanguage(body) {
+    if (!state.language)
+      state.language =
+        ctx.desktop?.preferences?.language ||
+        localStorage.getItem("respire-language") ||
+        "";
     body.innerHTML = frame(
       "选择语言",
       "之后可以在设置或右上角切换。",
-      `<div class="wizard-choices">${card("English", "界面使用英文", "en")}${card("中文", "界面、记忆和日志使用中文", "zh")}</div>`,
+      `<div class="wizard-choices">${card("English", "界面使用英文", "en", { active: state.language === "en" })}${card("中文", "界面、记忆和日志使用中文", "zh", { active: state.language === "zh" })}</div>`,
+      `<button type="button" class="primary" data-next-language${state.language ? "" : " disabled"}>下一步</button>`,
     );
     all("[data-choice]", body).forEach((choice) =>
-      choice.addEventListener("click", () => chooseLanguage(choice.dataset.choice)),
+      choice.addEventListener("click", () => {
+        if (busy) return;
+        state.language = choice.dataset.choice;
+        applyLanguage(state.language);
+        render();
+      }),
     );
+    $("[data-next-language]", body).addEventListener("click", () => {
+      if (busy || !state.language) return;
+      goto("sync");
+    });
   }
 
-  async function chooseLanguage(value) {
-    if (busy) return;
-    busy = true;
-    try {
-      setLanguage(value);
-      state.error = "";
-      await ctx.savePreferences({
-        language: value,
-        onboardingStep: "sync",
-      });
-      state.step = "sync";
-      render();
-    } catch (error) {
-      setError(error.message);
-    } finally {
-      busy = false;
-    }
+  // Selecting a card applies the language at once so the wizard and the UI
+  // behind it retranslate; 下一步 advances without re-saving.
+  function applyLanguage(value) {
+    setLanguage(value);
+    ctx.savePreferences({ language: value }).catch((error) => {
+      notify(error.message, true);
+    });
   }
 
   function renderSync(body) {
@@ -272,16 +282,27 @@ export function createWizard(ctx) {
         "启用云端同步（推荐）",
         "多设备访问，端到端加密同步；需要注册或登录账户。",
         "cloud",
-        { badge: "推荐" },
+        { badge: "推荐", active: state.syncChoice === "cloud" },
       )}${card(
         "仅在此设备使用",
         "不同步；仍可本机记录记忆和语义检索，稍后可在「账户与空间」启用。",
         "offline",
+        { active: state.syncChoice === "offline" },
       )}</div>`,
+      backButton("language") +
+        `<button type="button" class="primary" data-next-sync${state.syncChoice ? "" : " disabled"}>下一步</button>`,
     );
     all("[data-choice]", body).forEach((choice) =>
-      choice.addEventListener("click", () => chooseSync(choice.dataset.choice)),
+      choice.addEventListener("click", () => {
+        if (busy) return;
+        state.syncChoice = choice.dataset.choice;
+        render();
+      }),
     );
+    $("[data-next-sync]", body).addEventListener("click", () => {
+      if (busy || !state.syncChoice) return;
+      chooseSync(state.syncChoice);
+    });
   }
 
   async function chooseSync(value) {
@@ -448,7 +469,7 @@ export function createWizard(ctx) {
         "保存恢复材料",
         "",
         '<p class="hint">没有待确认的新恢复材料。你可以在「账户与空间」导出密钥查看。</p>',
-        `<button type="button" class="primary" data-recovery-next>继续</button>`,
+        `<button type="button" class="primary" data-recovery-next>下一步</button>`,
       );
       $("[data-recovery-next]", body).addEventListener("click", () =>
         goto("model"),
@@ -461,7 +482,7 @@ export function createWizard(ctx) {
       `<div class="wizard-recovery"><label>恢复材料<textarea readonly rows="7" data-recovery-text>${h(
         recoveryMaterialJson(state.material),
       )}</textarea></label><div class="actions"><button type="button" data-copy-material>复制恢复材料</button></div><label class="checkbox-label"><input type="checkbox" data-saved-material>我已将恢复材料保存到安全位置</label></div>`,
-      `<button type="button" class="primary" data-recovery-next disabled>继续</button>`,
+      `<button type="button" class="primary" data-recovery-next disabled>下一步</button>`,
     );
     $("[data-copy-material]", body).addEventListener("click", async () => {
       await navigator.clipboard.writeText(
@@ -497,19 +518,26 @@ export function createWizard(ctx) {
         (model, index) =>
           card(model.title, model.detail, model.id, {
             badge: index === 0 ? "默认" : "",
+            active: state.model === model.id,
           }),
       ).join("")}</div>`,
       backButton(state.syncChoice === "cloud" ? "account" : "sync") +
-        `<button type="button" data-skip-model>暂不下载</button>`,
+        `<button type="button" data-skip-model>暂不下载</button><button type="button" class="primary" data-next-model>下一步</button>`,
     );
     all("[data-choice]", body).forEach((choice) =>
       choice.addEventListener("click", () => {
-        state.model = choice.dataset.choice;
-        state.variantTouched = false;
-        state.variant = "";
-        goto("device");
+        if (state.model !== choice.dataset.choice) {
+          state.model = choice.dataset.choice;
+          state.variantTouched = false;
+          state.variant = "";
+        }
+        render();
       }),
     );
+    $("[data-next-model]", body).addEventListener("click", () => {
+      if (busy) return;
+      goto("device");
+    });
     $("[data-skip-model]", body).addEventListener("click", async () => {
       if (
         await confirm(
@@ -546,6 +574,7 @@ export function createWizard(ctx) {
             (device.id === "gpu" && !gpuEntry) ||
             (device.id === "npu" && !npuEntry),
           badge: device.id === "cpu" ? "默认" : "",
+          active: state.device === device.id,
         }),
       ).join("")}</div>${
         state.device === "npu" && npuEntry
@@ -553,7 +582,7 @@ export function createWizard(ctx) {
           : ""
       }<details class="wizard-advanced"><summary>高级：选择权重</summary><div class="stack" data-weights><p class="hint">正在读取模型目录…</p></div></details><p class="hint" data-download-estimate></p>`,
       backButton("model") +
-        `<button type="button" class="primary" data-device-next disabled>继续</button>`,
+        `<button type="button" class="primary" data-device-next>下一步</button>`,
     );
     all("[data-choice]", body).forEach((choice) =>
       choice.addEventListener("click", () => {
@@ -604,7 +633,6 @@ export function createWizard(ctx) {
     }
     const next = $("[data-device-next]", body);
     if (next) {
-      next.disabled = false;
       next.addEventListener("click", () => goto("confirm"));
     }
     updateEstimate(body, inventory);
@@ -1141,6 +1169,7 @@ export function createWizard(ctx) {
     state = {
       step: prefs.onboardingStep || "language",
       syncChoice: prefs.onboardingSyncChoice || "",
+      language: "",
       accountMode: "register",
       accountPhase: "auth",
       autoSync: true,
