@@ -174,9 +174,12 @@ func (d *desktop) notifySystem(title, body string) {
 		return
 	}
 	go func() {
+		// ThreadID must stay unset: wails renders it as a <header> without the
+		// schema-required arguments attribute, and Windows then drops the body
+		// and shows the title alone.
 		if err := d.notifier.SendNotification(notifications.NotificationOptions{
 			ID: "respire-update-" + fmt.Sprint(time.Now().UnixNano()), Title: title, Body: body,
-			ThreadID: "updates", InterruptionLevel: notifications.InterruptionLevelActive,
+			InterruptionLevel: notifications.InterruptionLevelActive,
 		}); err != nil {
 			log.Printf("system notification: %v", err)
 		}
