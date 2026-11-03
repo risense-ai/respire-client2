@@ -107,6 +107,17 @@ func Run(m *host.Manager, buildVersion string) {
 		Windows:                    application.WindowsWindow{HiddenOnTaskbar: true},
 		BackgroundColour:           background,
 	})
+	// WebView2 can miss a bounds update while the flyout window is hidden
+	// (it hides on focus loss, and content-sized height changes land while
+	// hidden). A same-size SetWindowPos raises no WM_SIZE, so the stale
+	// smaller webview would leave a permanent strip of window background
+	// below the page. Nudge the height once on every show to re-sync.
+	d.panel.OnWindowEvent(events.Common.WindowShow, func(*application.WindowEvent) {
+		if width, height := d.panel.Size(); height > 0 {
+			d.panel.SetSize(width, height+1)
+			d.panel.SetSize(width, height)
+		}
+	})
 	d.notifier = notifier
 	for name, action := range map[string]func(){
 		"CmdOrCtrl+Shift+R": func() { d.window.Show(); d.window.Focus() },
