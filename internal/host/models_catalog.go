@@ -245,6 +245,9 @@ func (m *Manager) ModelCatalogRPC(ctx context.Context) (json.RawMessage, error) 
 
 // ModelConfigure registers a profile model's resources with the runtime.
 func (m *Manager) ModelConfigure(ctx context.Context, model, variant string) error {
+	if err := m.ensureRuntimeFeature(ctx, minProfileRuntimeVersion, "注册模型档案"); err != nil {
+		return err
+	}
 	definition, err := modelDefinitionByID(model)
 	if err != nil {
 		return err
@@ -262,6 +265,9 @@ func (m *Manager) ModelConfigure(ctx context.Context, model, variant string) err
 
 // ModelSwitch activates a model profile with the chosen engine.
 func (m *Manager) ModelSwitch(ctx context.Context, model, engine, variant string) error {
+	if err := m.ensureRuntimeFeature(ctx, minProfileRuntimeVersion, "切换模型档案"); err != nil {
+		return err
+	}
 	if _, err := modelDefinitionByID(model); err != nil {
 		return err
 	}
