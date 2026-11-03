@@ -118,6 +118,14 @@ textarea {
 select {
   min-height: 2.125rem;
 }
+/* Single-line controls share one explicit height: WebKit gives number
+   inputs and selects a taller intrinsic size than text inputs, which made
+   rows like the typography settings visibly uneven. Text inputs compute
+   exactly this value naturally, so only the other engines change. */
+input:not([type="checkbox"]),
+select {
+  height: calc(1.5em + 1rem + 2px);
+}
 label {
   display: grid;
   gap: 6px;
