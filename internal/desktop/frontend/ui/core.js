@@ -122,7 +122,7 @@ export function metric(label, value, note = "") {
   return `<div class="metric"><span>${h(label)}</span><strong>${h(value)}</strong><small>${h(note)}</small></div>`;
 }
 export function input(name, label, value = "", options = {}) {
-  return `<label>${h(label)}<input name="${h(name)}" value="${h(value)}" type="${h(options.type || "text")}" ${options.required ? "required" : ""} ${options.placeholder ? `placeholder="${h(options.placeholder)}"` : ""} autocomplete="${options.type === "password" ? "new-password" : "off"}"></label>`;
+  return `<label>${h(label)}<input name="${h(name)}" value="${h(value)}" type="${h(options.type || "text")}" ${options.required ? "required" : ""} ${options.placeholder ? `placeholder="${h(options.placeholder)}"` : ""} ${options.step ? `step="${h(options.step)}"` : ""} autocomplete="${options.type === "password" ? "new-password" : "off"}"></label>`;
 }
 export function select(name, label, items, value) {
   return `<label>${h(label)}<select name="${h(name)}">${items

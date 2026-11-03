@@ -35,6 +35,30 @@ import {
   openDownloadModal,
 } from "./model-kit.js";
 
+// Five-axis recall fusion (docs/client2gui-recall-fusion.md): the GUI only
+// edits the persistent `recall_fusion` agent setting and shows the host
+// receipt; the algorithm runs in the Runtime. Names must match the CLI.
+const FUSION_MODES = [
+  ["legacy", "原有融合（默认）"],
+  ["attention", "五轴注意力融合"],
+  ["attention_anchor", "相关性锚定融合"],
+  ["auto", "自动选择"],
+];
+const FUSION_NUMERIC = [
+  ["fusion_alpha", "先验总份额", 0.2],
+  ["fusion_beta", "词法份额", 0.25],
+  ["fusion_temperature", "注意力温度", 1],
+  ["fusion_gate_recency", "普通查询时间门", 0.02],
+  ["fusion_gate_recency_temporal", "时间查询时间门", 1],
+  ["fusion_gate_hot", "热度门", 0.1],
+  ["fusion_gate_tree", "树位置门", 0.02],
+  ["fusion_temporal_alpha", "时间查询追加份额", 0.15],
+];
+const fusionLabel = (key) =>
+  FUSION_NUMERIC.find(([name]) => name === key)?.[1] || key;
+const fusionModeName = (mode) =>
+  FUSION_MODES.find(([id]) => id === mode)?.[1] || mode;
+
 export function models(root, ctx) {
   let agent = {},
     backend = {},
@@ -48,7 +72,8 @@ export function models(root, ctx) {
     profileState = null,
     switchInFlight = false,
     switchingVariant = "",
-    switchTimer = null;
+    switchTimer = null,
+    fusion = { runtime: null, draft: null, checked: false, loadFailed: false };
   root.innerHTML =
     heading("模型与索引", "查看真实加载与下载进度，管理推理引擎和检索方式。") +
     `<div data-live></div>` +
@@ -82,6 +107,20 @@ export function models(root, ctx) {
         ],
         "fast",
       )}<p class="hint">高质量模式会把查询和候选标题发送到配置的模型服务。服务失败时 Runtime 会报告状态并保留本机结果。</p><div class="actions"><button type="submit">保存召回方式</button><button type="button" data-model="index">安排后台索引</button><button type="button" data-model="rebuild">重新计算向量</button></div></form>`,
+    ) +
+    panel(
+      "五轴注意力融合",
+      `<div class="panel-body stack" data-fusion><p class="hint">对通过准入检查的向量候选融合语义、词法、时间、热度与树位置信号；算法在 Runtime 内执行，这里只保存设置并在下一次召回时生效。自动选择由 Runtime 按候选库大小决定，不承诺召回质量提升。</p><p class="hint" data-fusion-effective>正在读取配置…</p><form data-fusion-form class="stack" hidden>${select(
+        "fusion",
+        "融合模式",
+        FUSION_MODES,
+        "legacy",
+      )}<details><summary>高级参数</summary><div class="form-grid">${FUSION_NUMERIC.map(
+        ([key, label, value]) =>
+          input(key, label, value, { type: "number", step: "any" }),
+      ).join(
+        "",
+      )}</div><p class="hint">语义份额 = 1 − 先验总份额 − 词法份额；时间、热度与树位置在先验份额内按各自门值参与，时间查询会追加先验份额并受剩余份额限制。份额与门值取 0–1，注意力温度大于 0 且不大于 10。</p></details><div class="actions"><button type="submit">保存</button><button type="button" data-fusion-reset>恢复默认</button><span class="hint" data-fusion-state></span></div></form></div>`,
     ) +
     panel(
       "高质量召回服务",
@@ -206,6 +245,80 @@ export function models(root, ctx) {
     );
     return quantized?.size || 0;
   }
+  // Fusion panel: the first line is what the Runtime will use next query
+  // (defaults + saved settings + env overrides); the editor below shows the
+  // saved draft. No receipt capability → editor stays hidden.
+  function renderFusion() {
+    const area = $("[data-fusion]", root);
+    if (!area) return;
+    const runtime = fusion.runtime;
+    const editor = $("[data-fusion-form]", root);
+    const state = $("[data-fusion-state]", root);
+    if (!runtime?.effective) {
+      editor.hidden = true;
+      $("[data-fusion-effective]", root).textContent = fusion.loadFailed
+        ? "融合配置读取失败，请刷新页面。"
+        : fusion.checked
+          ? "当前 CLI 不支持五轴融合设置，请升级 CLI 后再使用。"
+          : "正在读取配置…";
+      return;
+    }
+    editor.hidden = false;
+    const overrides = Array.isArray(runtime.overrides) ? runtime.overrides : [];
+    const configured = runtime.configured || {};
+    let text = `当前生效模式：${fusionModeName(runtime.effective.fusion)} · 修改在下一次召回时生效。`;
+    text += Object.keys(configured).length
+      ? "编辑区显示已保存设置。"
+      : "未保存自定义设置，当前按默认值运行。";
+    if (overrides.length)
+      text += ` 环境覆盖 ${overrides.length} 项：${overrides
+        .map(
+          (key) =>
+            `${fusionLabel(key)} 生效 ${runtime.effective[key]}${
+              configured[key] !== undefined
+                ? `（已保存 ${configured[key]}）`
+                : ""
+            }`,
+        )
+        .join("；")}。保存不会清除 Runtime 环境变量。`;
+    $("[data-fusion-effective]", root).textContent = text;
+    state.textContent = "";
+    const draft = fusion.draft || {};
+    $("[name=fusion]", editor).value = draft.fusion || "legacy";
+    for (const [key] of FUSION_NUMERIC) {
+      const node = $(`[name=${key}]`, editor);
+      if (node) node.value = draft[key] === undefined ? "" : String(draft[key]);
+    }
+  }
+  // Collect + validate the draft. Only instant feedback: the host and the
+  // Runtime re-validate the whole object on save.
+  function fusionDraft() {
+    const form = $("[data-fusion-form]", root);
+    const draft = { fusion: $("[name=fusion]", form).value };
+    for (const [key, label] of FUSION_NUMERIC) {
+      const text = $(`[name=${key}]`, form).value.trim();
+      if (!text) throw new Error(`${label}不能为空`);
+      const value = Number(text);
+      if (!Number.isFinite(value)) throw new Error(`${label}必须是有限数字`);
+      if (key === "fusion_temperature") {
+        if (value <= 0 || value > 10)
+          throw new Error(`${label}需大于 0 且不大于 10`);
+      } else if (value < 0 || value > 1) {
+        throw new Error(`${label}取值范围为 0–1`);
+      }
+      draft[key] = value;
+    }
+    if (draft.fusion_alpha + draft.fusion_beta > 1)
+      throw new Error("先验总份额与词法份额之和不能大于 1");
+    return draft;
+  }
+  function adoptFusion(runtime) {
+    fusion.checked = true;
+    fusion.runtime = runtime || null;
+    if (fusion.runtime?.effective)
+      fusion.draft = { ...fusion.runtime.defaults, ...fusion.runtime.configured };
+    renderFusion();
+  }
   // Polling refreshes status cells in place; rebuilding the whole table would
   // replace buttons mid-click every 3 seconds.
   function updateVariantsProgress() {
@@ -303,6 +416,8 @@ export function models(root, ctx) {
       if (!root.isConnected) return;
       if (values[0].status === "fulfilled") {
         agent = summary(values[0].value);
+        fusion.loadFailed = false;
+        adoptFusion(agent.recall_fusion_runtime);
         $("[data-recall] [name=mode]", root).value =
           agent.recall_mode || "fast";
         const mirror = agent.model_mirror || "auto";
@@ -355,6 +470,10 @@ export function models(root, ctx) {
         }
       } else {
         profileState = null;
+      }
+      if (values[0].status === "rejected") {
+        fusion.loadFailed = true;
+        renderFusion();
       }
       $("[data-mirror] [name=model]", root).value = modelID;
       $("[data-api] [name=base]", root).value =
@@ -612,6 +731,52 @@ export function models(root, ctx) {
       await execute("agent_set", { setting: "recall_model=" + value.model });
       notify("召回服务配置已保存");
       await load();
+    });
+  });
+  // Save the whole recall_fusion object in one agent_set, then read it back:
+  // a mismatch means the stored config changed under us, a failed readback
+  // means the write outcome is unconfirmed — never auto-retry the write.
+  $("[data-fusion-form]", root).addEventListener("submit", (event) => {
+    event.preventDefault();
+    action($("[type=submit]", event.target), async () => {
+      if (!fusion.runtime?.effective)
+        throw new Error("请先升级支持五轴融合设置的 CLI");
+      const draft = fusionDraft();
+      await execute("agent_set", {
+        setting: "recall_fusion=" + JSON.stringify(draft),
+      });
+      let readBack;
+      try {
+        readBack = summary(await execute("agent_config")).recall_fusion_runtime;
+      } catch {
+        notify("写入已提交，但回读失败：结果待确认，请刷新设置。", true);
+        return;
+      }
+      if (readBack?.effective) adoptFusion(readBack);
+      if (
+        !readBack?.configured ||
+        Object.keys(draft).some((key) => readBack.configured[key] !== draft[key])
+      )
+        throw new Error("保存后的回读与草稿不一致，配置可能已变化，请刷新设置");
+      const overrides = readBack.overrides || [];
+      notify(
+        overrides.length
+          ? `已保存；但这些字段由 Runtime 环境覆盖：${overrides
+              .map(fusionLabel)
+              .join("、")}，保存值不会生效。`
+          : "五轴融合设置已保存，下一次召回生效。",
+        overrides.length > 0,
+      );
+    });
+  });
+  // Restoring defaults only rewrites the draft; nothing persists until 保存.
+  $("[data-fusion-reset]", root).addEventListener("click", (event) => {
+    action(event.target, async () => {
+      if (!fusion.runtime?.defaults)
+        throw new Error("请先升级支持五轴融合设置的 CLI");
+      fusion.draft = { ...fusion.runtime.defaults };
+      renderFusion();
+      $("[data-fusion-state]", root).textContent = "已恢复默认草稿；保存后生效。";
     });
   });
   update();
