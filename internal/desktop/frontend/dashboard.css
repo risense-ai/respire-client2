@@ -429,8 +429,6 @@ main {
   scrollbar-gutter: stable;
 }
 #view {
-  max-width: 1450px;
-  margin: auto;
   padding: 1.625rem 1.5rem 1.5rem;
   outline: none;
 }
