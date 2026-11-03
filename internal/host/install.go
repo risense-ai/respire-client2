@@ -90,7 +90,7 @@ func verifyRuntime(dir, binaryHash string) error {
 		return err
 	}
 	if hash != binaryHash {
-		return errors.New("installed CLI hash mismatch")
+		return errors.New("installed Runtime hash mismatch")
 	}
 	if err := verifyExecutable(filepath.Join(dir, runtimeBinary())); err != nil {
 		return err
@@ -133,8 +133,8 @@ func verifyRuntime(dir, binaryHash string) error {
 }
 
 // stageRuntime publishes a complete immutable version before lifecycle changes begin.
-func (m *Manager) stageRuntime(ctx context.Context, release githubRelease, meta cliMetadata) error {
-	dest := m.runtimeDir(meta.Version)
+func (m *Manager) stageRuntime(ctx context.Context, release githubRelease, meta runtimeMetadata) error {
+	dest := m.runtimeDir(meta.RuntimeVersion)
 	if _, err := os.Stat(dest); err == nil {
 		return verifyRuntime(dest, meta.BinaryHash)
 	} else if !errors.Is(err, os.ErrNotExist) {
@@ -149,11 +149,11 @@ func (m *Manager) stageRuntime(ctx context.Context, release githubRelease, meta 
 		return err
 	}
 	defer os.RemoveAll(stage)
-	binURL, err := assetURL(release, meta.Binary)
+	binURL, err := assetURL(release, runtimeRepo, meta.Binary)
 	if err != nil {
 		return err
 	}
-	archiveURL, err := assetURL(release, meta.Runtime)
+	archiveURL, err := assetURL(release, runtimeRepo, runtimeArchive(meta.Target))
 	if err != nil {
 		return err
 	}
@@ -164,7 +164,7 @@ func (m *Manager) stageRuntime(ctx context.Context, release githubRelease, meta 
 		return err
 	}
 	archive := filepath.Join(stage, "runtime.tar.gz")
-	if err = m.download(ctx, archiveURL, archive, meta.RuntimeHash, 128<<20); err != nil {
+	if err = m.download(ctx, archiveURL, archive, meta.ArchiveHash, 128<<20); err != nil {
 		return err
 	}
 	m.progress("校验并准备 Runtime", 0, 0)
@@ -192,8 +192,14 @@ func (m *Manager) InstallRuntime(automatic bool, restart bool) error {
 	if prevErr != nil && !errors.Is(prevErr, os.ErrNotExist) {
 		return prevErr
 	}
-	if prevErr == nil && semver.Compare("v"+previous.Version, "v"+meta.Version) >= 0 {
-		return m.Start()
+	if prevErr == nil && semver.Compare("v"+previous.Version, "v"+meta.RuntimeVersion) >= 0 {
+		// The version guard only short-circuits when the installed layout
+		// verifies against the remote metadata. Legacy combined installs
+		// (runtime/<ver>/rsrs) fail that check under the split runtime
+		// binary name; fall through and reinstall from the new source.
+		if verifyErr := verifyRuntime(m.runtimeDir(previous.Version), meta.BinaryHash); verifyErr == nil {
+			return m.Start()
+		}
 	}
 	h, _, err := m.Health(ctx)
 	if err == nil && !m.Owns(h.Exe) {
@@ -242,14 +248,14 @@ func (m *Manager) InstallRuntime(automatic bool, restart bool) error {
 	// Without restart the new files publish under their own version dir and
 	// the running instance stays on the old one until the next start.
 	if !restart {
-		next := InstalledRuntime{Version: meta.Version, SHA256: meta.BinaryHash}
+		next := InstalledRuntime{Version: meta.RuntimeVersion, SHA256: meta.BinaryHash}
 		return writeJSON(filepath.Join(m.Root, "runtime.json"), next)
 	}
 	m.progress("等待 Runtime 停止", 0, 0)
 	if err = m.Stop(true); err != nil {
 		return err
 	}
-	next := InstalledRuntime{Version: meta.Version, SHA256: meta.BinaryHash}
+	next := InstalledRuntime{Version: meta.RuntimeVersion, SHA256: meta.BinaryHash}
 	if err = writeJSON(filepath.Join(m.Root, "runtime.json"), next); err != nil {
 		if prevErr == nil {
 			err = errors.Join(err, m.Start())

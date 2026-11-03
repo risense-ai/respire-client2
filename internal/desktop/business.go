@@ -42,7 +42,7 @@ func (d *desktop) businessRoute(w http.ResponseWriter, r *http.Request) bool {
 		defer cancel()
 		_, metadata, releaseErr := d.m.LatestRuntime(ctx)
 		err = releaseErr
-		result = map[string]any{"version": metadata.Version, "channel": d.m.Preferences().RuntimeChannel}
+		result = map[string]any{"version": metadata.RuntimeVersion, "channel": d.m.Preferences().RuntimeChannel}
 	case r.Method == "GET" && r.URL.Path == "/api/model-variants":
 		ctx, cancel := context.WithTimeout(r.Context(), 4*time.Second)
 		defer cancel()

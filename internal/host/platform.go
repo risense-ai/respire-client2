@@ -31,7 +31,21 @@ func binaryExtension() string {
 	return ""
 }
 
-func runtimeBinary() string { return "rsrs" + binaryExtension() }
+// cliBinary is the host CLI executable (npm and manual installations).
+func cliBinary() string { return "rsrs" + binaryExtension() }
+
+// runtimeBinary is the split managed Runtime executable published by
+// risense-ai/respire-runtime.
+func runtimeBinary() string { return "rsrs-runtime" + binaryExtension() }
+
+// acceptsRuntimeBinary reports whether a managed Runtime process image or
+// directory entry matches a supported runtime executable. Legacy combined
+// installs ran the CLI binary (rsrs) as the Runtime; that name stays
+// accepted so old managed layouts can be stopped, verified as stale, and
+// replaced instead of dead-ending the update path.
+func acceptsRuntimeBinary(name string) bool {
+	return samePath(name, runtimeBinary()) || samePath(name, cliBinary())
+}
 
 func runtimeTarget() (string, error) {
 	target := map[string]string{

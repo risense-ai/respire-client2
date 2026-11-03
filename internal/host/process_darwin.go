@@ -23,7 +23,7 @@ func verifyHostProcess(h HealthInfo) error {
 		return errors.New("Runtime executable path missing")
 	}
 	actual := string(args[4 : 4+end])
-	if !samePath(actual, h.Exe) || filepath.Base(actual) != runtimeBinary() {
+	if !samePath(actual, h.Exe) || !acceptsRuntimeBinary(filepath.Base(actual)) {
 		return errors.New("Runtime process identity mismatch")
 	}
 	return nil
