@@ -334,6 +334,50 @@ func (d *desktop) businessRoute(w http.ResponseWriter, r *http.Request) bool {
 	return true
 }
 
+// patchPreferences overlays only the fields present in the request body onto
+// the stored preferences, so partial form posts never reset fields they do
+// not render.
+func patchPreferences(base host.Preferences, body []byte) (host.Preferences, error) {
+	var keys map[string]json.RawMessage
+	if err := json.Unmarshal(body, &keys); err != nil {
+		return base, err
+	}
+	p := base
+	for _, field := range []struct {
+		key    string
+		target any
+	}{
+		{"autoRuntime", &p.AutoRuntime},
+		{"autoUpdate", &p.AutoUpdate},
+		{"runtimeChannel", &p.RuntimeChannel},
+		{"clientChannel", &p.ClientChannel},
+		{"layout", &p.Layout},
+		{"theme", &p.Theme},
+		{"language", &p.Language},
+		{"clientUpdateInterval", &p.ClientUpdateInterval},
+		{"runtimeUpdateInterval", &p.RuntimeUpdateInterval},
+		{"clientAutoUpdate", &p.ClientAutoUpdate},
+		{"clientAutoRestart", &p.ClientAutoRestart},
+		{"runtimeAutoUpdate", &p.RuntimeAutoUpdate},
+		{"runtimeAutoRestart", &p.RuntimeAutoRestart},
+		{"sidebarWidth", &p.SidebarWidth},
+		{"memoryIndexWidth", &p.MemoryIndexWidth},
+		{"onboardingVersion", &p.OnboardingVersion},
+		{"onboardingCompleted", &p.OnboardingCompleted},
+		{"onboardingStep", &p.OnboardingStep},
+		{"onboardingSyncChoice", &p.OnboardingSyncChoice},
+	} {
+		raw, ok := keys[field.key]
+		if !ok {
+			continue
+		}
+		if err := json.Unmarshal(raw, field.target); err != nil {
+			return base, err
+		}
+	}
+	return p, nil
+}
+
 func writeSettingsExport(path string, value host.Preferences) error {
 	data, err := json.MarshalIndent(value, "", "  ")
 	if err != nil {
