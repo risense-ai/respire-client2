@@ -169,7 +169,9 @@ export function createWizard(ctx) {
   function render() {
     root.hidden = false;
     root.className = "onboarding";
-    root.innerHTML = `<div class="wizard-shell" role="dialog" aria-modal="true" aria-label="初始化向导"><div class="wizard-card"><ol class="wizard-steps">${STEP_ORDER.map(
+    // A re-run opened from Settings can be backed out; the first run has no
+    // exit by design.
+    root.innerHTML = `<div class="wizard-shell" role="dialog" aria-modal="true" aria-label="初始化向导"><div class="wizard-card">${state.reRun ? '<button type="button" class="wizard-exit" data-wizard-exit title="退出向导" aria-label="退出向导">×</button>' : ""}<ol class="wizard-steps">${STEP_ORDER.map(
       (step, index) => {
         const current = stepIndex(state.step);
         const cls =
@@ -180,6 +182,14 @@ export function createWizard(ctx) {
       },
     ).join("")}</ol><div class="wizard-body"></div></div></div>`;
     const body = $(".wizard-body", root);
+    const exit = $("[data-wizard-exit]", root);
+    if (exit)
+      exit.addEventListener("click", () => {
+        if (!state || state.agentBusy) return;
+        // Backing out of a re-run keeps everything already applied and
+        // writes nothing; completion markers are untouched.
+        destroy();
+      });
     // Back buttons are shared across steps; delegate so every re-render
     // keeps them wired.
     body.addEventListener("click", (event) => {
@@ -1148,6 +1158,9 @@ export function createWizard(ctx) {
       agentBusy: false,
       error: "",
       done: false,
+      // Re-run (Settings entry or an already-completed install): starts from
+      // the top and may be exited without writing anything.
+      reRun: Boolean(reopen || completed),
     };
     if (!STEP_ORDER.includes(state.step)) state.step = "language";
     // Model/device/weight choices are deliberately not persisted; after a
@@ -1156,9 +1169,9 @@ export function createWizard(ctx) {
     if (state.step === "confirm" || state.step === "execute")
       state.step = "model";
     executeStarted = false;
-    // A wizard reopened from Settings starts after the language step when a
-    // language is already known; a fresh install begins there.
-    if ((reopen || completed) && state.step === "language" &&
+    // A first run skips the language card when a language is already known;
+    // a re-run always starts from the top so every step is reconfigurable.
+    if (!state.reRun && state.step === "language" &&
       (prefs.language || localStorage.getItem("respire-language")))
       state.step = "sync";
   }

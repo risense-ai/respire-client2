@@ -49,8 +49,8 @@ export function settings(root, ctx) {
         ) +
         setting(
           "初始化向导",
-          "重新运行首启配置：语言、云端同步、模型与设备。",
-          '<button data-wizard-reopen>重新打开初始化向导</button>',
+          "重新运行完整向导重新配置：语言、云端同步、模型、设备与 Agent 工具；已应用的配置保留，可随时退出。",
+          '<button data-wizard-reopen>重新运行初始化向导</button>',
         ),
     ) +
     panel(
