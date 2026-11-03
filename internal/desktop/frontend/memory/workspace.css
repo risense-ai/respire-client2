@@ -510,20 +510,9 @@ html[data-theme="dark"] .memory-card[data-kind="knowledge"] {
   min-height: 1.625rem;
   padding: 2px 7px;
   font-size: 0.6875rem;
-  --wails-draggable: no-drag;
-}
-/* The caption hosts the window controls while focus mode hides the topbar. */
-.memory-caption .window-controls {
-  display: none;
 }
 .memory-caption [data-count] {
   margin-right: auto;
-}
-body.memory-focus .memory-caption {
-  --wails-draggable: drag;
-}
-body.memory-focus .memory-caption .window-controls {
-  display: flex;
 }
 /* Focus mode: the tree and reader fill the whole window. */
 [data-focus] svg {

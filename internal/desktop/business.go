@@ -140,7 +140,7 @@ func (d *desktop) businessRoute(w http.ResponseWriter, r *http.Request) bool {
 		result = "已停止下载"
 	case r.Method == "GET" && r.URL.Path == "/api/operation":
 		result, err = d.m.Operation(r.URL.Query().Get("id"))
-	case r.URL.Path == "/api/execute" || r.URL.Path == "/api/operation-recover" || r.URL.Path == "/api/operation-ack" || r.URL.Path == "/api/file-dialog" || r.URL.Path == "/api/open-dashboard" || r.URL.Path == "/api/open-main" || r.URL.Path == "/api/panel-size" || r.URL.Path == "/api/cli-language" || r.URL.Path == "/api/plugin-install" || r.URL.Path == "/api/inject-set" || r.URL.Path == "/api/inject-mode" || r.URL.Path == "/api/preferences-export" || r.URL.Path == "/api/preferences-import" || r.URL.Path == "/api/diagnostics-export" || r.URL.Path == "/api/open-model-dir" || r.URL.Path == "/api/window-minimise" || r.URL.Path == "/api/window-toggle-maximise" || r.URL.Path == "/api/window-close":
+	case r.URL.Path == "/api/execute" || r.URL.Path == "/api/operation-recover" || r.URL.Path == "/api/operation-ack" || r.URL.Path == "/api/file-dialog" || r.URL.Path == "/api/open-dashboard" || r.URL.Path == "/api/open-main" || r.URL.Path == "/api/panel-size" || r.URL.Path == "/api/cli-language" || r.URL.Path == "/api/plugin-install" || r.URL.Path == "/api/inject-set" || r.URL.Path == "/api/inject-mode" || r.URL.Path == "/api/preferences-export" || r.URL.Path == "/api/preferences-import" || r.URL.Path == "/api/diagnostics-export" || r.URL.Path == "/api/open-model-dir":
 		if r.Method != "POST" || r.Header.Get("X-Respire-Client") != "1" || r.Header.Get("Content-Type") != "application/json" {
 			w.WriteHeader(http.StatusForbidden)
 			err = errors.New("客户端请求被拒绝")
@@ -192,15 +192,6 @@ func (d *desktop) businessRoute(w http.ResponseWriter, r *http.Request) bool {
 			d.window.Show()
 			d.window.Focus()
 			result = "已打开主窗口"
-		case "/api/window-minimise":
-			d.window.Minimise()
-			result = "已最小化"
-		case "/api/window-toggle-maximise":
-			d.window.ToggleMaximise()
-			result = map[string]bool{"maximised": d.window.IsMaximised()}
-		case "/api/window-close":
-			d.window.Close()
-			result = "已关闭"
 		case "/api/panel-size":
 			height := int(math.Round(input.Height))
 			if height < 320 {

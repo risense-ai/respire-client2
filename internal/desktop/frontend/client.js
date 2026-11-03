@@ -22,9 +22,6 @@ import {
 } from "./ui/i18n.js";
 import { createWizard } from "./onboarding/wizard.js";
 applyTypography();
-// The Wails runtime drives the frameless window: enable its 5px edge
-// resize handles (with cursors) alongside the CSS drag regions.
-window._wails?.setResizable?.(true);
 // The window is an app surface, not a browser page: no native context menu.
 document.addEventListener("contextmenu", (event) => event.preventDefault());
 
@@ -337,28 +334,6 @@ $("#sidebar-resizer").addEventListener("mousedown", (event) => {
 $("#refresh").addEventListener("click", async () => {
   await refresh();
   await view?.refresh?.();
-});
-// Frameless window: the drawn controls drive the main window through the
-// desktop bridge; the maximize button mirrors the restored/maximized icon.
-document.addEventListener("click", (event) => {
-  const button = event.target.closest("[data-win]");
-  if (!button) return;
-  const syncMaxIcons = (maximised) => {
-    all('[data-win="max"]').forEach((maxButton) => {
-      maxButton.title = maximised ? t("还原") : t("最大化");
-      maxButton.querySelectorAll("svg").forEach((icon) =>
-        icon.toggleAttribute("hidden", icon.classList.contains("icon-restore") !== maximised),
-      );
-    });
-  };
-  if (button.dataset.win === "min")
-    api("window-minimise", {}).catch(() => {});
-  else if (button.dataset.win === "close")
-    api("window-close", {}).catch(() => {});
-  else if (button.dataset.win === "max")
-    api("window-toggle-maximise", {})
-      .then((result) => syncMaxIcons(Boolean(result?.maximised)))
-      .catch(() => {});
 });
 // While the wizard is active it owns the screen: hash edits from the
 // keyboard or extensions are rolled back instead of re-routing.
