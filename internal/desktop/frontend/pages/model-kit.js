@@ -58,6 +58,56 @@ export const MODEL_CARDS = [
 // Weight per device: CPU stays quantized; GPU/NPU prefer fp16.
 export const DEVICE_VARIANTS = { cpu: "quantized", gpu: "fp16", npu: "fp16" };
 
+// Scenario modes for the models page: three intent cards instead of the raw
+// variant/engine matrix. Subtitles are static fallbacks; the page overrides
+// them with live inventory sizes so numbers never go stale.
+export const MODEL_MODES = [
+  {
+    id: "lite",
+    title: "省空间",
+    subtitle: "~540 MB",
+    description: "最低存储占用，基础性能",
+    variant: "quantized",
+    engine: "cpu",
+    requiresGPU: false,
+  },
+  {
+    id: "balanced",
+    title: "均衡",
+    subtitle: "~540 MB",
+    description: "推荐：质量与速度平衡",
+    variant: "quantized",
+    engine: "cpu",
+    requiresGPU: false,
+    recommended: true,
+  },
+  {
+    id: "performance",
+    title: "高性能",
+    subtitle: "~1 GB",
+    description: "GPU/NPU 加速，需兼容硬件",
+    variant: "fp16",
+    engine: "auto",
+    requiresGPU: true,
+  },
+];
+
+// Map an active weight back to the mode card that represents it; used when
+// an existing installation has no stored mode preference yet.
+export function modeForVariant(variant) {
+  return variant === "fp16" ? "performance" : "balanced";
+}
+
+export function performanceAvailable(platform) {
+  return engineAvailable(platform, "gpu") || engineAvailable(platform, "npu");
+}
+
+export function detectBestEngine(platform) {
+  if (engineAvailable(platform, "npu")) return "npu";
+  if (engineAvailable(platform, "gpu")) return "gpu";
+  return "cpu";
+}
+
 export const DEVICES = [
   {
     id: "cpu",
