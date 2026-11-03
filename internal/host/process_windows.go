@@ -59,7 +59,7 @@ func runtimeProcess(h HealthInfo) (windows.Handle, error) {
 		return 0, err
 	}
 	actual := windows.UTF16ToString(buf[:size])
-	if !samePath(actual, h.Exe) || !samePath(filepath.Base(actual), runtimeBinary()) {
+	if !samePath(actual, h.Exe) || !acceptsRuntimeBinary(filepath.Base(actual)) {
 		windows.CloseHandle(handle)
 		return 0, errors.New("Runtime process identity mismatch")
 	}
