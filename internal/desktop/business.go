@@ -112,19 +112,21 @@ func (d *desktop) businessRoute(w http.ResponseWriter, r *http.Request) bool {
 		if body.Model == "" {
 			body.Model = "m3"
 		}
-		if d.m.TaskSnapshot().Busy {
+		model := body.Model
+		variant := body.Variant
+		mirror := body.Mirror
+		// Start in the background so the POST returns before the download
+		// finishes; otherwise progress polling could only begin after the
+		// task was already over and the modal never showed a live bar.
+		if !d.m.StartTaskCancellable("下载模型 "+variant, func(ctx context.Context) error {
+			ctx, cancel := context.WithTimeout(ctx, 60*time.Minute)
+			defer cancel()
+			return d.m.DownloadModel(ctx, model, variant, mirror)
+		}) {
 			w.WriteHeader(http.StatusConflict)
 			err = errors.New("已有下载任务正在执行")
 			break
 		}
-		model := body.Model
-		variant := body.Variant
-		mirror := body.Mirror
-		d.m.RunTaskCancellable("下载模型 "+variant, func(ctx context.Context) error {
-			ctx, cancel := context.WithTimeout(ctx, 60*time.Minute)
-			defer cancel()
-			return d.m.DownloadModel(ctx, model, variant, mirror)
-		})
 		result = "下载已开始"
 	case r.URL.Path == "/api/model-download-cancel":
 		if r.Method != "POST" || r.Header.Get("X-Respire-Client") != "1" {

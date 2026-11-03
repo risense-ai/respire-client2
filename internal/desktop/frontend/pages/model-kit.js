@@ -192,22 +192,32 @@ export function openDownloadModal({
   }
   let timer = null;
   let startPromise = Promise.resolve();
+  // While our POST is in flight a terminal task snapshot may still describe
+  // the previous task, so poll() must not treat it as our result.
+  let submitting = false;
   function start() {
     errorNode.hidden = true;
     setMode("downloading");
     const mirror = getMirror?.() || "auto";
+    submitting = true;
     startPromise = api("model-download", {
       model,
       variant,
       ...(mirror && mirror !== "auto" ? { mirror } : {}),
-    }).catch((error) => {
-      // The bridge rejects with 409 when another task is running.
-      stageNode.textContent = "无法开始下载";
-      errorNode.textContent = error.message;
-      errorNode.hidden = false;
-      setMode("failed");
-      throw error;
-    });
+    }).then(
+      () => {
+        submitting = false;
+      },
+      (error) => {
+        submitting = false;
+        // The bridge rejects with 409 when another task is running.
+        stageNode.textContent = "无法开始下载";
+        errorNode.textContent = error.message;
+        errorNode.hidden = false;
+        setMode("failed");
+        throw error;
+      },
+    );
     return startPromise;
   }
   function applyTask(task) {
@@ -221,6 +231,7 @@ export function openDownloadModal({
     }
   }
   async function poll() {
+    if (submitting) return;
     try {
       const state = await api("state");
       const task = state.task || {};
@@ -290,12 +301,10 @@ export function openDownloadModal({
     { once: true },
   );
   setMode("downloading");
-  start()
-    .then(() => {
-      timer = setInterval(poll, 700);
-      poll();
-    })
-    .catch(() => {});
+  // Poll from the start, not after the POST resolves: the server answers as
+  // soon as the task is registered, so progress streams in while it runs.
+  timer = setInterval(poll, 700);
+  start();
   return { element, done };
 }
 
