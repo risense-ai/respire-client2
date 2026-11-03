@@ -89,7 +89,9 @@ func modelFileURL(origin, rel string) string {
 }
 
 func modelFileURLOf(definition modelDefinition, origin, rel string) string {
-	return origin + "/" + definition.Repo + "/resolve/" + definition.Revision + "/" + rel
+	// rel comes from filepath.Join (variantFileName) and carries \ on Windows;
+	// the resolve endpoint expects a slash-separated repo path.
+	return origin + "/" + definition.Repo + "/resolve/" + definition.Revision + "/" + filepath.ToSlash(rel)
 }
 
 // modelMirrorSetting resolves the download source the same way the CLI does:
