@@ -381,9 +381,13 @@ async function poll() {
     if (preferred) setLanguage(preferred);
   }
   route();
-  poll();
   // First run: the wizard replaces the old first-language layer and covers
-  // every step from language to model enablement.
-  if (ctx.desktop && !ctx.desktop.preferences?.onboardingCompleted)
-    wizard.show();
+  // every step from language to model enablement. The auto-show waits for
+  // the first status read and never opens when this machine already has a
+  // local account; the entry in Settings → About still opens a full re-run.
+  const firstPoll = poll();
+  if (!ctx.desktop || ctx.desktop.preferences?.onboardingCompleted) return;
+  await firstPoll;
+  if (ctx.status?.summary?.session?.has_token) return;
+  wizard.show();
 })();

@@ -135,7 +135,7 @@ $env:RSRS_RPC_PORT = '19169'
 Start-Process -FilePath (Join-Path $PWD 'dist\respire-windows-amd64.exe') -WindowStyle Hidden
 ```
 
-安装/更新验证不要使用真实用户目录。首次启动可下载当前官方 CLI 包。桌面退出时，正在运行的 Runtime 会有意保留存活。
+安装/更新验证不要使用真实用户目录。首次启动可下载当前官方 CLI 包。桌面退出时，正在运行的 Runtime 会有意保留存活。要与已安装的正式客户端同时运行，另设 `RSRS_INSTANCE_ID`（如 `test`）区分单实例标识，否则第二次启动只会唤起已有实例。
 
 ## 本地布局与归属
 

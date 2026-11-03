@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -68,7 +69,23 @@ func Run(m *host.Manager, buildVersion string) {
 	}
 	static := http.FileServer(http.FS(files))
 	notifier := notifications.New()
-	singleInstance := &application.SingleInstanceOptions{UniqueID: "ai.risense.respire.client2", OnSecondInstanceLaunch: func(application.SecondInstanceData) {
+	// RSRS_INSTANCE_ID lets an isolated test instance (fresh RSRS_DATA_DIR
+	// and RSRS_RPC_PORT) run next to the installed client instead of just
+	// focusing it.
+	uniqueID := "ai.risense.respire.client2"
+	if suffix := os.Getenv("RSRS_INSTANCE_ID"); suffix != "" {
+		clean := strings.Map(func(r rune) rune {
+			if r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' ||
+				r >= '0' && r <= '9' || r == '.' || r == '-' || r == '_' {
+				return r
+			}
+			return -1
+		}, suffix)
+		if clean != "" {
+			uniqueID += "." + clean
+		}
+	}
+	singleInstance := &application.SingleInstanceOptions{UniqueID: uniqueID, OnSecondInstanceLaunch: func(application.SecondInstanceData) {
 		if d.window != nil {
 			d.window.Show()
 			d.window.Focus()

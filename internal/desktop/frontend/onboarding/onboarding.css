@@ -194,6 +194,10 @@
   margin-top: 1.25rem;
 }
 
+.wizard-actions [data-skip-wizard] {
+  margin-right: auto;
+}
+
 .wizard-tabs {
   display: inline-flex;
   gap: 4px;
