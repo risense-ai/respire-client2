@@ -24,9 +24,9 @@ jobs:
           EVENT: ${{ github.event_name }}
         run: |
           if [[ "$REF_TYPE" == 'tag' || "$EVENT" == 'workflow_dispatch' ]]; then
-            echo 'matrix=[{"os":"windows","arch":"amd64","runner":"windows-latest"},{"os":"windows","arch":"arm64","runner":"windows-11-arm"},{"os":"darwin","arch":"amd64","runner":"macos-15"},{"os":"darwin","arch":"arm64","runner":"macos-15"},{"os":"linux","arch":"amd64","runner":"ubuntu-22.04"},{"os":"linux","arch":"arm64","runner":"ubuntu-22.04-arm"}]' >> "$GITHUB_OUTPUT"
+            echo 'matrix={"include":[{"os":"windows","arch":"amd64","runner":"windows-latest"},{"os":"windows","arch":"arm64","runner":"windows-11-arm"},{"os":"darwin","arch":"amd64","runner":"macos-15"},{"os":"darwin","arch":"arm64","runner":"macos-15"},{"os":"linux","arch":"amd64","runner":"ubuntu-22.04"},{"os":"linux","arch":"arm64","runner":"ubuntu-22.04-arm"}]}' >> "$GITHUB_OUTPUT"
           else
-            echo 'matrix=[{"os":"windows","arch":"amd64","runner":"windows-latest"},{"os":"linux","arch":"amd64","runner":"ubuntu-22.04"}]' >> "$GITHUB_OUTPUT"
+            echo 'matrix={"include":[{"os":"windows","arch":"amd64","runner":"windows-latest"},{"os":"linux","arch":"amd64","runner":"ubuntu-22.04"}]}' >> "$GITHUB_OUTPUT"
           fi
   lint:
     name: lint
@@ -47,7 +47,7 @@ jobs:
         run: |
           go vet -tags production,gtk3 ./...
           while IFS= read -r -d '' source; do node --check "$source"; done < <(find internal/desktop/frontend -name '*.js' -type f -print0)
-          go test ./...
+          go test -tags production,gtk3 ./...
   native:
     name: ${{ matrix.os }}-${{ matrix.arch }}
     needs: [plan]
