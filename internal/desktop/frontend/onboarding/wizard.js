@@ -388,10 +388,30 @@ export function createWizard(ctx) {
     await goto("model", { onboardingSyncChoice: "offline" });
   }
 
+  // One busy control: spinner + disabled label so an in-flight remote call
+  // is visible; the button restores itself on failure without re-rendering
+  // (a re-render would wipe the typed credentials).
+  function setButtonBusy(button, busyText) {
+    if (!button) return () => {};
+    const original = button.innerHTML;
+    button.disabled = true;
+    button.classList.add("wizard-busy");
+    button.innerHTML = `<span class="wizard-spinner" aria-hidden="true"></span>${h(busyText)}`;
+    return () => {
+      button.disabled = false;
+      button.classList.remove("wizard-busy");
+      button.innerHTML = original;
+    };
+  }
+
   async function submitAuthentication(values) {
     if (busy) return;
     busy = true;
     await setError("");
+    const restore = setButtonBusy(
+      $('button[form="wizard-auth-form"]', root),
+      state.accountMode === "register" ? t("正在创建账户…") : t("正在登录…"),
+    );
     try {
       validateAuthentication(state.accountMode, values);
       const envelope = await runAuthentication(state.accountMode, values);
@@ -408,6 +428,7 @@ export function createWizard(ctx) {
       render();
     } catch (error) {
       setError(error.message);
+      restore();
     } finally {
       busy = false;
     }
@@ -423,15 +444,16 @@ export function createWizard(ctx) {
       `<label class="checkbox-label"><input type="checkbox" name="autosync" ${state.autoSync ? "checked" : ""}>启用自动同步（推荐）</label><p class="hint">${t("本机密钥")}：${keys ? t("已就绪") : t("未初始化")}。${t("云端的记忆正文始终加密后同步。")}</p>`,
       `<button type="button" class="primary" data-autosync-continue>继续</button>`,
     );
-    $("[data-autosync-continue]", body).addEventListener("click", () => {
-      saveAutosync($("[name=autosync]", body).checked);
+    $("[data-autosync-continue]", body).addEventListener("click", (event) => {
+      saveAutosync($("[name=autosync]", body).checked, event.currentTarget);
     });
   }
 
-  async function saveAutosync(enabled) {
+  async function saveAutosync(enabled, button) {
     if (busy) return;
     busy = true;
     await setError("");
+    const restore = setButtonBusy(button, t("正在保存…"));
     try {
       state.autoSync = enabled;
       await execute("autosync_set", { enabled });
@@ -457,6 +479,7 @@ export function createWizard(ctx) {
       render();
     } catch (error) {
       setError(error.message);
+      restore();
     } finally {
       busy = false;
     }
