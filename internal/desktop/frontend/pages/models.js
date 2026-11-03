@@ -15,6 +15,7 @@ import {
   notify,
   resultView,
   api,
+  date,
 } from "../ui/core.js";
 import { heading, phase } from "./overview.js";
 import { recallChecks } from "./recall.js";
@@ -22,18 +23,81 @@ import {
   MIRROR_OPTIONS,
   MODEL_OPTIONS,
   MODEL_HINTS,
+  MODEL_MODES,
   isProfileModel,
   variantFromItem,
   engineAvailable,
+  modeForVariant,
+  performanceAvailable,
+  detectBestEngine,
   fetchInventory,
   fetchProfileState,
   readProfileState,
   profileStateSettled,
   applyLegacyEngine,
   submitProfileSwitch,
+  applyEngineChoice,
   fallbackMessage,
   openDownloadModal,
 } from "./model-kit.js";
+
+// Scenario-mode states: the page speaks in "can I use it now" terms instead of
+// exposing the variant/engine matrix. FALLBACK and ERROR are sticky overrides
+// on top of the computed state so a failed verification stays visible until
+// the user retries or picks another mode.
+const PAGE_STATES = {
+  EMPTY: "empty",
+  DOWNLOADING: "downloading",
+  VERIFYING: "verifying",
+  READY: "ready",
+  FALLBACK: "fallback",
+  ERROR: "error",
+};
+
+const STATE_CONFIG = {
+  [PAGE_STATES.EMPTY]: {
+    icon: "○",
+    title: "需要下载模型文件",
+    description: "选择运行模式后，点击下载即可启用 AI 功能",
+    buttonText: "下载并启用",
+    buttonClass: "primary",
+  },
+  [PAGE_STATES.DOWNLOADING]: {
+    icon: "↓",
+    title: "正在下载模型",
+    description: "下载完成后将自动验证并启用",
+    buttonText: "下载中…",
+    buttonClass: "disabled",
+  },
+  [PAGE_STATES.VERIFYING]: {
+    icon: "…",
+    title: "正在验证",
+    description: "正在加载模型并运行真实推理验证",
+    buttonText: "验证中…",
+    buttonClass: "disabled",
+  },
+  [PAGE_STATES.READY]: {
+    icon: "✓",
+    title: "AI 已就绪",
+    description: "模型验证通过，可正常使用",
+    buttonText: "已启用",
+    buttonClass: "success",
+  },
+  [PAGE_STATES.FALLBACK]: {
+    icon: "⚠",
+    title: "已回退到兼容模式",
+    description: "验证失败，已回退到兼容模式",
+    buttonText: "重试",
+    buttonClass: "primary",
+  },
+  [PAGE_STATES.ERROR]: {
+    icon: "✗",
+    title: "模型异常",
+    description: "请重新下载或查看高级设置",
+    buttonText: "重试",
+    buttonClass: "primary",
+  },
+};
 
 export function models(root, ctx) {
   let agent = {},
@@ -48,13 +112,18 @@ export function models(root, ctx) {
     profileState = null,
     switchInFlight = false,
     switchingVariant = "",
-    switchTimer = null;
+    switchTimer = null,
+    selectedMode = localStorage.getItem("respire-model-mode") || "balanced",
+    stateOverride = null,
+    advancedExpanded = false,
+    lastVerifiedAt = null,
+    pageKey = "";
   root.innerHTML =
-    heading("模型与索引", "查看真实加载与下载进度，管理推理引擎和检索方式。") +
+    heading("模型与索引", "选择运行模式，一键启用 AI 功能") +
     `<div data-live></div>` +
     panel(
       "推理引擎与模型",
-      `<div class="panel-body stack"><p class="hint" data-model-hint></p><form data-mirror class="stack"><div class="form-grid">${select(
+      `<div class="panel-body stack"><div data-status-card></div><div class="mode-selector" data-mode-selector></div><div class="stack" data-primary-action></div><div data-advanced><div class="advanced-toggle" data-advanced-open><button type="button" class="link-btn" data-action="toggle-advanced">高级设置 ▼</button></div><div class="advanced-panel" hidden data-advanced-panel><div class="advanced-header"><h3>高级设置</h3><button type="button" class="link-btn" data-action="toggle-advanced">收起 ▲</button></div><div class="advanced-section"><h4>下载设置</h4><form data-mirror class="stack"><div class="form-grid">${select(
         "model",
         "模型",
         MODEL_OPTIONS,
@@ -69,7 +138,7 @@ export function models(root, ctx) {
         "自定义镜像源",
         "https://",
         { placeholder: "http/https 源站，仅主机名" },
-      )}</div></div><div class="actions"><button type="submit">保存下载来源</button><span class="hint" data-mirror-state></span></div></form><div class="scroll-table" data-variants><p class="hint">正在读取模型目录…</p></div><div class="actions" data-baseline></div><p class="hint" data-engine-hint>已下载的权重可在操作列切换推理方式：应用立即重载 Runtime 模型并运行真实推理验证，失败自动回退 CPU。GPU 在 Linux 不可用，NPU 仅 Windows 支持。</p><div class="actions"><button type="button" data-model="probe">运行实际推理验证</button><button type="button" data-model="providers">安装 NPU 引擎</button><button data-model="cancel">取消当前任务</button><button data-model="uninstall" class="danger">卸载全部模型文件</button></div></div>`,
+      )}</div></div><div class="actions"><button type="submit">保存下载来源</button><span class="hint" data-mirror-state></span></div></form></div><div class="advanced-section"><h4>权重文件管理</h4><p class="hint" data-model-hint></p><div class="actions" data-baseline></div><div class="scroll-table" data-variants><p class="hint">正在读取模型目录…</p></div></div><div class="advanced-section"><h4>推理引擎</h4><p class="hint" data-engine-hint>已下载的权重可在权重列表切换推理方式：应用立即重载 Runtime 模型并运行真实推理验证，失败自动回退 CPU。GPU 在 Linux 不可用，NPU 仅 Windows 支持。</p><div class="actions"><button type="button" data-model="probe">运行实际推理验证</button><button type="button" data-model="providers">安装 NPU 引擎</button></div></div><div class="advanced-section danger-zone"><h4>模型管理</h4><div class="actions"><button type="button" data-model="cancel">取消当前任务</button><button type="button" data-model="uninstall" class="danger">卸载全部模型文件</button></div></div></div></div></div>`,
     ) +
     panel(
       "检索与后台索引",
@@ -206,6 +275,205 @@ export function models(root, ctx) {
     );
     return quantized?.size || 0;
   }
+  // The client-side download task only counts as a model download when its
+  // stage names model files; update or index tasks must not flip the page.
+  function modelTaskBusy(task) {
+    return (
+      Boolean(task?.busy) &&
+      /model_[a-z0-9]+\.onnx|tokenizer\.json/.test(String(task.stage || ""))
+    );
+  }
+  function currentMode() {
+    return (
+      MODEL_MODES.find((mode) => mode.id === selectedMode) || MODEL_MODES[1]
+    );
+  }
+  function modeVariant(mode) {
+    return (inventory?.variants || []).find(
+      (item) => item.name === mode.variant,
+    );
+  }
+  // Default state from live data: downloading, missing weights, switching,
+  // or ready for the selected mode.
+  function computePageState() {
+    const op = ctx.status?.summary?.model_operation || {};
+    const task = ctx.desktop?.task || {};
+    if (op.active || modelTaskBusy(task)) return PAGE_STATES.DOWNLOADING;
+    const variant = modeVariant(currentMode());
+    if (!variant?.installed) return PAGE_STATES.EMPTY;
+    if (switchInFlight) return PAGE_STATES.VERIFYING;
+    if (engineState.model !== currentMode().variant) return PAGE_STATES.EMPTY;
+    return PAGE_STATES.READY;
+  }
+  function effectivePageState() {
+    const computed = computePageState();
+    // A sticky FALLBACK/ERROR survives idle recomputation (that is exactly
+    // when it must stay visible); only a new download or switch — which
+    // always computes as DOWNLOADING/VERIFYING — supersedes it.
+    if (
+      computed === PAGE_STATES.DOWNLOADING ||
+      computed === PAGE_STATES.VERIFYING
+    )
+      stateOverride = null;
+    return stateOverride || computed;
+  }
+  function renderStatusCard() {
+    const node = $("[data-status-card]", root);
+    if (!node) return;
+    const state = effectivePageState();
+    const config = STATE_CONFIG[state];
+    const activeMode = MODEL_MODES.find(
+      (mode) => mode.id === modeForVariant(engineState.model),
+    );
+    node.innerHTML = `<div class="status-card ${state}"><div class="status-icon">${config.icon}</div><div class="status-body"><strong>${h(config.title)}</strong><span class="hint">${h(config.description)}</span></div><div class="status-meta"><span class="mode-tag">${h(activeMode?.title || "—")} · ${h(engineState.engine.toUpperCase())}</span>${lastVerifiedAt ? `<span class="hint">${h("上次验证 " + date(lastVerifiedAt.toISOString()))}</span>` : ""}</div></div>`;
+  }
+  function renderModeSelector() {
+    const node = $("[data-mode-selector]", root);
+    if (!node) return;
+    const accel = performanceAvailable(ctx.desktop?.platform);
+    node.innerHTML = MODEL_MODES.map((mode) => {
+      const variant = modeVariant(mode);
+      const subtitle = variant?.size ? "≈ " + bytes(variant.size) : mode.subtitle;
+      const noAccel = mode.requiresGPU && !accel;
+      return `<button type="button" class="mode-card${selectedMode === mode.id ? " selected" : ""}${mode.recommended ? " recommended" : ""}" data-mode-select="${mode.id}">${mode.recommended ? '<span class="mode-badge">推荐</span>' : ""}<strong>${h(mode.title)}</strong><span class="hint">${h(subtitle)}</span><span class="mode-desc">${h(mode.description)}</span>${noAccel ? '<span class="hint">需 GPU/NPU</span>' : ""}</button>`;
+    }).join("");
+  }
+  function renderPrimaryAction() {
+    const node = $("[data-primary-action]", root);
+    if (!node) return;
+    const config = STATE_CONFIG[effectivePageState()];
+    const idle =
+      effectivePageState() === PAGE_STATES.DOWNLOADING ||
+      effectivePageState() === PAGE_STATES.VERIFYING ||
+      effectivePageState() === PAGE_STATES.READY;
+    node.innerHTML = `<div data-mode-progress hidden></div><button type="button" class="${config.buttonClass}" data-mode-apply${idle ? " disabled" : ""}>${h(config.buttonText)}</button>`;
+    updateModeProgress();
+  }
+  function updateModeProgress() {
+    const node = $("[data-mode-progress]", root);
+    if (!node) return;
+    const op = ctx.status?.summary?.model_operation || {};
+    const task = ctx.desktop?.task || {};
+    if (modelTaskBusy(task)) {
+      const pct = task.total
+        ? Math.min(100, Math.round((task.done / task.total) * 100))
+        : 0;
+      node.hidden = false;
+      node.innerHTML = `<div class="progress-label"><span>${h(String(task.stage || ""))}</span><span>${pct}%</span></div><progress ${task.total ? `value="${h(task.done)}" max="${h(task.total)}"` : ""}></progress>`;
+    } else if (op.active) {
+      const pct = op.total
+        ? Math.min(100, Math.round((op.done / op.total) * 100))
+        : 0;
+      node.hidden = false;
+      node.innerHTML = `<div class="progress-label"><span>${h(String(op.phase || ""))} · ${h(String(op.item || ""))}</span><span>${pct}%</span></div><progress ${op.total ? `value="${h(op.done)}" max="${h(op.total)}"` : ""}></progress>`;
+    } else {
+      node.hidden = true;
+      node.innerHTML = "";
+    }
+  }
+  function renderAdvancedVisibility() {
+    const panelNode = $("[data-advanced-panel]", root);
+    const openBar = $("[data-advanced-open]", root);
+    if (panelNode) panelNode.hidden = !advancedExpanded;
+    if (openBar) openBar.hidden = advancedExpanded;
+  }
+  // The selector and the primary button rebuild only when something they
+  // display changed; polling every 3 seconds must not replace a button
+  // mid-click.
+  function renderDynamic(force = false) {
+    const variant = modeVariant(currentMode());
+    const key = [
+      effectivePageState(),
+      selectedMode,
+      engineState.engine,
+      engineState.model,
+      variant ? `${variant.installed ? 1 : 0}:${variant.size}` : "none",
+      lastVerifiedAt ? lastVerifiedAt.getTime() : 0,
+      performanceAvailable(ctx.desktop?.platform) ? 1 : 0,
+    ].join("|");
+    if (!force && key === pageKey) return;
+    pageKey = key;
+    renderModeSelector();
+    renderPrimaryAction();
+    renderStatusCard();
+  }
+  function handleModeSelect(modeId) {
+    if (!MODEL_MODES.some((mode) => mode.id === modeId)) return;
+    selectedMode = modeId;
+    localStorage.setItem("respire-model-mode", modeId);
+    stateOverride = null;
+    const mode = currentMode();
+    if (
+      mode.requiresGPU &&
+      !performanceAvailable(ctx.desktop?.platform)
+    )
+      notify("当前设备不支持加速模式，将使用 CPU 运行", true);
+    renderDynamic(true);
+  }
+  async function handlePrimaryAction() {
+    const mode = currentMode();
+    const engine =
+      mode.engine === "auto"
+        ? detectBestEngine(ctx.desktop?.platform)
+        : mode.engine;
+    const variant = modeVariant(mode);
+    if (!variant?.installed) {
+      stateOverride = null;
+      renderDynamic(true);
+      // The modal resolves `done` true only when the download completed;
+      // closing or cancelling never enables the mode on its own.
+      const completed = await openDownloadModal({
+        model: modelID,
+        variant: mode.variant,
+        label: mode.title,
+        getMirror: currentMirror,
+      }).done;
+      const fresh = await fetchInventory(modelID).catch(() => null);
+      if (fresh) inventory = fresh;
+      if (!root.isConnected) return;
+      if (completed || modeVariant(mode)?.installed)
+        await applyEngineAfterDownload(mode, engine);
+      else renderDynamic(true);
+      return;
+    }
+    await applyEngineAfterDownload(mode, engine);
+  }
+  async function applyEngineAfterDownload(mode, engine) {
+    try {
+      switchInFlight = true;
+      stateOverride = null;
+      renderDynamic(true);
+      const result = await applyEngineChoice({
+        model: modelID,
+        engine,
+        variant: mode.variant,
+      });
+      if (result.fallback || result.failed) {
+        // Reflect what the runtime actually fell back to; the mode tag and
+        // the status card must not advertise the failed selection.
+        engineState = { engine: result.engine, model: result.variant };
+        stateOverride = PAGE_STATES.FALLBACK;
+        notify(result.warning || "验证失败，已回退到兼容模式", true);
+      } else {
+        engineState = { engine: result.engine, model: result.variant };
+        lastVerifiedAt = new Date();
+        notify(`已启用 ${mode.title} 模式`);
+      }
+      if (result.envelope && root.isConnected)
+        $("[data-result]", root).innerHTML = resultView(
+          "应用结果",
+          result.envelope,
+        );
+    } catch (error) {
+      stateOverride = PAGE_STATES.ERROR;
+      notify(error.message, true);
+    } finally {
+      switchInFlight = false;
+      renderDynamic(true);
+      renderVariants();
+      await ctx.refresh();
+    }
+  }
   // Polling refreshes status cells in place; rebuilding the whole table would
   // replace buttons mid-click every 3 seconds.
   function updateVariantsProgress() {
@@ -270,6 +538,7 @@ export function models(root, ctx) {
       ]),
     )}${panel("模型任务", `<div class="panel-body"><p>${h(op.active ? `${phase(op.phase)} · ${op.item || ""}` : "当前没有模型任务")}</p>${op.active ? `<div class="progress-label"><span>${h(bytes(op.done))} / ${h(bytes(op.total))}</span><span>${h(op.elapsed_secs !== undefined ? op.elapsed_secs + " 秒" : "")}</span></div><progress ${op.total ? `value="${h(op.done)}" max="${h(op.total)}"` : ""}></progress>` : ""}${index.error ? `<p class="form-error section-gap">${h(index.error)}</p>` : ""}</div><details class="technical"><summary>推理与索引详情</summary><pre>${h(raw({ inference, index, model: op }))}</pre></details>`)}</div>`;
     updateVariantsProgress();
+    renderDynamic();
     // The client downloaded the baseline files: have the Runtime build the
     // index once, right after the tokenizer shows up.
     if (inventory) {
@@ -356,6 +625,13 @@ export function models(root, ctx) {
       } else {
         profileState = null;
       }
+      // Existing installations map back to a mode card; a stored preference
+      // always wins over the mapping.
+      const savedMode = localStorage.getItem("respire-model-mode");
+      selectedMode =
+        savedMode && MODEL_MODES.some((mode) => mode.id === savedMode)
+          ? savedMode
+          : modeForVariant(engineState.model);
       $("[data-mirror] [name=model]", root).value = modelID;
       $("[data-api] [name=base]", root).value =
         agent.recall_api_base ||
@@ -374,6 +650,7 @@ export function models(root, ctx) {
           notify(result.reason.message, true);
       }
       renderVariants();
+      renderDynamic(true);
       update();
     } catch (error) {
       notify(error.message, true);
@@ -417,6 +694,7 @@ export function models(root, ctx) {
       };
     }
     renderVariants();
+    renderDynamic();
     if (switchInFlight) {
       const verdict = profileStateSettled(profileState);
       if (verdict.settled) {
@@ -424,6 +702,7 @@ export function models(root, ctx) {
         switchingVariant = "";
         clearInterval(switchTimer);
         switchTimer = null;
+        if (!verdict.failed) lastVerifiedAt = new Date();
         notify(
           verdict.failed
             ? "模型切换失败，Runtime 已回退原模型；详情见切换状态。"
@@ -431,11 +710,28 @@ export function models(root, ctx) {
           verdict.failed,
         );
         renderVariants();
+        renderDynamic(true);
         await ctx.refresh();
       }
     }
   }
   root.addEventListener("click", (event) => {
+    const toggle = event.target.closest("[data-action=toggle-advanced]");
+    if (toggle) {
+      advancedExpanded = !advancedExpanded;
+      renderAdvancedVisibility();
+      return;
+    }
+    const modeCard = event.target.closest("[data-mode-select]");
+    if (modeCard) {
+      handleModeSelect(modeCard.dataset.modeSelect);
+      return;
+    }
+    const modeApply = event.target.closest("[data-mode-apply]");
+    if (modeApply) {
+      action(modeApply, () => handlePrimaryAction());
+      return;
+    }
     const apply = event.target.closest("[data-apply]");
     if (apply) {
       action(apply, async () => {
@@ -464,6 +760,7 @@ export function models(root, ctx) {
           apply.dataset.variant,
         );
         engineState = { engine: result.engine, model: result.model };
+        if (!result.fallback) lastVerifiedAt = new Date();
         if (result.fallback)
           notify(fallbackMessage(apply.dataset.engine, result), true);
         else
@@ -473,6 +770,7 @@ export function models(root, ctx) {
         if (root.isConnected)
           $("[data-result]", root).innerHTML = resultView("应用结果", envelope);
         renderVariants();
+        renderDynamic(true);
         await ctx.refresh();
       });
       return;
