@@ -104,11 +104,20 @@ export async function fetchProfileState() {
   }
 }
 
-// The runtime reports the active selection in either details or summary;
-// read both so either shape works.
+// The runtime reports a switch in progress.summary: `switch` carries the
+// terminal state (pending / ready / failed + error), `operation` the live
+// phase, and catalog.active the running selection. Read that shape in one
+// place so the models page, the wizard and the overview never diverge.
 export function readProfileState(state) {
-  const progress = state?.progress || {};
-  return progress.details || progress.summary || {};
+  const progressEnvelope = state?.progress || {};
+  const progress = progressEnvelope.details || progressEnvelope.summary || {};
+  const catalogEnvelope = state?.catalog || {};
+  const catalog = catalogEnvelope.details || catalogEnvelope.summary || {};
+  return {
+    switchState: progress.switch || {},
+    operation: progress.operation || {},
+    active: catalog.active || null,
+  };
 }
 
 export async function applyLegacyEngine(engine, variant) {
@@ -125,14 +134,13 @@ export async function submitProfileSwitch(model, engine, variant) {
 }
 
 // profileStateSettled reports whether a switch task reached a terminal
-// state, and whether that state is success.
+// state, and whether that state is success. Only switch.state is authoritative:
+// pending → ready | failed; the live operation phase never settles.
 export function profileStateSettled(state) {
-  const details = readProfileState(state);
-  const text = String(
-    details.state || details.phase || details.status || "",
-  );
-  if (/failed|失败/i.test(text)) return { settled: true, failed: true };
-  if (/ready|完成/i.test(text)) return { settled: true, failed: false };
+  const { switchState } = readProfileState(state);
+  const text = String(switchState.state || "");
+  if (/failed/i.test(text)) return { settled: true, failed: true };
+  if (/ready/i.test(text)) return { settled: true, failed: false };
   return { settled: false, failed: false };
 }
 
@@ -310,10 +318,15 @@ export function openDownloadModal({
 
 // notifyFallback surfaces the runtime's real post-probe engine when the
 // selected device failed verification; the wizard and models page share it so
-// a fallback can never be presented as success of the chosen device.
+// a fallback can never be presented as success of the chosen device. The
+// probe failure cause travels in result.warning — always show it.
 export function fallbackMessage(engine, result) {
   if (!result?.fallback) return "";
-  return `${engine.toUpperCase()} 验证失败，已自动回退 CPU（${result.model}）；详情见应用结果。`;
+  const reason = result.warning ? `（${result.warning}）` : "";
+  const restored = result.engine
+    ? `${result.engine.toUpperCase()} · ${result.model}`
+    : `CPU（${result.model}）`;
+  return `${engine.toUpperCase()} 验证失败${reason}，已恢复切换前的 ${restored}；详情见应用结果。`;
 }
 
 export async function applyEngineChoice({ model, engine, variant }) {

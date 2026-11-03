@@ -13,6 +13,11 @@ import {
   isPending,
   notify,
 } from "../ui/core.js";
+import {
+  MODEL_OPTIONS,
+  fetchProfileState,
+  readProfileState,
+} from "./model-kit.js";
 
 const phases = {
   idle: "空闲",
@@ -29,9 +34,22 @@ export const phase = (value) => phases[value] || value || "—";
 export function heading(title, description, actions = "") {
   return `<div class="page-heading"><div><div class="eyebrow">RESPIRE / LOCAL WORKSPACE</div><h1>${h(title)}</h1><p>${h(description)}</p></div><div class="heading-actions">${actions}</div></div>`;
 }
+const ENGINE_NAMES = { cpu: "CPU", gpu: "GPU", npu: "NPU" };
 export function overview(root, ctx) {
   // Onboarding: prompt/plugin readiness is checked once per page visit.
   let promptsReady = null;
+  // Runtime active selection (profile models); refreshed with the page.
+  let profileSelection = null;
+  async function loadProfileSelection() {
+    if (!ctx.desktop?.connected) return;
+    try {
+      const { active } = readProfileState(await fetchProfileState());
+      profileSelection = active;
+    } catch {
+      profileSelection = null;
+    }
+    if (root.isConnected) update();
+  }
   function update() {
     const state = ctx.desktop || {},
       s = ctx.status?.summary || {},
@@ -54,6 +72,20 @@ export function overview(root, ctx) {
         .catch(() => {
           promptsReady = false;
         });
+    // What inference runs on right now: profile models override the legacy
+    // inference.json snapshot the client reads locally.
+    const selection = profileSelection;
+    const snapshot = state.engine || {};
+    const engine = String(
+      selection?.engine || snapshot.engine || "cpu",
+    ).toLowerCase();
+    const engineName = ENGINE_NAMES[engine] || engine.toUpperCase();
+    const modelID = selection?.model || snapshot.model_profile || "m3";
+    const modelName =
+      MODEL_OPTIONS.find(([id]) => id === modelID)?.[1] || modelID;
+    const variant = selection?.variant || snapshot.variant || "quantized";
+    const file = selection?.variant ? null : snapshot.file;
+    const note = selection ? "" : snapshot.note || "";
     root.innerHTML =
       heading(
         "记忆，保持就绪。",
@@ -87,6 +119,16 @@ export function overview(root, ctx) {
       ${panel(
         "模型与索引",
         pairs([
+          ["当前模型", `${modelName} · ${variant}`],
+          ["推理方式", engineName],
+          [
+            "向量文件",
+            selection
+              ? "档案权重已加载"
+              : file
+                ? file
+                : `${variant}（${engineName} 默认）`,
+          ],
           ["推理状态", phase(inference.phase)],
           ["推理队列", number(inference.queued)],
           [
@@ -102,7 +144,7 @@ export function overview(root, ctx) {
             op.active ? `${phase(op.phase)} · ${op.item || ""}` : "当前无任务",
           ],
         ]) +
-          `<div class="model-progress">${op.active ? `<div class="progress-label"><span>${h(op.item || op.phase)}</span><span>${h(bytes(op.done))} / ${h(bytes(op.total))}</span></div><progress ${op.total ? `value="${h(op.done)}" max="${h(op.total)}"` : ""}></progress>` : ""}<div class="actions"><button data-go="models">管理模型与索引</button></div></div>`,
+          `<div class="model-progress">${note ? `<p class="hint">${h(note)}</p>` : ""}${op.active ? `<div class="progress-label"><span>${h(op.item || op.phase)}</span><span>${h(bytes(op.done))} / ${h(bytes(op.total))}</span></div><progress ${op.total ? `value="${h(op.done)}" max="${h(op.total)}"></progress>` : ""}` : ""}<div class="actions"><button data-go="models">管理模型与索引</button></div></div>`,
       )}</div>` +
       panel(
         "Runtime",
@@ -200,5 +242,6 @@ export function overview(root, ctx) {
       });
   });
   update();
+  loadProfileSelection();
   return { update, refresh: update };
 }

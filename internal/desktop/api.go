@@ -67,6 +67,10 @@ func (d *desktop) handler(static http.Handler) http.Handler {
 			}
 			if healthErr != nil {
 				result.(map[string]any)["connectionError"] = healthErr.Error()
+			} else {
+				// Locally readable inference selection (engine, weight file);
+				// profile models override it client-side via model.catalog.
+				result.(map[string]any)["engine"] = d.m.EngineSnapshot(h.InstallationRoot, h.Exe)
 			}
 			if autoErr != nil {
 				result.(map[string]any)["autostartError"] = autoErr.Error()

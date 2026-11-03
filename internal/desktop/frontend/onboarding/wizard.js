@@ -905,10 +905,10 @@ export function createWizard(ctx) {
       return false;
     }
     if (outcome.fallback) {
-      // Report the runtime's real post-probe engine: never present the
-      // selected device as successful when verification fell back.
+      // Report the engine the host restored after the failed probe: never
+      // present the selected device as successful when verification fell back.
       setStage("load", "done");
-      setStage("probe", "done", `${t("已回退 CPU")} · ${outcome.variant}`);
+      setStage("probe", "done", `${outcome.engine.toUpperCase()} · ${t("已恢复原设置")}`);
       executeStatus(outcome.warning, true);
     } else {
       setStage("load", "done");
@@ -938,9 +938,9 @@ export function createWizard(ctx) {
     if (!state) return; // wizard closed by skip mid-execute
     const outcome = state.enableOutcome || {};
     const body = $(".wizard-body", root);
-    const actualEngine = outcome.fallback ? "cpu" : outcome.engine;
+    const actualEngine = outcome.engine || "cpu";
     const note = outcome.fallback
-      ? `${h(state.device.toUpperCase())} ${t("验证未通过，实际启用 CPU ·")} ${h(outcome.variant)}。${h(outcome.warning || "")}`
+      ? `${h(state.device.toUpperCase())} ${t("验证未通过，已恢复 ")}${h(actualEngine.toUpperCase())} · ${h(outcome.variant)}。${h(outcome.warning || "")}`
       : `${t("模型已可用")}：${h(modelLabel(state.model))} · ${h(actualEngine.toUpperCase())} · ${h(outcome.variant || state.variant)}。`;
     body.innerHTML = frame(
       "开始使用 Respire",
