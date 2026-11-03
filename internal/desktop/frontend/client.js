@@ -90,11 +90,12 @@ appearance();
 systemTheme.addEventListener("change", appearance);
 async function savePreferences(patch) {
   if (!ctx.desktop) throw new Error("客户端设置尚未读取");
-  const preferences = { ...ctx.desktop.preferences, ...patch };
-  await api("preferences", preferences);
-  ctx.desktop.preferences = preferences;
-  if (preferences.theme)
-    localStorage.setItem("respire-theme", preferences.theme);
+  // Post only the patch: the bridge overlays present keys onto the stored
+  // preferences, so a stale local mirror can never rewrite fields the
+  // caller did not touch (this un-did checkbox toggles).
+  await api("preferences", patch);
+  ctx.desktop.preferences = { ...ctx.desktop.preferences, ...patch };
+  if (patch.theme) localStorage.setItem("respire-theme", patch.theme);
   if (patch.language) languageDropdown.set(patch.language);
   appearance();
 }
