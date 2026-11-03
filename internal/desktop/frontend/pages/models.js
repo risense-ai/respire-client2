@@ -425,6 +425,7 @@ export function models(root, ctx) {
         await refreshProfileState();
       } catch (error) {
         notify(error.message, true);
+        renderVariants();
       }
     })();
   });
@@ -437,7 +438,7 @@ export function models(root, ctx) {
   async function refreshProfileState() {
     if (!isProfileModel()) {
       profileState = null;
-      updateVariantsProgress();
+      renderVariants();
       return;
     }
     try {
@@ -453,9 +454,7 @@ export function models(root, ctx) {
         model: details.active_variant || switchingVariant || "quantized",
       };
     }
-    // In-place status refresh: rebuilding the table would break clicks.
-    updateVariantsProgress();
-    renderBaseline();
+    renderVariants();
     if (switchInFlight) {
       const stateText = String(
         details.state || details.phase || details.status || "",
