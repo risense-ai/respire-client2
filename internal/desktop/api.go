@@ -1,6 +1,7 @@
 package desktop
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -91,13 +92,20 @@ func (d *desktop) handler(static http.Handler) http.Handler {
 				SidebarWidth          int    `json:"sidebarWidth"`
 				MemoryIndexWidth      int    `json:"memoryIndexWidth"`
 			}
-			decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096))
-			decoder.DisallowUnknownFields()
-			err = decoder.Decode(&input)
-			if err == nil {
-				var extra any
-				if trailing := decoder.Decode(&extra); trailing != io.EOF {
-					err = errors.New("desktop action must contain one JSON object")
+			// Buffered so /api/preferences can re-read the same request as a
+			// field map and patch only the keys the sender included.
+			body, readErr := io.ReadAll(http.MaxBytesReader(w, r.Body, 4096))
+			if readErr != nil {
+				err = readErr
+			} else {
+				decoder := json.NewDecoder(bytes.NewReader(body))
+				decoder.DisallowUnknownFields()
+				err = decoder.Decode(&input)
+				if err == nil {
+					var extra any
+					if trailing := decoder.Decode(&extra); trailing != io.EOF {
+						err = errors.New("desktop action must contain one JSON object")
+					}
 				}
 			}
 			if err == nil {
@@ -162,11 +170,16 @@ func (d *desktop) handler(static http.Handler) http.Handler {
 					}
 					result = input.Enabled
 				case "/api/preferences":
-					if input.Theme == "" {
-						input.Theme = d.m.Preferences().Theme
+					// Patch the stored preferences with only the keys present
+					// in this request; rebuilding the struct here previously
+					// dropped fields the forms never sent (runtimeAutoRestart).
+					var prefs host.Preferences
+					prefs, patchErr := patchPreferences(d.m.Preferences(), body)
+					if patchErr != nil {
+						err = patchErr
+					} else {
+						err = d.savePreferences(prefs)
 					}
-					err = d.savePreferences(host.Preferences{AutoRuntime: input.AutoRuntime, AutoUpdate: input.AutoUpdate, RuntimeChannel: input.RuntimeChannel, ClientChannel: input.ClientChannel, Layout: input.Layout, Theme: input.Theme, Language: input.Language,
-						ClientUpdateInterval: input.ClientUpdateInterval, RuntimeUpdateInterval: input.RuntimeUpdateInterval, ClientAutoUpdate: input.ClientAutoUpdate, ClientAutoRestart: input.ClientAutoRestart, RuntimeAutoUpdate: input.RuntimeAutoUpdate, SidebarWidth: input.SidebarWidth, MemoryIndexWidth: input.MemoryIndexWidth})
 					result = "设置已保存"
 				case "/api/rpc":
 					result, err = d.m.RPC(input.Command)

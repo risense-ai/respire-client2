@@ -1,0 +1,344 @@
+/* Onboarding wizard: centred card with a top step rail, choice cards,
+   recovery-material area and stage list. Uses the dashboard tokens so
+   light/dark and the rem scale follow the app automatically. */
+
+.onboarding {
+  position: fixed;
+  inset: 0;
+  z-index: 300;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background: color-mix(in srgb, var(--bg) 88%, transparent);
+  backdrop-filter: blur(8px);
+  overflow: auto;
+}
+
+.wizard-card {
+  position: relative;
+  width: min(680px, 100%);
+  max-height: calc(100% - 40px);
+  overflow: auto;
+  padding: 1.75rem;
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  background: var(--panel);
+  box-shadow: 0 20px 60px rgb(0 0 0 / 12%);
+}
+
+.wizard-exit {
+  position: absolute;
+  top: 1rem;
+  right: 1rem;
+  width: 2rem;
+  min-width: 2rem;
+  min-height: 2rem;
+  padding: 0;
+  border-radius: 50%;
+  font-size: 1.1rem;
+  line-height: 1;
+  color: var(--muted);
+}
+
+.wizard-card h1 {
+  margin: 1.25rem 0 0.25rem;
+  font-size: 1.375rem;
+  line-height: 1.3;
+}
+
+.wizard-sub {
+  margin: 0 0 0.75rem;
+  color: var(--muted);
+}
+
+.wizard-steps {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  margin: 0;
+  padding: 0 2.4rem 1rem 0;
+  list-style: none;
+  border-bottom: 1px solid var(--line);
+}
+
+.wizard-step {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 0.8125rem;
+}
+
+.wizard-step-label {
+  white-space: nowrap;
+}
+
+.wizard-step-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  border: 1.5px solid var(--line);
+  background: var(--panel);
+}
+
+.wizard-step.current {
+  color: var(--text);
+  font-weight: 600;
+}
+.wizard-step.current .wizard-step-dot {
+  border-color: var(--text);
+  background: var(--text);
+}
+.wizard-step.done {
+  color: var(--green);
+}
+.wizard-step.done .wizard-step-dot {
+  border-color: var(--green);
+  background: var(--green);
+}
+
+.wizard-body {
+  display: block;
+}
+
+.wizard-choices {
+  display: grid;
+  gap: 10px;
+  margin: 0.75rem 0;
+}
+
+.wizard-choice {
+  justify-content: flex-start;
+  text-align: left;
+  padding: 0.875rem 1rem;
+  border-radius: 10px;
+  background: var(--panel);
+  white-space: normal;
+}
+
+.wizard-choice-copy {
+  display: grid;
+  gap: 2px;
+}
+
+.wizard-choice-copy strong {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.wizard-choice-copy small {
+  color: var(--muted);
+}
+
+.wizard-badge {
+  padding: 1px 8px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--soft);
+  color: var(--muted);
+  font-size: 0.6875rem;
+  font-weight: 500;
+}
+
+.wizard-choice.active {
+  border-color: var(--text);
+  box-shadow: inset 0 0 0 1px var(--text);
+}
+
+.wizard-agent-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0.625rem 0.75rem;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+}
+
+.wizard-agent-row input {
+  width: auto;
+  flex: none;
+}
+
+.wizard-agent-copy {
+  display: grid;
+  gap: 1px;
+}
+
+.wizard-agent-copy small {
+  color: var(--muted);
+}
+
+.wizard-agent-results {
+  display: grid;
+  gap: 6px;
+  margin-top: 0.75rem;
+}
+
+.wizard-agent-results .row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.wizard-agent-results small {
+  color: var(--muted);
+}
+
+.wizard-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  justify-content: flex-end;
+  margin-top: 1.25rem;
+}
+
+.wizard-tabs {
+  display: inline-flex;
+  gap: 4px;
+  margin: 0.25rem 0 0.75rem;
+  padding: 3px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--soft);
+}
+
+.wizard-tabs [role="tab"] {
+  border: 0;
+  background: transparent;
+  min-height: 1.75rem;
+  padding: 0.125rem 0.75rem;
+  border-radius: 6px;
+}
+
+.wizard-tabs [role="tab"][aria-selected="true"] {
+  background: var(--panel);
+  color: var(--text);
+}
+
+.wizard-form label {
+  display: grid;
+  gap: 4px;
+  color: var(--muted);
+  font-size: 0.875rem;
+}
+
+.wizard-form input {
+  color: var(--text);
+}
+
+.wizard-recovery textarea {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.8125rem;
+  user-select: all;
+}
+
+.wizard-recovery label {
+  display: grid;
+  gap: 4px;
+  color: var(--muted);
+  font-size: 0.875rem;
+}
+
+.wizard-recovery .checkbox-label,
+.wizard-form .checkbox-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text);
+  font-size: 0.875rem;
+}
+
+.wizard-form .checkbox-label input,
+.wizard-recovery .checkbox-label input {
+  width: auto;
+}
+
+.wizard-advanced {
+  margin: 0.75rem 0;
+}
+
+.wizard-advanced summary {
+  cursor: pointer;
+  color: var(--muted);
+}
+
+.wizard-stagelist {
+  display: grid;
+  gap: 8px;
+  margin: 0.75rem 0;
+  padding: 0;
+  list-style: none;
+}
+
+.wizard-stage {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+}
+
+.wizard-stage-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  border: 1.5px solid var(--line);
+  background: var(--panel);
+}
+
+.wizard-stage.active {
+  color: var(--text);
+}
+.wizard-stage.active .wizard-stage-dot {
+  border-color: var(--text);
+  background: var(--text);
+}
+
+.wizard-stage.done {
+  color: var(--green);
+}
+.wizard-stage.done .wizard-stage-dot {
+  border-color: var(--green);
+  background: var(--green);
+}
+
+.wizard-stage.failed {
+  color: var(--danger);
+}
+.wizard-stage.failed .wizard-stage-dot {
+  border-color: var(--danger);
+  background: var(--danger);
+}
+
+.wizard-stage-note {
+  color: inherit;
+  opacity: 0.75;
+  font-size: 0.8125rem;
+}
+
+.wizard-execute-status {
+  min-height: 1.25rem;
+}
+
+.wizard-resume-pill {
+  position: fixed;
+  right: 20px;
+  bottom: 20px;
+  z-index: 250;
+  border-radius: 999px;
+  box-shadow: 0 8px 24px rgb(0 0 0 / 18%);
+}
+
+@media (max-width: 560px) {
+  .wizard-card {
+    padding: 1.25rem;
+    border-radius: 12px;
+  }
+  .wizard-actions {
+    flex-direction: column-reverse;
+  }
+  .wizard-actions button {
+    width: 100%;
+  }
+}

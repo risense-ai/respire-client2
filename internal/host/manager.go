@@ -31,11 +31,43 @@ type Preferences struct {
 	RuntimeAutoRestart    bool   `json:"runtimeAutoRestart"`
 	SidebarWidth          int    `json:"sidebarWidth"`
 	MemoryIndexWidth      int    `json:"memoryIndexWidth"`
+	// Versioned first-run wizard state; steps and sync intent only — never
+	// credentials or recovery material.
+	OnboardingVersion    int    `json:"onboardingVersion"`
+	OnboardingCompleted  bool   `json:"onboardingCompleted"`
+	OnboardingStep       string `json:"onboardingStep"`
+	OnboardingSyncChoice string `json:"onboardingSyncChoice"`
 }
 
 // updateIntervalValues are the cadences the updates page offers.
 var updateIntervalValues = map[string]bool{
 	"5m": true, "30m": true, "1h": true, "6h": true, "24h": true,
+}
+
+// onboardingSteps is the wizard's step enum; "done" is the terminal step.
+var onboardingSteps = map[string]bool{
+	"language": true, "sync": true, "account": true, "recovery": true,
+	"model": true, "device": true, "confirm": true, "execute": true,
+	"agents": true, "done": true,
+}
+
+// onboardingSyncChoices records the cloud/offline intent picked in the
+// wizard; empty means the step has not been answered yet.
+var onboardingSyncChoices = map[string]bool{
+	"": true, "cloud": true, "offline": true,
+}
+
+// defaultPreferences is the state of a brand-new installation: the wizard
+// has not run yet, so onboardingCompleted stays false.
+func defaultPreferences() Preferences {
+	return Preferences{
+		AutoRuntime: true, AutoUpdate: true, RuntimeChannel: "stable", ClientChannel: "stable", Layout: "sidebar", Theme: "system", Language: "",
+		ClientUpdateInterval: "6h", RuntimeUpdateInterval: "6h", ClientAutoUpdate: true, RuntimeAutoUpdate: true,
+		ClientAutoRestart: true, RuntimeAutoRestart: true,
+		OnboardingVersion:   1,
+		OnboardingCompleted: false,
+		OnboardingStep:      "language",
+	}
 }
 
 // migratePreferences fills settings that older preference files predate: the
@@ -59,6 +91,26 @@ func MigratePreferences(p Preferences, stored map[string]json.RawMessage) Prefer
 	}
 	if _, ok := stored["runtimeAutoRestart"]; !ok {
 		p.RuntimeAutoRestart = true
+	}
+	// Preference files written before the wizard existed belong to existing
+	// users: they must not be forced through onboarding again. Only files
+	// that already carry the wizard state keep it.
+	if _, ok := stored["onboardingCompleted"]; !ok {
+		p.OnboardingVersion = 1
+		p.OnboardingCompleted = true
+		p.OnboardingStep = "done"
+	}
+	if p.OnboardingVersion < 1 {
+		p.OnboardingVersion = 1
+	}
+	if p.OnboardingCompleted {
+		p.OnboardingStep = "done"
+	}
+	if !onboardingSteps[p.OnboardingStep] {
+		p.OnboardingStep = "done"
+	}
+	if !onboardingSyncChoices[p.OnboardingSyncChoice] {
+		p.OnboardingSyncChoice = ""
 	}
 	if !updateIntervalValues[p.ClientUpdateInterval] {
 		p.ClientUpdateInterval = "6h"
@@ -98,6 +150,15 @@ func (p Preferences) validate() error {
 	}
 	if p.MemoryIndexWidth < 0 {
 		return errors.New("记忆树宽度无效")
+	}
+	if p.OnboardingVersion != 1 {
+		return errors.New("onboarding 版本无效")
+	}
+	if !onboardingSteps[p.OnboardingStep] {
+		return errors.New("onboarding 步骤无效")
+	}
+	if !onboardingSyncChoices[p.OnboardingSyncChoice] {
+		return errors.New("onboarding 同步意向无效")
 	}
 	return nil
 }
@@ -152,10 +213,8 @@ func New() (*Manager, error) {
 		return nil, errors.New("RSRS_RPC_PORT must be a valid TCP port")
 	}
 	m := &Manager{Root: filepath.Join(dataRoot, "client2"), DataRoot: dataRoot, Endpoint: "http://127.0.0.1:" + port,
-		localClient: &http.Client{Timeout: 30 * time.Second, Transport: &http.Transport{Proxy: nil}, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }},
-		prefs: Preferences{AutoRuntime: true, AutoUpdate: true, RuntimeChannel: "stable", ClientChannel: "stable", Layout: "sidebar", Theme: "system", Language: "",
-			ClientUpdateInterval: "6h", RuntimeUpdateInterval: "6h", ClientAutoUpdate: true, RuntimeAutoUpdate: true,
-			ClientAutoRestart: true, RuntimeAutoRestart: true},
+		localClient:     &http.Client{Timeout: 30 * time.Second, Transport: &http.Transport{Proxy: nil}, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }},
+		prefs:           defaultPreferences(),
 		modelHTTPClient: &http.Client{Transport: &http.Transport{Proxy: nil}}, task: TaskState{Stage: "就绪"},
 		HTTPClient: &http.Client{Timeout: 10 * time.Minute, CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			if len(via) >= 5 {
@@ -169,26 +228,50 @@ func New() (*Manager, error) {
 	if err := os.MkdirAll(m.Root, 0700); err != nil {
 		return nil, err
 	}
-	b, err := os.ReadFile(filepath.Join(m.Root, "preferences.json"))
-	if err == nil {
-		var stored map[string]json.RawMessage
-		if err = json.Unmarshal(b, &stored); err == nil {
-			err = json.Unmarshal(b, &m.prefs)
-			if err == nil {
-				m.prefs = migratePreferences(m.prefs, stored)
-			}
-		}
-	}
-	if err != nil && !errors.Is(err, os.ErrNotExist) {
-		return nil, fmt.Errorf("read preferences: %w", err)
-	}
-	if err := m.prefs.validate(); err != nil {
+	prefs, err := loadPreferencesFile(filepath.Join(m.Root, "preferences.json"))
+	if err != nil {
 		return nil, err
 	}
+	m.prefs = prefs
 	if err := m.loadOperations(); err != nil {
 		return nil, err
 	}
 	return m, nil
+}
+
+// loadPreferencesFile reads one preferences file: a missing file means a
+// brand-new installation that keeps the first-run wizard state, while an
+// existing file without wizard fields belongs to an upgraded user who is
+// migrated to completed.
+func loadPreferencesFile(path string) (Preferences, error) {
+	b, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		prefs := defaultPreferences()
+		if err := prefs.validate(); err != nil {
+			return prefs, err
+		}
+		return prefs, nil
+	}
+	if err != nil {
+		return Preferences{}, fmt.Errorf("read preferences: %w", err)
+	}
+	return loadPreferences(b)
+}
+
+func loadPreferences(b []byte) (Preferences, error) {
+	var stored map[string]json.RawMessage
+	if err := json.Unmarshal(b, &stored); err != nil {
+		return Preferences{}, fmt.Errorf("read preferences: %w", err)
+	}
+	prefs := defaultPreferences()
+	if err := json.Unmarshal(b, &prefs); err != nil {
+		return Preferences{}, fmt.Errorf("read preferences: %w", err)
+	}
+	prefs = migratePreferences(prefs, stored)
+	if err := prefs.validate(); err != nil {
+		return Preferences{}, err
+	}
+	return prefs, nil
 }
 
 func writeJSON(path string, value any) error {

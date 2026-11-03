@@ -9,12 +9,18 @@ import {
   action,
   confirm,
   notify,
-  summary,
 } from "../ui/core.js";
 
-function recoveryReceipt(result, label) {
-  const detail = result.details || {},
-    s = summary(result);
+// Shared account operations and recovery-material handling. The accounts
+// page and the first-run wizard both use these so the confirmation rules
+// cannot drift apart.
+
+// issuedRecoveryMaterial extracts recovery material a server or offline
+// keygen actually issued; null means no new material exists and no
+// save-confirmation step may be faked.
+export function issuedRecoveryMaterial(envelope) {
+  const detail = envelope?.details || {},
+    s = envelope?.summary || {};
   const issued =
     detail.super ||
     detail.super_key ||
@@ -22,20 +28,66 @@ function recoveryReceipt(result, label) {
     s.super ||
     s.super_key ||
     s.super_issued;
-  if (!issued) {
-    notify(label + "已完成");
-    return;
-  }
-  const receipt = dialog({
+  if (!issued) return null;
+  return { material: issued, user: detail.user || s.user || "" };
+}
+
+export function recoveryMaterialJson(issued) {
+  return raw({ super: issued.material, user: issued.user });
+}
+
+const RECOVERY_NOTE =
+  "恢复材料用于重新解锁本机记忆，请保存到安全位置，不要分享。登录密码不能替代恢复材料；丢失后服务端无法帮助恢复本机密钥。";
+
+// recoveryMaterialDialog shows issued material behind a mandatory
+// save-acknowledgement checkbox; the close buttons and Escape are removed so
+// the receipt cannot be dismissed without the acknowledgement.
+export function recoveryMaterialDialog(envelope, { note = RECOVERY_NOTE } = {}) {
+  const issued = issuedRecoveryMaterial(envelope);
+  if (!issued) return null;
+  const element = dialog({
     title: "请保存恢复材料",
-    body: `<p class="warning-text">${h(label)}已完成。恢复材料用于重新解锁本机记忆，请保存到安全位置，不要分享。</p><label>恢复材料<textarea class="reading-text" readonly rows="7">${h(raw({ super: issued, user: detail.user || s.user }))}</textarea></label>`,
+    wide: true,
+    body:
+      `<p class="warning-text">${h(note)}</p><label>恢复材料<textarea class="reading-text" readonly rows="7">${h(
+        recoveryMaterialJson(issued),
+      )}</textarea></label><label class="checkbox-label"><input type="checkbox" data-saved>我已将恢复材料保存到安全位置</label>`,
     submit: "我已保存恢复材料",
     onSubmit: () => {
+      if (!$("[data-saved]", element).checked) return false;
       notify("恢复材料已确认保存");
     },
   });
-  receipt.querySelectorAll("[data-close]").forEach((button) => button.remove());
-  receipt.addEventListener("cancel", (event) => event.preventDefault());
+  element.querySelectorAll("[data-close]").forEach((button) => button.remove());
+  element.addEventListener("cancel", (event) => event.preventDefault());
+  const submit = $("[type=submit]", element),
+    checkbox = $("[data-saved]", element);
+  submit.disabled = true;
+  checkbox.addEventListener("change", () => {
+    submit.disabled = !checkbox.checked;
+  });
+  return element;
+}
+
+export function validateAuthentication(kind, values) {
+  if (
+    kind === "register" &&
+    (values.password.length < 8 || values.password !== values.confirmation)
+  )
+    throw Error("密码至少 8 位，且两次输入必须一致");
+}
+
+// runAuthentication submits register/login through the CLI host RPC stdin
+// transport; credentials stay out of argv and client settings.
+export async function runAuthentication(kind, values) {
+  const credentials = { password: values.password };
+  if (values.super) credentials.super = values.super;
+  if (values.totp) credentials.totp = values.totp.trim();
+  return execute(
+    "auth_" + kind,
+    { addr: values.addr.trim(), user: values.user.trim() },
+    { secret: JSON.stringify(credentials) },
+  );
 }
 
 export function authenticationPanel(root, ctx, refresh) {
@@ -49,7 +101,7 @@ export function authenticationPanel(root, ctx, refresh) {
   const done = async (result, label) => {
     await ctx.refresh();
     await refresh();
-    recoveryReceipt(result, label);
+    if (!recoveryMaterialDialog(result)) notify(label + "已完成");
   };
   section.onclick = (event) => {
     const button = event.target.closest("[data-auth]");
@@ -98,20 +150,8 @@ export function authenticationPanel(root, ctx, refresh) {
               }) + input("totp","两步验证代码（启用时填写 6 位代码）","",{type:"password"})),
         submit: title,
         onSubmit: async (values) => {
-          if (
-            kind === "register" &&
-            (values.password.length < 8 ||
-              values.password !== values.confirmation)
-          )
-            throw Error("密码至少 8 位，且两次输入必须一致");
-          const credentials = { password: values.password };
-          if (values.super) credentials.super = values.super;
-          if (values.totp) credentials.totp=values.totp.trim();
-          const result = await execute(
-            "auth_" + kind,
-            { addr: values.addr.trim(), user: values.user.trim() },
-            { secret: JSON.stringify(credentials) },
-          );
+          validateAuthentication(kind, values);
+          const result = await runAuthentication(kind, values);
           await done(result, title);
         },
       });
