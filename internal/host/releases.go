@@ -41,18 +41,44 @@ type cliMetadata struct {
 }
 
 // runtimeMetadata is the build metadata published by risense-ai/respire-runtime
-// as runtime-build-<triple>.json. sha256 covers the runtimeArchive payload.
+// as runtime-build-<triple>.json. The archive hash covers the runtimeArchive
+// payload. Schema v2 renamed the target and archive-hash keys and starred the
+// compat ceiling; v1 keys stay accepted. Target and ArchiveHash are normalized
+// by normalizeRuntimeMetadata after unmarshal.
 type runtimeMetadata struct {
 	RuntimeVersion string `json:"runtime_version"`
 	Tag            string `json:"tag"`
-	Target         string `json:"triple"`
-	ArchiveHash    string `json:"sha256"`
+	Target         string `json:"-"`
+	ArchiveHash    string `json:"-"`
 	Binary         string `json:"binary_file"`
 	BinaryHash     string `json:"binary_sha256"`
+	SchemaVersion  int    `json:"schema_version"`
 	Compat         struct {
 		MinCLI string `json:"min_cli"`
-		MaxCLI string `json:"max_cli"`
+		MaxCLI string `json:"max_cli"` // v2 allows "*"; the client does not enforce the range today
 	} `json:"compat"`
+
+	// Key aliases across schemas, consumed only by normalizeRuntimeMetadata.
+	Triple        string `json:"triple"`         // schema v1
+	TargetTriple  string `json:"target_triple"`  // schema v2
+	SHA256        string `json:"sha256"`         // schema v1
+	ArchiveSHA256 string `json:"archive_sha256"` // schema v2
+}
+
+// normalizeRuntimeMetadata maps the schema-specific key aliases onto the
+// fields the rest of the client reads. Unknown keys would otherwise leave
+// Target and ArchiveHash empty and fail the LatestRuntime contract checks.
+func normalizeRuntimeMetadata(meta *runtimeMetadata) {
+	if meta.TargetTriple != "" {
+		meta.Target = meta.TargetTriple
+	} else {
+		meta.Target = meta.Triple
+	}
+	if meta.ArchiveSHA256 != "" {
+		meta.ArchiveHash = meta.ArchiveSHA256
+	} else {
+		meta.ArchiveHash = meta.SHA256
+	}
 }
 
 // Release repositories: Runtime assets moved to their own repository while
@@ -159,7 +185,9 @@ func (m *Manager) LatestRuntime(ctx context.Context) (githubRelease, runtimeMeta
 	if err = m.fetchJSON(ctx, url, &meta); err != nil {
 		return latest, meta, err
 	}
-	if meta.RuntimeVersion != strings.TrimPrefix(meta.Tag, "v") || meta.Tag != latest.Tag ||
+	normalizeRuntimeMetadata(&meta)
+	if (meta.SchemaVersion != 0 && meta.SchemaVersion != 1 && meta.SchemaVersion != 2) ||
+		meta.RuntimeVersion != strings.TrimPrefix(meta.Tag, "v") || meta.Tag != latest.Tag ||
 		meta.Target != target || meta.Binary != "rsrs-runtime-"+target+binaryExtension() ||
 		!validHash(meta.BinaryHash) || !validHash(meta.ArchiveHash) {
 		return latest, meta, errors.New("Runtime release metadata mismatch")
