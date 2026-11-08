@@ -20,6 +20,9 @@ if ($env:GITHUB_TOKEN) {
 } else {
     $ghToken = (& gh auth token 2>$null)
     if ($LASTEXITCODE -eq 0 -and $ghToken) { $headers['Authorization'] = "Bearer $ghToken" }
+    # gh not being logged in is not a script failure; a stale $LASTEXITCODE
+    # here would falsely fail the caller's exit-code check.
+    $global:LASTEXITCODE = 0
 }
 
 function Invoke-GitHubJson([string]$Url) {
@@ -175,3 +178,5 @@ try {
 } finally {
     Pop-Location
 }
+
+exit 0
