@@ -4,7 +4,14 @@ English | [简体中文](README.zh-CN.md)
 
 A desktop client built with Wails v3 and Go for Windows, macOS and Linux. It replaces the desktop application in `risense-ai/respire-client`. The CLI, TUI, hosted dashboard and existing user data remain independent.
 
-Download the asset matching your OS and architecture from [Releases](https://github.com/risense-ai/respire-client2/releases). Keep the extracted application in a writable, permanent folder. Windows uses one EXE and requires Microsoft Edge WebView2. macOS uses a zipped `Respire.app`; Linux uses a tarball containing one executable and requires GTK 3, WebKitGTK 4.1 and X11 libraries. No Node.js, Go, npm or Rust installation is needed by the end user. The application downloads the CLI and its native libraries separately when available; it does not contain Core or model weights. If no client-managed CLI exists, it can recognize and start an external CLI at `<root>/bin/rsrs[.exe]`, including an npm installation.
+Download the asset matching your OS and architecture from [Releases](https://github.com/risense-ai/respire-client2/releases). Keep the extracted application in a writable, permanent folder. Windows uses one EXE and requires Microsoft Edge WebView2. On Apple Silicon, prefer `respire-darwin-arm64.dmg`: drag `Respire.app` to Applications and the first launch installs the bundled CLI and managed Runtime locally, offline, and adds `rsrs` to new zsh terminals. Intel Macs use the zip, which does not carry a runnable Runtime bundle. Linux uses a tarball containing one executable and requires GTK 3, WebKitGTK 4.1 and X11 libraries. No Node.js, Go, npm or Rust installation is needed by the end user. Without a bundled payload the application downloads the CLI and its native libraries separately when available; it does not contain Core or model weights. If no client-managed CLI exists, it can recognize and start an external CLI at `<root>/bin/rsrs[.exe]`, including an npm installation.
+
+### macOS notes (DMG install)
+
+- The DMG is ad-hoc signed and **not** notarized: Gatekeeper may warn on first open. Use "Open" in the warning dialog (or right-click → Open); this does not disable system security. Remove the quarantine attribute only if your own policy allows it.
+- First launch copies the bundled CLI to `~/.rsrs/bin/rsrs` and the Runtime to `~/.rsrs/client2/runtime/<version>/` after full hash verification; newer already-installed versions are kept, never downgraded.
+- It adds one clearly marked block to `~/.zprofile` so new terminal windows find `rsrs`. If that file cannot be written, the client shows the exact block to add manually.
+- Deleting the app does not delete `~/.rsrs` (memory, accounts, CLI, Runtime) or the `~/.zprofile` block. To remove everything manually, delete `~/.rsrs` and remove the block delimited by `# >>> respire-client2 >>>` / `# <<< respire-client2 <<<` from `~/.zprofile`.
 
 See [platform support](docs/platforms.md) for architectures, native-library prerequisites and the distinction between desktop builds and matching CLI availability. Missing CLI/Core release targets are tracked in [respire-cli#163](https://github.com/risense-ai/respire-cli/issues/163).
 
@@ -166,14 +173,15 @@ Source: GitHub releases in `risense-ai/respire-client2`. Stable (the default) us
 
 ```text
 respire-windows-<arch>.exe    # Windows: amd64, arm64
-respire-darwin-<arch>.zip     # macOS: amd64, arm64; one .app bundle
+respire-darwin-arm64.dmg      # macOS Apple Silicon full installer (bundled CLI + Runtime)
+respire-darwin-<arch>.zip     # macOS: amd64, arm64; one .app bundle; the in-app update asset
 respire-linux-<arch>.tar.gz   # Linux: one respire executable
 SHA256SUMS
 LICENSE.txt
 THIRD_PARTY_NOTICES.txt
 ```
 
-`SHA256SUMS` uses standard `hex-digest  filename` lines for every platform asset. The updater selects exactly the running OS/architecture and rejects missing or invalid SHA-256 checksums. Wails performs download staging, archive extraction and helper-based replacement/restart recovery; macOS replaces the complete app bundle. The helper is re-executed from the same application: no separate updater is distributed. Automatic checks run after startup and every six hours; downloads are staged, then the user restarts to apply. An empty/unpublished repository cannot supply a production update and is reported in the update panel.
+`SHA256SUMS` uses standard `hex-digest  filename` lines for every platform asset. The updater selects exactly the running OS/architecture and rejects missing or invalid SHA-256 checksums; on macOS it always picks the zip, never the DMG, which exists only for first installation. Wails performs download staging, archive extraction and helper-based replacement/restart recovery; macOS replaces the complete app bundle. The helper is re-executed from the same application: no separate updater is distributed. Automatic checks run after startup and every six hours; downloads are staged, then the user restarts to apply. An empty/unpublished repository cannot supply a production update and is reported in the update panel.
 
 This initial release uses HTTPS GitHub release metadata and SHA-256. It does not implement publisher-key signatures or Authenticode signing. A hash supplied by the same release source does not defend against compromise of that source. Add release signing before changing that trust assumption; do not silently bypass failed validation.
 
