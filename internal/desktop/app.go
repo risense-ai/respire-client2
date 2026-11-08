@@ -235,6 +235,9 @@ func (d *desktop) task(stage string, action func() error) {
 }
 
 func (d *desktop) restartClient() error {
+	if blocked := d.clientRestartBlocked(); blocked != nil {
+		return blocked
+	}
 	d.mu.Lock()
 	d.restarting = true
 	d.mu.Unlock()

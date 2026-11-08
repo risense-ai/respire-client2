@@ -4,7 +4,9 @@
 
 基于 Wails v3 与 Go 构建的 Windows、macOS、Linux 桌面客户端，用于替代 `risense-ai/respire-client` 中的桌面应用。CLI、TUI、托管 Dashboard 以及既有用户数据保持独立。
 
-从 [Releases](https://github.com/risense-ai/respire-client2/releases) 下载与操作系统和架构匹配的产物。请将解压后的应用保存在可写入的固定目录。Windows 为单个 EXE，需要 Microsoft Edge WebView2；macOS 为压缩的 `Respire.app`；Linux 为包含单个可执行文件的 tarball，需要 GTK 3、WebKitGTK 4.1 和 X11 库。最终用户无需安装 Node.js、Go、npm 或 Rust。应用在可用时单独下载 CLI 及其原生库；本体不包含 Core 与模型权重。若不存在客户端管理的 CLI，客户端可识别并启动 `<root>/bin/rsrs[.exe]` 处的外部 CLI，包括 npm 安装的版本。
+从 [Releases](https://github.com/risense-ai/respire-client2/releases) 下载与操作系统和架构匹配的产物。请将解压后的应用保存在可写入的固定目录。Windows 提供按架构区分的 `setup.exe` 安装器与单个便携 EXE 两种产物，均需要 Microsoft Edge WebView2；macOS 为压缩的 `Respire.app`；Linux 为包含单个可执行文件的 tarball，需要 GTK 3、WebKitGTK 4.1 和 X11 库。最终用户无需安装 Node.js、Go、npm 或 Rust。应用在可用时单独下载 CLI 及其原生库；本体不包含 Core 与模型权重。若不存在客户端管理的 CLI，客户端可识别并启动 `<root>/bin/rsrs[.exe]` 处的外部 CLI，包括 npm 安装的版本。
+
+Windows 推荐 `respire-windows-<arch>-setup.exe`：安装时可选每用户安装（免提权，应用内更新可用）或全机器安装（Program Files，需提权）。安装器创建开始菜单与桌面快捷方式及卸载项，缺失时自动安装 Microsoft Edge WebView2（离线失败时在完成页给出手动安装链接），从同一发布通道内置 `rsrs` CLI 与托管 Runtime（默认 stable；可用 `scripts/build-installer.ps1 -Channel dev` 产出 dev 通道安装器；stable Runtime 缺失时构建失败而不静默换通道），把经 sha256 校验的 `rsrs.exe` 放到 `%USERPROFILE%\.rsrs\bin` 且不降级既有更新版本，把校验过的 Runtime 预置为客户端托管布局使首启无需下载，并默认可将 bin 目录加入用户 PATH。模型权重仍由应用内下载。卸载只移除程序文件、快捷方式与安装器添加的 PATH 条目；`~/.rsrs` 用户数据——含 CLI、托管 Runtime 及其状态——一律不动，后续 Runtime 更新仍走应用自身通道。npm 的 `rsrs-cli` 落位同一目录——后装者生效，两种渠道共存。安装器未经代码签名，SmartScreen 可能显示「未知发布者」警告；选择「更多信息」→「仍要运行」。全机器安装的应用目录不可写，无法应用应用内更新，应用会引导改用最新 setup.exe。裸 EXE 保留供便携使用，首启下载 Runtime 的行为不变。
 
 架构、原生库前置条件，以及桌面构建与 CLI 可用性的差异见[平台支持](docs/platforms.md)。缺失的 CLI/Core 发布目标记录在 [respire-cli#163](https://github.com/risense-ai/respire-cli/issues/163)。
 
@@ -116,6 +118,14 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build.ps1 -Version 0
 ```
 
 `-Arch` 接受 `amd64` 或 `arm64`。资源生成器运行在构建机的架构上；应用按请求的架构构建。产物为 `dist/respire-windows-<arch>.exe`、`dist/SHA256SUMS`、`dist/LICENSE.txt` 与 `dist/THIRD_PARTY_NOTICES.txt`。
+
+编译 Windows 安装器：先跑 `build.ps1`，再执行（需要 [Inno Setup 6](https://jrsoftware.org/isinfo.php)；脚本按 respire-cli stable release 的 `cli-build-<triple>.json` 元数据获取并校验内置 `rsrs.exe`）：
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-installer.ps1 -Version 0.2.0 -Arch amd64
+```
+
+产物为 `dist/respire-windows-<arch>-setup.exe`，并追加到 `dist/SHA256SUMS`。
 
 macOS（Xcode Command Line Tools）或 Linux（C/C++ 编译器、pkg-config、GTK/WebKit 开发库）：
 

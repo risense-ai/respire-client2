@@ -86,6 +86,20 @@ jobs:
           if ($fontProcess.ExitCode -ne 0) { throw 'Font enumeration failed' }
           $fonts = Get-Content $fontsFile -Raw | ConvertFrom-Json
           if (!$fonts.ok -or $fonts.result.Count -eq 0) { throw 'No system fonts returned' }
+      - name: Build installer
+        if: matrix.os == 'windows'
+        shell: pwsh
+        run: |
+          $version = '0.2.56-dev.${{ github.run_number }}'
+          if ('${{ github.ref_type }}' -eq 'tag') { $version = '${{ github.ref_name }}'.TrimStart('v') }
+          # Channel follows the release convention: a plain v* tag is a stable
+          # release and must bundle the stable Runtime; everything else (main
+          # pushes, PRs, prerelease tags) rides the dev channel until a stable
+          # Runtime release exists.
+          $channel = 'dev'
+          if (('${{ github.ref_type }}' -eq 'tag') -and ('${{ github.ref_name }}' -notmatch '-')) { $channel = 'stable' }
+          choco install innosetup -y --no-progress
+          ./scripts/build-installer.ps1 -Version $version -Arch '${{ matrix.arch }}' -Channel $channel
       - name: Build Unix
         if: matrix.os != 'windows'
         shell: bash
@@ -130,7 +144,7 @@ jobs:
           cp artifacts/respire-windows-amd64/THIRD_PARTY_NOTICES.txt dist/
           cd dist
           sha256sum --check SHA256SUMS
-          test "$(wc -l < SHA256SUMS)" -eq 6
+          test "$(wc -l < SHA256SUMS)" -eq 8
       - name: Generate release notes
         shell: bash
         env:

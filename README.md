@@ -4,7 +4,9 @@ English | [简体中文](README.zh-CN.md)
 
 A desktop client built with Wails v3 and Go for Windows, macOS and Linux. It replaces the desktop application in `risense-ai/respire-client`. The CLI, TUI, hosted dashboard and existing user data remain independent.
 
-Download the asset matching your OS and architecture from [Releases](https://github.com/risense-ai/respire-client2/releases). Keep the extracted application in a writable, permanent folder. Windows uses one EXE and requires Microsoft Edge WebView2. macOS uses a zipped `Respire.app`; Linux uses a tarball containing one executable and requires GTK 3, WebKitGTK 4.1 and X11 libraries. No Node.js, Go, npm or Rust installation is needed by the end user. The application downloads the CLI and its native libraries separately when available; it does not contain Core or model weights. If no client-managed CLI exists, it can recognize and start an external CLI at `<root>/bin/rsrs[.exe]`, including an npm installation.
+Download the asset matching your OS and architecture from [Releases](https://github.com/risense-ai/respire-client2/releases). Keep the extracted application in a writable, permanent folder. Windows offers a per-architecture `setup.exe` installer and a single portable EXE; both require Microsoft Edge WebView2. macOS uses a zipped `Respire.app`; Linux uses a tarball containing one executable and requires GTK 3, WebKitGTK 4.1 and X11 libraries. No Node.js, Go, npm or Rust installation is needed by the end user. The application downloads the CLI and its native libraries separately when available; it does not contain Core or model weights. If no client-managed CLI exists, it can recognize and start an external CLI at `<root>/bin/rsrs[.exe]`, including an npm installation.
+
+On Windows, prefer `respire-windows-<arch>-setup.exe`: you can choose a per-user install (no elevation, in-app updates work) or a per-machine install (Program Files, elevation required). The installer creates Start-menu and desktop shortcuts and an uninstall entry, installs Microsoft Edge WebView2 when missing (manual link on the finish page if that fails offline), bundles both the `rsrs` CLI and the managed Runtime from the same release channel (stable by default; a dev-channel build can be produced via `scripts/build-installer.ps1 -Channel dev`, and a missing stable Runtime release fails the build rather than silently substituting), places the checksum-verified `rsrs.exe` into `%USERPROFILE%\.rsrs\bin` without ever downgrading an existing newer one, pre-stages the verified Runtime into the client's managed layout so the first launch needs no download, and optionally adds the bin folder to your user PATH (on by default). Model weights are still downloaded inside the app. Uninstalling removes only program files, shortcuts and the PATH entry it added; `~/.rsrs` user data — including the CLI, the managed Runtime and its state — is never touched, and later Runtime updates keep flowing through the app's own channel. npm's `rsrs-cli` installs to the same location — whichever installs last wins, and the two channels coexist. The installer is not code-signed, so SmartScreen may show an "unknown publisher" warning; choose "More info" → "Run anyway". Per-machine installs cannot apply in-app updates (the app directory is not writable); the app will direct you to run the latest setup.exe instead. The bare EXE remains for portable use and downloads the Runtime on first run as before.
 
 See [platform support](docs/platforms.md) for architectures, native-library prerequisites and the distinction between desktop builds and matching CLI availability. Missing CLI/Core release targets are tracked in [respire-cli#163](https://github.com/risense-ai/respire-cli/issues/163).
 
@@ -116,6 +118,14 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build.ps1 -Version 0
 ```
 
 `-Arch` accepts `amd64` or `arm64`. The resource generator runs on the build machine's architecture; the application is built for the requested architecture. The output is `dist/respire-windows-<arch>.exe`, `dist/SHA256SUMS`, `dist/LICENSE.txt` and `dist/THIRD_PARTY_NOTICES.txt`.
+
+To compile the Windows installer, run after `build.ps1` (requires [Inno Setup 6](https://jrsoftware.org/isinfo.php); the script fetches and verifies the bundled `rsrs.exe` from the respire-cli stable release via its `cli-build-<triple>.json` metadata):
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-installer.ps1 -Version 0.2.0 -Arch amd64
+```
+
+The output is `dist/respire-windows-<arch>-setup.exe`, appended to `dist/SHA256SUMS`.
 
 On macOS (Xcode Command Line Tools) or Linux (C/C++ compiler, pkg-config, GTK/WebKit development libraries):
 

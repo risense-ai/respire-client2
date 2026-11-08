@@ -20,6 +20,9 @@ artifacts = []
 for name, digest in sorted(checksums.items()):
     if not name.startswith("respire-"):
         continue
+    if name.startswith("respire-windows-") and name.endswith("-setup.exe"):
+        # Installers ship as release assets but are never self-update targets.
+        continue
     artifacts.append({
         "filename": name,
         "url": f"https://github.com/risense-ai/respire-client2/releases/download/{tag}/{name}",

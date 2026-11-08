@@ -3,6 +3,8 @@ package desktop
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/wailsapp/wails/v3/pkg/updater"
@@ -100,7 +102,45 @@ func (d *desktop) cancelUpdate() error {
 }
 
 func (d *desktop) canRestartClient() bool {
-	return !d.m.HasActiveOperations() && !d.m.TaskSnapshot().Busy
+	return exeDirWritable() && !d.m.HasActiveOperations() && !d.m.TaskSnapshot().Busy
+}
+
+// clientRestartBlocked explains why an in-place client update cannot restart
+// right now; '' means allowed. The unwritable-directory case (per-machine
+// installs under Program Files) defers to the setup.exe upgrade path.
+func (d *desktop) clientRestartBlocked() error {
+	if !exeDirWritable() {
+		return errors.New("当前安装目录不可写（如 Program Files），无法应用应用内更新；请下载并运行最新版的 respire-windows-setup.exe 安装器完成升级")
+	}
+	if d.m.HasActiveOperations() || d.m.TaskSnapshot().Busy {
+		return errors.New("仍有业务操作在执行，请等待完成后应用客户端更新")
+	}
+	return nil
+}
+
+// exeDirWritable probes whether the running executable's directory accepts
+// writes via a temporary file. Var-backed so tests can stub it.
+var exeDirWritable = func() bool {
+	exe, err := os.Executable()
+	if err != nil {
+		return false
+	}
+	return dirWritable(filepath.Dir(exe))
+}
+
+// dirWritable reports whether dir accepts a create-and-delete probe.
+func dirWritable(dir string) bool {
+	probe, err := os.CreateTemp(dir, ".respire-update-probe-*")
+	if err != nil {
+		return false
+	}
+	name := probe.Name()
+	if err := probe.Close(); err != nil {
+		os.Remove(name)
+		return false
+	}
+	os.Remove(name)
+	return true
 }
 
 func (d *desktop) savePreferences(p host.Preferences) error {
