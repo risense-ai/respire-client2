@@ -95,6 +95,10 @@ func (d *desktop) handler(static http.Handler) http.Handler {
 				RuntimeAutoRestart    bool   `json:"runtimeAutoRestart"`
 				SidebarWidth          int    `json:"sidebarWidth"`
 				MemoryIndexWidth      int    `json:"memoryIndexWidth"`
+				OnboardingVersion     int    `json:"onboardingVersion"`
+				OnboardingCompleted   bool   `json:"onboardingCompleted"`
+				OnboardingStep        string `json:"onboardingStep"`
+				OnboardingSyncChoice  string `json:"onboardingSyncChoice"`
 			}
 			// Buffered so /api/preferences can re-read the same request as a
 			// field map and patch only the keys the sender included.
