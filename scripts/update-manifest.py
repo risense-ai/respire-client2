@@ -6,7 +6,12 @@ import sys
 from datetime import datetime, timezone
 
 
-tag, dist, notes, output = sys.argv[1:]
+tag, dist, notes, output = sys.argv[1:5]
+# The expected artifact count follows the release matrix (zip-only platforms,
+# plus the Apple Silicon DMG); CI passes it so a missing upload fails here
+# instead of publishing a partial manifest. The default keeps the historic
+# six-artifact zip-only matrix.
+expected = int(sys.argv[5]) if len(sys.argv) > 5 else 6
 if not tag.startswith("v"):
     raise SystemExit("tag must start with v")
 version = tag[1:]
@@ -26,8 +31,8 @@ for name, digest in sorted(checksums.items()):
         "size": (folder / name).stat().st_size,
         "sha256": base64.b64encode(bytes.fromhex(digest)).decode(),
     })
-if len(artifacts) != 6:
-    raise SystemExit(f"expected six platform artifacts, found {len(artifacts)}")
+if len(artifacts) != expected:
+    raise SystemExit(f"expected {expected} platform artifacts, found {len(artifacts)}")
 
 release = {
     "version": version,
