@@ -120,6 +120,7 @@ jobs:
           name: respire-${{ matrix.os }}-${{ matrix.arch }}
           path: |
             dist/respire-${{ matrix.os }}-${{ matrix.arch }}.*
+            dist/respire-${{ matrix.os }}-${{ matrix.arch }}-setup.exe
             dist/SHA256SUMS
             dist/LICENSE.txt
             dist/THIRD_PARTY_NOTICES.txt
