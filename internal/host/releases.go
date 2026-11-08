@@ -16,17 +16,50 @@ import (
 	"golang.org/x/mod/semver"
 )
 
-type releaseAsset struct {
+// ReleaseAsset is one downloadable release artifact; URL is GitHub's
+// browser_download_url so the URL-vs-name check in ReleaseAssetURL applies to
+// every consumer.
+type ReleaseAsset struct {
 	Name string `json:"name"`
 	URL  string `json:"browser_download_url"`
 }
-type githubRelease struct {
+
+// ReleaseInfo is the view of a GitHub release shared by the online installer
+// and the DMG build-time fetch tooling.
+type ReleaseInfo struct {
 	Tag        string         `json:"tag_name"`
 	Draft      bool           `json:"draft"`
 	Prerelease bool           `json:"prerelease"`
-	Assets     []releaseAsset `json:"assets"`
+	Assets     []ReleaseAsset `json:"assets"`
 }
-type cliMetadata struct {
+
+// Compat is the CLI compatibility window a Runtime release declares.
+type Compat struct {
+	MinCLI string `json:"min_cli"`
+	MaxCLI string `json:"max_cli"`
+}
+
+// RuntimeMetadata is the normalized runtime-build-<triple>.json. Schema 2 is
+// the canonical shape published by risense-ai/respire-runtime
+// (target_triple / archive_file / archive_sha256); schema 1 is the legacy
+// alias shape (triple / sha256) mapped onto the same fields, so the online
+// installer and the DMG bootstrap staging consume one representation.
+type RuntimeMetadata struct {
+	Schema         int    `json:"schema_version"`
+	RuntimeVersion string `json:"runtime_version"`
+	Tag            string `json:"tag"`
+	Target         string `json:"target_triple"`
+	ArchiveFile    string `json:"archive_file"`
+	ArchiveHash    string `json:"archive_sha256"`
+	Binary         string `json:"binary_file"`
+	BinaryHash     string `json:"binary_sha256"`
+	Compat         Compat `json:"compat"`
+}
+
+// CLIMetadata is the CLI build metadata published as cli-build-<triple>.json.
+// NOTE: it keeps its risense-ai/respire-cli source and is consumed by
+// LatestCLIBuild; managed Runtime assets no longer come from it.
+type CLIMetadata struct {
 	Schema      int    `json:"schema_version"`
 	Version     string `json:"version"`
 	Target      string `json:"target"`
@@ -35,31 +68,21 @@ type cliMetadata struct {
 	Runtime     string `json:"runtime_file"`
 	BinaryHash  string `json:"binary_sha256"`
 	RuntimeHash string `json:"runtime_sha256"`
-
-	// NOTE: cli-build metadata keeps its risense-ai/respire-cli source and is
-	// consumed by LatestCLIBuild; managed Runtime assets no longer come from it.
-}
-
-// runtimeMetadata is the build metadata published by risense-ai/respire-runtime
-// as runtime-build-<triple>.json. sha256 covers the runtimeArchive payload.
-type runtimeMetadata struct {
-	RuntimeVersion string `json:"runtime_version"`
-	Tag            string `json:"tag"`
-	Target         string `json:"triple"`
-	ArchiveHash    string `json:"sha256"`
-	Binary         string `json:"binary_file"`
-	BinaryHash     string `json:"binary_sha256"`
-	Compat         struct {
-		MinCLI string `json:"min_cli"`
-		MaxCLI string `json:"max_cli"`
-	} `json:"compat"`
 }
 
 // Release repositories: Runtime assets moved to their own repository while
-// CLI install metadata stays on the CLI repository (dual source).
+// CLI install metadata stays on the CLI repository (dual source). Exported
+// for the build-time bootstrap-metadata helper.
 const (
-	runtimeRepo = "respire-runtime"
-	cliRepo     = "respire-cli"
+	RuntimeRepo = "respire-runtime"
+	CLIRepo     = "respire-cli"
+)
+
+// runtimeRepo and cliRepo keep the historical lowercase names at the call
+// sites inside this package.
+const (
+	runtimeRepo = RuntimeRepo
+	cliRepo     = CLIRepo
 )
 
 // runtimeArchive is the managed Runtime payload asset published per target.
@@ -67,6 +90,165 @@ func runtimeArchive(target string) string { return "rsrs-runtime-" + target + ".
 
 func validVersion(v string) bool { return semver.IsValid("v"+v) && !strings.ContainsAny(v, "/\\:") }
 func validHash(v string) bool    { b, e := hex.DecodeString(v); return e == nil && len(b) == sha256.Size }
+
+// metadataMismatch is the single failure family for release metadata that
+// parses but does not match its release, target, or declared hashes.
+func metadataMismatch(why string) error {
+	return fmt.Errorf("Runtime release metadata mismatch: %s", why)
+}
+
+// aliasConflict applies the contract rule for duplicated legacy/canonical
+// aliases: both absent or equal passes, differing values reject the file.
+func aliasConflict(alias, canonical string, name string) error {
+	if alias == "" || alias == canonical {
+		return nil
+	}
+	return metadataMismatch(fmt.Sprintf("conflicting %s", name))
+}
+
+// NormalizeRuntimeMetadata parses published runtime-build JSON bytes into the
+// shared normalized form. The schema_version field decides which fields own
+// the identity: unknown schemas, contradictory aliases, and missing required
+// fields all reject the metadata instead of guessing.
+func NormalizeRuntimeMetadata(b []byte) (RuntimeMetadata, error) {
+	var raw struct {
+		Schema         int    `json:"schema_version"`
+		RuntimeVersion string `json:"runtime_version"`
+		Tag            string `json:"tag"`
+		Binary         string `json:"binary_file"`
+		BinaryHash     string `json:"binary_sha256"`
+		Compat         Compat `json:"compat"`
+		// Canonical schema 2 fields.
+		TargetTriple string `json:"target_triple"`
+		ArchiveFile  string `json:"archive_file"`
+		ArchiveHash  string `json:"archive_sha256"`
+		// Legacy schema 1 aliases.
+		Triple     string `json:"triple"`
+		LegacyHash string `json:"sha256"`
+	}
+	if err := json.Unmarshal(b, &raw); err != nil {
+		return RuntimeMetadata{}, err
+	}
+	meta := RuntimeMetadata{
+		Schema: raw.Schema, RuntimeVersion: raw.RuntimeVersion, Tag: raw.Tag,
+		Binary: raw.Binary, BinaryHash: raw.BinaryHash, Compat: raw.Compat,
+	}
+	switch raw.Schema {
+	case 1:
+		if raw.Triple == "" || raw.LegacyHash == "" {
+			return RuntimeMetadata{}, metadataMismatch("schema 1 requires triple and sha256")
+		}
+		meta.Target, meta.ArchiveHash = raw.Triple, raw.LegacyHash
+		meta.ArchiveFile = runtimeArchive(meta.Target)
+		if err := aliasConflict(raw.TargetTriple, meta.Target, "target_triple"); err != nil {
+			return RuntimeMetadata{}, err
+		}
+		if err := aliasConflict(raw.ArchiveHash, meta.ArchiveHash, "archive_sha256"); err != nil {
+			return RuntimeMetadata{}, err
+		}
+		if err := aliasConflict(raw.ArchiveFile, meta.ArchiveFile, "archive_file"); err != nil {
+			return RuntimeMetadata{}, err
+		}
+	case 2:
+		if raw.TargetTriple == "" || raw.ArchiveFile == "" || raw.ArchiveHash == "" {
+			return RuntimeMetadata{}, metadataMismatch("schema 2 requires target_triple, archive_file and archive_sha256")
+		}
+		meta.Target, meta.ArchiveFile, meta.ArchiveHash = raw.TargetTriple, raw.ArchiveFile, raw.ArchiveHash
+		if err := aliasConflict(raw.Triple, meta.Target, "triple"); err != nil {
+			return RuntimeMetadata{}, err
+		}
+		if err := aliasConflict(raw.LegacyHash, meta.ArchiveHash, "sha256"); err != nil {
+			return RuntimeMetadata{}, err
+		}
+	default:
+		return RuntimeMetadata{}, fmt.Errorf("不支持的 Runtime 元数据 schema_version %d", raw.Schema)
+	}
+	return meta, nil
+}
+
+// CheckRuntimeMetadata verifies a normalized metadata against the release it
+// was fetched from and the local build target: identity, asset names, hashes,
+// and the declared CLI compatibility window must all be intact.
+func CheckRuntimeMetadata(meta RuntimeMetadata, releaseTag, target string) error {
+	if meta.RuntimeVersion == "" || meta.RuntimeVersion != strings.TrimPrefix(meta.Tag, "v") {
+		return metadataMismatch("runtime_version does not match tag")
+	}
+	if meta.Tag != releaseTag {
+		return metadataMismatch("tag does not match release")
+	}
+	if meta.Target != target {
+		return metadataMismatch(fmt.Sprintf("target %q is not %q", meta.Target, target))
+	}
+	if meta.Binary != "rsrs-runtime-"+target+binaryExtension() {
+		return metadataMismatch(fmt.Sprintf("binary_file %q", meta.Binary))
+	}
+	if meta.ArchiveFile != runtimeArchive(target) {
+		return metadataMismatch(fmt.Sprintf("archive_file %q", meta.ArchiveFile))
+	}
+	if !validHash(meta.BinaryHash) || !validHash(meta.ArchiveHash) {
+		return metadataMismatch("invalid SHA-256")
+	}
+	if !validVersion(meta.Compat.MinCLI) {
+		return metadataMismatch("compat.min_cli")
+	}
+	if meta.Compat.MaxCLI != "*" && !validVersion(meta.Compat.MaxCLI) {
+		return metadataMismatch("compat.max_cli")
+	}
+	return nil
+}
+
+// CheckCLICompat reports whether cliVersion sits inside the compatibility
+// window a Runtime release declares; "*" as max_cli means no upper bound.
+func CheckCLICompat(cliVersion string, compat Compat) error {
+	if !validVersion(cliVersion) {
+		return fmt.Errorf("CLI 版本无效: %s", cliVersion)
+	}
+	if semver.Compare("v"+cliVersion, "v"+compat.MinCLI) < 0 {
+		return fmt.Errorf("CLI %s 低于 Runtime 要求的最低版本 %s", cliVersion, compat.MinCLI)
+	}
+	if compat.MaxCLI != "*" && semver.Compare("v"+cliVersion, "v"+compat.MaxCLI) > 0 {
+		return fmt.Errorf("CLI %s 超出 Runtime 兼容上限 %s", cliVersion, compat.MaxCLI)
+	}
+	return nil
+}
+
+// SelectRelease picks the release a channel resolves to from a release list:
+// stable only accepts full non-prerelease versions, dev accepts the highest
+// published prerelease as well; drafts never win either channel.
+func SelectRelease(list []ReleaseInfo, channel string) (ReleaseInfo, error) {
+	var latest ReleaseInfo
+	for _, r := range list {
+		v := strings.TrimPrefix(r.Tag, "v")
+		if r.Draft || !validVersion(v) {
+			continue
+		}
+		if channel == "stable" && (r.Prerelease || semver.Prerelease(r.Tag) != "") {
+			continue
+		}
+		if latest.Tag == "" || semver.Compare("v"+v, latest.Tag) > 0 {
+			latest = r
+		}
+	}
+	if latest.Tag == "" {
+		return ReleaseInfo{}, errors.New("no published release")
+	}
+	return latest, nil
+}
+
+// ReleaseAssetURL resolves the browser_download_url of an asset, rejecting
+// assets whose URL does not match the canonical download prefix for repo/tag.
+func ReleaseAssetURL(r ReleaseInfo, repo, name string) (string, error) {
+	prefix := "https://github.com/risense-ai/" + repo + "/releases/download/" + r.Tag + "/"
+	for _, a := range r.Assets {
+		if a.Name == name {
+			if a.URL != prefix+name {
+				return "", errors.New("unexpected release artifact URL")
+			}
+			return a.URL, nil
+		}
+	}
+	return "", fmt.Errorf("该 %s 发布未提供 %s 所需的 %s；仍可连接已有 Runtime", repo, Platform(), name)
+}
 
 func (m *Manager) fetchJSON(ctx context.Context, url string, v any) error {
 	err := m.fetchJSONOnce(ctx, url, v)
@@ -131,58 +313,62 @@ func mirrorURL(url string) string {
 	return url
 }
 
+// fetchReleaseList downloads the release listing a channel resolves against.
+// Stable reads /releases/latest so a repository without any full release
+// surfaces as 404; dev scans the recent list for the highest prerelease.
+func (m *Manager) fetchReleaseList(ctx context.Context, repo, channel string) ([]ReleaseInfo, error) {
+	if channel == "stable" {
+		var stable ReleaseInfo
+		if err := m.fetchJSON(ctx, "https://api.github.com/repos/risense-ai/"+repo+"/releases/latest", &stable); err != nil {
+			if stableChannelMissing(err) && repo == runtimeRepo {
+				return nil, errors.New("Runtime stable 通道暂无正式发布；可在「设置 → 更新」把 Runtime 通道切换为 dev")
+			}
+			return nil, err
+		}
+		return []ReleaseInfo{stable}, nil
+	}
+	var list []ReleaseInfo
+	if err := m.fetchJSON(ctx, "https://api.github.com/repos/risense-ai/"+repo+"/releases?per_page=20", &list); err != nil {
+		return nil, err
+	}
+	return list, nil
+}
+
 // LatestRuntime resolves the newest managed Runtime release from
 // risense-ai/respire-runtime together with its runtime-build-<triple>.json
 // metadata. The reported version is the runtime version (runtime_version),
 // independent of the CLI release train.
-func (m *Manager) LatestRuntime(ctx context.Context) (githubRelease, runtimeMetadata, error) {
+func (m *Manager) LatestRuntime(ctx context.Context) (ReleaseInfo, RuntimeMetadata, error) {
+	channel := m.Preferences().RuntimeChannel
 	target, err := runtimeTarget()
 	if err != nil {
-		return githubRelease{}, runtimeMetadata{}, err
+		return ReleaseInfo{}, RuntimeMetadata{}, err
 	}
-	var list []githubRelease
-	if m.Preferences().RuntimeChannel == "stable" {
-		var stable githubRelease
-		if err := m.fetchJSON(ctx, "https://api.github.com/repos/risense-ai/"+runtimeRepo+"/releases/latest", &stable); err != nil {
-			if stableChannelMissing(err) {
-				return stable, runtimeMetadata{}, errors.New("Runtime stable 通道暂无正式发布；可在「设置 → 更新」把 Runtime 通道切换为 dev")
-			}
-			return stable, runtimeMetadata{}, err
-		}
-		if stable.Prerelease || semver.Prerelease(stable.Tag) != "" {
-			return stable, runtimeMetadata{}, errors.New("stable channel returned a prerelease")
-		}
-		list = []githubRelease{stable}
-	} else {
-		if err := m.fetchJSON(ctx, "https://api.github.com/repos/risense-ai/"+runtimeRepo+"/releases?per_page=20", &list); err != nil {
-			return githubRelease{}, runtimeMetadata{}, err
-		}
-	}
-	var latest githubRelease
-	for _, r := range list {
-		v := strings.TrimPrefix(r.Tag, "v")
-		if r.Draft || !validVersion(v) {
-			continue
-		}
-		if latest.Tag == "" || semver.Compare("v"+v, latest.Tag) > 0 {
-			latest = r
-		}
-	}
-	if latest.Tag == "" {
-		return latest, runtimeMetadata{}, errors.New("no published Runtime release")
-	}
-	var meta runtimeMetadata
-	url, err := assetURL(latest, runtimeRepo, "runtime-build-"+target+".json")
+	list, err := m.fetchReleaseList(ctx, runtimeRepo, channel)
 	if err != nil {
-		return latest, meta, err
+		return ReleaseInfo{}, RuntimeMetadata{}, err
 	}
-	if err = m.fetchJSON(ctx, url, &meta); err != nil {
-		return latest, meta, err
+	if channel == "stable" && (list[0].Prerelease || semver.Prerelease(list[0].Tag) != "") {
+		return ReleaseInfo{}, RuntimeMetadata{}, errors.New("stable channel returned a prerelease")
 	}
-	if meta.RuntimeVersion != strings.TrimPrefix(meta.Tag, "v") || meta.Tag != latest.Tag ||
-		meta.Target != target || meta.Binary != "rsrs-runtime-"+target+binaryExtension() ||
-		!validHash(meta.BinaryHash) || !validHash(meta.ArchiveHash) {
-		return latest, meta, errors.New("Runtime release metadata mismatch")
+	latest, err := SelectRelease(list, channel)
+	if err != nil {
+		return ReleaseInfo{}, RuntimeMetadata{}, errors.New("no published Runtime release")
+	}
+	var raw json.RawMessage
+	url, err := ReleaseAssetURL(latest, runtimeRepo, "runtime-build-"+target+".json")
+	if err != nil {
+		return latest, RuntimeMetadata{}, err
+	}
+	if err = m.fetchJSON(ctx, url, &raw); err != nil {
+		return latest, RuntimeMetadata{}, err
+	}
+	meta, err := NormalizeRuntimeMetadata(raw)
+	if err != nil {
+		return latest, RuntimeMetadata{}, err
+	}
+	if err = CheckRuntimeMetadata(meta, latest.Tag, target); err != nil {
+		return latest, meta, err
 	}
 	return latest, meta, nil
 }
@@ -190,69 +376,55 @@ func (m *Manager) LatestRuntime(ctx context.Context) (githubRelease, runtimeMeta
 // LatestCLIBuild reads CLI install metadata (cli-build-<triple>.json) from
 // risense-ai/respire-cli. CLI release metadata keeps its original repository
 // source; only managed Runtime assets moved to risense-ai/respire-runtime.
-func (m *Manager) LatestCLIBuild(ctx context.Context) (githubRelease, cliMetadata, error) {
+func (m *Manager) LatestCLIBuild(ctx context.Context) (ReleaseInfo, CLIMetadata, error) {
+	channel := m.Preferences().RuntimeChannel
 	cliTarget, err := runtimeTarget()
 	if err != nil {
-		return githubRelease{}, cliMetadata{}, err
+		return ReleaseInfo{}, CLIMetadata{}, err
 	}
-	var list []githubRelease
-	var meta cliMetadata
-	if m.Preferences().RuntimeChannel == "stable" {
-		var stable githubRelease
-		if err := m.fetchJSON(ctx, "https://api.github.com/repos/risense-ai/"+cliRepo+"/releases/latest", &stable); err != nil {
-			return stable, meta, err
-		}
-		if stable.Prerelease || semver.Prerelease(stable.Tag) != "" {
-			return stable, meta, errors.New("stable channel returned a prerelease")
-		}
-		list = []githubRelease{stable}
-	} else {
-		if err := m.fetchJSON(ctx, "https://api.github.com/repos/risense-ai/"+cliRepo+"/releases?per_page=20", &list); err != nil {
-			return githubRelease{}, meta, err
-		}
+	list, err := m.fetchReleaseList(ctx, cliRepo, channel)
+	if err != nil {
+		return ReleaseInfo{}, CLIMetadata{}, err
 	}
-	var latest githubRelease
-	for _, r := range list {
-		v := strings.TrimPrefix(r.Tag, "v")
-		if r.Draft || !validVersion(v) {
-			continue
-		}
-		if latest.Tag == "" || semver.Compare("v"+v, latest.Tag) > 0 {
-			latest = r
-		}
+	if channel == "stable" && (list[0].Prerelease || semver.Prerelease(list[0].Tag) != "") {
+		return ReleaseInfo{}, CLIMetadata{}, errors.New("stable channel returned a prerelease")
 	}
-	if latest.Tag == "" {
-		return latest, meta, errors.New("no published CLI release")
+	latest, err := SelectRelease(list, channel)
+	if err != nil {
+		return ReleaseInfo{}, CLIMetadata{}, errors.New("no published CLI release")
 	}
-	url, err := assetURL(latest, cliRepo, "cli-build-"+cliTarget+".json")
+	var raw json.RawMessage
+	url, err := ReleaseAssetURL(latest, cliRepo, "cli-build-"+cliTarget+".json")
+	if err != nil {
+		return latest, CLIMetadata{}, err
+	}
+	if err = m.fetchJSON(ctx, url, &raw); err != nil {
+		return latest, CLIMetadata{}, err
+	}
+	meta, err := NormalizeCLIMetadata(raw, latest.Tag, cliTarget)
 	if err != nil {
 		return latest, meta, err
-	}
-	if err = m.fetchJSON(ctx, url, &meta); err != nil {
-		return latest, meta, err
-	}
-	if meta.Schema != 1 || meta.Target != cliTarget || meta.Version != strings.TrimPrefix(latest.Tag, "v") ||
-		meta.Binary != "rsrs-"+cliTarget+binaryExtension() || meta.Runtime != "rsrs-"+cliTarget+"-runtime.tar.gz" || !validHash(meta.BinaryHash) || !validHash(meta.RuntimeHash) {
-		return latest, meta, errors.New("CLI release metadata mismatch")
-	}
-	commit, err := hex.DecodeString(meta.Commit)
-	if err != nil || len(commit) != 20 {
-		return latest, meta, errors.New("invalid CLI source commit")
 	}
 	return latest, meta, nil
 }
 
-func assetURL(r githubRelease, repo, name string) (string, error) {
-	prefix := "https://github.com/risense-ai/" + repo + "/releases/download/" + r.Tag + "/"
-	for _, a := range r.Assets {
-		if a.Name == name {
-			if a.URL != prefix+name {
-				return "", errors.New("unexpected release artifact URL")
-			}
-			return a.URL, nil
-		}
+// NormalizeCLIMetadata parses cli-build-<triple>.json bytes and verifies the
+// metadata against its release and target, including the pinned source commit.
+func NormalizeCLIMetadata(b []byte, releaseTag, target string) (CLIMetadata, error) {
+	var meta CLIMetadata
+	if err := json.Unmarshal(b, &meta); err != nil {
+		return meta, err
 	}
-	return "", fmt.Errorf("该 %s 发布未提供 %s 所需的 %s；仍可连接已有 Runtime", repo, Platform(), name)
+	if meta.Schema != 1 || meta.Target != target || meta.Version != strings.TrimPrefix(releaseTag, "v") ||
+		meta.Binary != "rsrs-"+target+binaryExtension() || meta.Runtime != "rsrs-"+target+"-runtime.tar.gz" ||
+		!validHash(meta.BinaryHash) || !validHash(meta.RuntimeHash) {
+		return meta, errors.New("CLI release metadata mismatch")
+	}
+	commit, err := hex.DecodeString(meta.Commit)
+	if err != nil || len(commit) != 20 {
+		return meta, errors.New("invalid CLI source commit")
+	}
+	return meta, nil
 }
 
 func fileHash(path string) (string, error) {
