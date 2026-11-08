@@ -89,6 +89,11 @@ jobs:
       - name: Build installer
         if: matrix.os == 'windows'
         shell: pwsh
+        env:
+          # The fetch scripts read this for authenticated GitHub API calls;
+          # runner gh is unauthenticated and shared egress IPs exhaust the
+          # anonymous rate limit quickly.
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           $version = '0.2.56-dev.${{ github.run_number }}'
           if ('${{ github.ref_type }}' -eq 'tag') { $version = '${{ github.ref_name }}'.TrimStart('v') }
