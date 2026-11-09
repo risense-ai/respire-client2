@@ -16,7 +16,7 @@ func verifyHostProcess(h HealthInfo) error {
 	if err != nil {
 		return err
 	}
-	if !samePath(actual, h.Exe) || filepath.Base(actual) != runtimeBinary() {
+	if !samePath(actual, h.Exe) || !acceptsRuntimeBinary(filepath.Base(actual)) {
 		return errors.New("Runtime process identity mismatch")
 	}
 	return nil

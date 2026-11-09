@@ -135,7 +135,7 @@ $env:RSRS_RPC_PORT = '19169'
 Start-Process -FilePath (Join-Path $PWD 'dist\respire-windows-amd64.exe') -WindowStyle Hidden
 ```
 
-Do not use the real user profile for installation/update verification. The first launch can download the current official CLI package. A running Runtime is intentionally left alive when the desktop exits.
+Do not use the real user profile for installation/update verification. The first launch can download the current official CLI package. A running Runtime is intentionally left alive when the desktop exits. To run side by side with the installed client, also set `RSRS_INSTANCE_ID` (e.g. `test`) to differ the single-instance ID; otherwise the second launch only focuses the existing instance.
 
 ## Local layout and ownership
 

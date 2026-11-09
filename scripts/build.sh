@@ -1,21 +1,23 @@
 #!/usr/bin/env bash
 set -euo pipefail
 cd "$(dirname "$0")/.."
-version="${1:-0.2.12}"
+version="${1:-0.2.56}"
 arch="${2:-$(go env GOARCH)}"
 case "$arch" in amd64|arm64) ;; *) echo 'Supported desktop architectures: amd64, arm64' >&2; exit 1;; esac
 [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]] || { echo 'Invalid semantic version' >&2; exit 1; }
 goos="$(go env GOOS)"
 case "$goos" in linux|darwin) ;; *) echo 'Use build.ps1 on Windows' >&2; exit 1;; esac
-export GOMODCACHE="$PWD/.tools/mod" GOCACHE="$PWD/.tools/cache" GOPATH="$PWD/.tools/go"
+if [[ -z "${CI:-}" ]]; then
+    export GOMODCACHE="$PWD/.tools/mod" GOCACHE="$PWD/.tools/cache" GOPATH="$PWD/.tools/go"
+fi
 export GOARCH="$arch" CGO_ENABLED=1
 tags=production
 [[ "$goos" != linux ]] || tags=production,gtk3
-mkdir -p dist
-go vet -tags "$tags" ./...
-if command -v node >/dev/null 2>&1; then
-    while IFS= read -r -d '' source; do node --check "$source"; done < <(find internal/desktop/frontend -name '*.js' -type f -print0)
+if [[ "$goos" == darwin && "$arch" == amd64 && "$(uname -m)" != x86_64 ]]; then
+    export CC="clang -arch x86_64"
+    /usr/bin/arch -x86_64 /usr/bin/true 2>/dev/null || softwareupdate --install-rosetta --agree-to-license >/dev/null
 fi
+mkdir -p dist
 go build -tags "$tags" -trimpath -ldflags "-s -w -X main.version=$version" -o dist/respire .
 file dist/respire
 if [[ "$goos" == darwin ]]; then

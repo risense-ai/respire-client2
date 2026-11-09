@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -68,7 +69,23 @@ func Run(m *host.Manager, buildVersion string) {
 	}
 	static := http.FileServer(http.FS(files))
 	notifier := notifications.New()
-	singleInstance := &application.SingleInstanceOptions{UniqueID: "ai.risense.respire.client2", OnSecondInstanceLaunch: func(application.SecondInstanceData) {
+	// RSRS_INSTANCE_ID lets an isolated test instance (fresh RSRS_DATA_DIR
+	// and RSRS_RPC_PORT) run next to the installed client instead of just
+	// focusing it.
+	uniqueID := "ai.risense.respire.client2"
+	if suffix := os.Getenv("RSRS_INSTANCE_ID"); suffix != "" {
+		clean := strings.Map(func(r rune) rune {
+			if r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' ||
+				r >= '0' && r <= '9' || r == '.' || r == '-' || r == '_' {
+				return r
+			}
+			return -1
+		}, suffix)
+		if clean != "" {
+			uniqueID += "." + clean
+		}
+	}
+	singleInstance := &application.SingleInstanceOptions{UniqueID: uniqueID, OnSecondInstanceLaunch: func(application.SecondInstanceData) {
 		if d.window != nil {
 			d.window.Show()
 			d.window.Focus()
@@ -106,6 +123,17 @@ func Run(m *host.Manager, buildVersion string) {
 		DefaultContextMenuDisabled: true,
 		Windows:                    application.WindowsWindow{HiddenOnTaskbar: true},
 		BackgroundColour:           background,
+	})
+	// WebView2 can miss a bounds update while the flyout window is hidden
+	// (it hides on focus loss, and content-sized height changes land while
+	// hidden). A same-size SetWindowPos raises no WM_SIZE, so the stale
+	// smaller webview would leave a permanent strip of window background
+	// below the page. Nudge the height once on every show to re-sync.
+	d.panel.OnWindowEvent(events.Common.WindowShow, func(*application.WindowEvent) {
+		if width, height := d.panel.Size(); height > 0 {
+			d.panel.SetSize(width, height+1)
+			d.panel.SetSize(width, height)
+		}
 	})
 	d.notifier = notifier
 	for name, action := range map[string]func(){
@@ -163,9 +191,12 @@ func (d *desktop) notifySystem(title, body string) {
 		return
 	}
 	go func() {
+		// ThreadID must stay unset: wails renders it as a <header> without the
+		// schema-required arguments attribute, and Windows then drops the body
+		// and shows the title alone.
 		if err := d.notifier.SendNotification(notifications.NotificationOptions{
 			ID: "respire-update-" + fmt.Sprint(time.Now().UnixNano()), Title: title, Body: body,
-			ThreadID: "updates", InterruptionLevel: notifications.InterruptionLevelActive,
+			InterruptionLevel: notifications.InterruptionLevelActive,
 		}); err != nil {
 			log.Printf("system notification: %v", err)
 		}

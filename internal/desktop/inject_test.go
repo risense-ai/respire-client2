@@ -258,7 +258,7 @@ func TestTargetsIncludeAllThirteen(t *testing.T) {
 	for _, target := range injectTargets(e) {
 		ids[target.ID] = true
 	}
-	for _, want := range []string{"dsh", "opencode", "codex", "claude", "codebuddy", "workbuddy", "kylinbot", "pi", "zigcode", "deepseek", "qwen", "doubao", "generic"} {
+	for _, want := range []string{"dsh", "opencode", "codex", "claude", "codebuddy", "workbuddy", "kylinbot", "pi", "zcode", "deepseek", "qwen", "doubao", "generic"} {
 		if !ids[want] {
 			t.Fatalf("missing target %s", want)
 		}

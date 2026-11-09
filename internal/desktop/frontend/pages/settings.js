@@ -46,11 +46,6 @@ export function settings(root, ctx) {
           "语言",
           "软件界面语言；右上角也可以快速切换。",
           '<select data-pref="language"><option value="en">English</option><option value="zh">中文</option></select>',
-        ) +
-        setting(
-          "初始化向导",
-          "重新运行完整向导重新配置：语言、云端同步、模型、设备与 Agent 工具；已应用的配置保留，可随时退出。",
-          '<button data-wizard-reopen>重新运行初始化向导</button>',
         ),
     ) +
     panel(
@@ -94,6 +89,10 @@ export function settings(root, ctx) {
     panel(
       "客户端设置备份",
       `<div class="panel-body actions"><button data-pref-file="preferences-export">导出设置</button><button data-pref-file="preferences-import">导入设置</button></div><p class="hint">备份包含界面语言、主题、布局和更新通道，不包含记忆密钥。</p>`,
+    ) +
+    panel(
+      "关于",
+      `<div class="panel-body stack"><div data-about-version></div><div class="setting-row"><div><strong>新手教程</strong><p>重新开始完整向导重新配置：语言、云端同步、模型、设备与 Agent 工具；已应用的配置保留，可随时退出或跳过。</p></div><button data-wizard-reopen>重新开始新手教程</button></div></div>`,
     );
   root.addEventListener("change", (event) => {
     const control = event.target;
@@ -214,11 +213,19 @@ export function settings(root, ctx) {
         })
         .catch((error) => notify(error.message, true));
     }
-    $("[data-pref=runtimeChannel]", root).disabled = state.task?.busy;
+    // The release-channel select lives on the updates page now; the guard
+    // keeps update() from aborting here (it silently emptied the paths and
+    // about rows below).
+    const channel = $("[data-pref=runtimeChannel]", root);
+    if (channel) channel.disabled = state.task?.busy;
     $("[data-paths]", root).innerHTML = pairs([
       ["客户端数据", state.root],
       ["当前记忆库", ctx.status?.summary?.data_dir],
       ["RPC 地址", state.endpoint],
+    ]);
+    $("[data-about-version]", root).innerHTML = pairs([
+      ["当前版本", state.version || "—"],
+      ["平台", state.platform || "—"],
     ]);
   }
   typographyPanel(root);

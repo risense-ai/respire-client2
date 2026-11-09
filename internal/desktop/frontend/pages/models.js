@@ -99,6 +99,39 @@ const STATE_CONFIG = {
   },
 };
 
+// Five-axis recall fusion (docs/client2gui-recall-fusion.md): the GUI only
+// edits the persistent `recall_fusion` agent setting and shows the host
+// receipt; the algorithm runs in the Runtime. Names must match the CLI.
+const FUSION_MODES = [
+  ["legacy", "原有融合（默认）"],
+  ["attention", "五轴注意力融合"],
+  ["attention_anchor", "相关性锚定融合"],
+  ["auto", "自动选择"],
+];
+const FUSION_NUMERIC = [
+  ["fusion_alpha", "先验总份额", 0.2],
+  ["fusion_beta", "词法份额", 0.25],
+  ["fusion_temperature", "注意力温度", 1],
+  ["fusion_gate_recency", "普通查询时间门", 0.02],
+  ["fusion_gate_recency_temporal", "时间查询时间门", 1],
+  ["fusion_gate_hot", "热度门", 0.1],
+  ["fusion_gate_tree", "树位置门", 0.02],
+  ["fusion_temporal_alpha", "时间查询追加份额", 0.15],
+];
+const fusionLabel = (key) =>
+  FUSION_NUMERIC.find(([name]) => name === key)?.[1] || key;
+const fusionModeName = (mode) =>
+  FUSION_MODES.find(([id]) => id === mode)?.[1] || mode;
+// Runtime model_progress phases while a profile switch runs (model_progress.rs).
+const SWITCH_PHASES = {
+  queued: "排队中",
+  "switch-verify": "验证权重",
+  "switch-download": "下载权重",
+  "switch-load": "加载模型",
+  "switch-index": "重建记忆索引",
+  "switch-diary": "重建日记索引",
+};
+
 export function models(root, ctx) {
   let agent = {},
     backend = {},
@@ -117,7 +150,10 @@ export function models(root, ctx) {
     stateOverride = null,
     advancedExpanded = false,
     lastVerifiedAt = null,
-    pageKey = "";
+    pageKey = "",
+    switchTicks = 0,
+    lastProbe = null,
+    fusion = { runtime: null, draft: null, checked: false, loadFailed: false };
   root.innerHTML =
     heading("模型与索引", "选择运行模式，一键启用 AI 功能") +
     `<div data-live></div>` +
@@ -153,6 +189,20 @@ export function models(root, ctx) {
       )}<p class="hint">高质量模式会把查询和候选标题发送到配置的模型服务。服务失败时 Runtime 会报告状态并保留本机结果。</p><div class="actions"><button type="submit">保存召回方式</button><button type="button" data-model="index">安排后台索引</button><button type="button" data-model="rebuild">重新计算向量</button></div></form>`,
     ) +
     panel(
+      "五轴注意力融合",
+      `<div class="panel-body stack" data-fusion><p class="hint">对通过准入检查的向量候选融合语义、词法、时间、热度与树位置信号；算法在 Runtime 内执行，这里只保存设置并在下一次召回时生效。自动选择由 Runtime 按候选库大小决定，不承诺召回质量提升。</p><p class="hint" data-fusion-effective>正在读取配置…</p><form data-fusion-form class="stack" hidden>${select(
+        "fusion",
+        "融合模式",
+        FUSION_MODES,
+        "legacy",
+      )}<details><summary>高级参数</summary><div class="form-grid">${FUSION_NUMERIC.map(
+        ([key, label, value]) =>
+          input(key, label, value, { type: "number", step: "any" }),
+      ).join(
+        "",
+      )}</div><p class="hint">语义份额 = 1 − 先验总份额 − 词法份额；时间、热度与树位置在先验份额内按各自门值参与，时间查询会追加先验份额并受剩余份额限制。份额与门值取 0–1，注意力温度大于 0 且不大于 10。</p></details><div class="actions"><button type="submit">保存</button><button type="button" data-fusion-reset>恢复默认</button><span class="hint" data-fusion-state></span></div></form></div>`,
+    ) +
+    panel(
       "高质量召回服务",
       `<form data-api class="panel-body stack"><div class="form-grid">${input("base", "API 地址", "https://api.deepseek.com/v1", { required: true })}${input("model", "模型", "deepseek-flash", { required: true })}</div>${input("key", "API Key（留空保留已有密钥）", "", { type: "password" })}<p class="hint">密钥通过 CLI 写入系统凭据库，不保存在客户端设置中。</p><div class="actions"><button type="submit">保存服务配置</button><span data-key-state class="hint">正在读取配置…</span></div></form>`,
     ) +
@@ -179,11 +229,32 @@ export function models(root, ctx) {
           engineState.engine === engine && engineState.model === variant.name;
         return `<button class="engine-chip${active ? " active" : ""}" data-apply data-engine="${engine}" data-variant="${h(
           variant.name,
-        )}"${engineEnabled(engine, opActive) ? "" : " disabled"} title="${engine.toUpperCase()} · ${
+        )}"${engineEnabled(engine, opActive) ? "" : " disabled"} title="切换到 ${engine.toUpperCase()} · ${
           variant.name
-        }">${engine.toUpperCase()}</button>`;
+        }：保存后立即重载并运行真实推理验证；失败会恢复切换前设置并说明原因">${engine.toUpperCase()}</button>`;
       })
       .join("");
+  }
+  // Live selection + availability line: what the runtime uses right now,
+  // which entries this OS offers, and what a failed verification does.
+  function renderEngineHint() {
+    const node = $("[data-engine-hint]", root);
+    if (!node) return;
+    const platform = ctx.desktop?.platform || "";
+    const entries = [
+      `CPU 可用`,
+      `GPU${engineAvailable(platform, "gpu") ? "可选" : "Linux 本版不可用"}`,
+      `NPU${engineAvailable(platform, "npu") ? "可选" : "仅 Windows"}`,
+    ];
+    const label =
+      MODEL_OPTIONS.find(([id]) => id === modelID)?.[1] || modelID;
+    const probe = lastProbe
+      ? `；最近验证：${lastProbe.selected}（${lastProbe.elapsed_ms}ms）`
+      : "";
+    const snapshotNote = ctx.desktop?.engine?.note
+      ? ` ${ctx.desktop.engine.note}`
+      : "";
+    node.textContent = `当前使用 ${label} · ${engineState.model} 权重 · ${engineState.engine.toUpperCase()} 推理${probe}。本机入口：${entries.join(" / ")}。应用时会重载模型并运行真实推理验证，失败会恢复切换前设置并说明原因。${snapshotNote}`;
   }
   // One status renderer: switching state first, then client-side parallel
   // download, runtime download/verify, installed, or missing.
@@ -191,12 +262,14 @@ export function models(root, ctx) {
     const busy = downloading === variant.name;
     const current = engineState.model === variant.name;
     if (switchInFlight && switchingVariant === variant.name) {
-      const details = readProfileState(profileState);
-      const phase = details.phase || details.state || "进行中";
-      const pct =
-        details.percent !== undefined && details.percent !== null
-          ? ` ${Math.round(details.percent)}%`
-          : "";
+      if (!isProfileModel(modelID))
+        return `<strong>切换中 · 正在重载并验证推理…</strong>`;
+      const { operation } = readProfileState(profileState);
+      const phase =
+        SWITCH_PHASES[operation.phase] || operation.phase || "进行中";
+      const pct = operation.total
+        ? ` ${Math.round((operation.done / operation.total) * 100)}%`
+        : "";
       return `<strong>切换中 · ${h(String(phase))}${pct}</strong>`;
     }
     const pct = op.total
@@ -300,9 +373,11 @@ export function models(root, ctx) {
     const task = ctx.desktop?.task || {};
     if (op.active || modelTaskBusy(task)) return PAGE_STATES.DOWNLOADING;
     const variant = modeVariant(currentMode());
-    if (!variant?.installed) return PAGE_STATES.EMPTY;
+    if (!variant?.installed || !inventory?.tokenizer_installed) return PAGE_STATES.EMPTY;
     if (switchInFlight) return PAGE_STATES.VERIFYING;
     if (engineState.model !== currentMode().variant) return PAGE_STATES.EMPTY;
+    if (currentMode().requiresGPU && engineState.engine === 'cpu') return PAGE_STATES.EMPTY;
+    if (!lastVerifiedAt && ctx.desktop?.health?.inference?.phase !== 'ready') return PAGE_STATES.EMPTY;
     return PAGE_STATES.READY;
   }
   function effectivePageState() {
@@ -391,7 +466,10 @@ export function models(root, ctx) {
       lastVerifiedAt ? lastVerifiedAt.getTime() : 0,
       performanceAvailable(ctx.desktop?.platform) ? 1 : 0,
     ].join("|");
-    if (!force && key === pageKey) return;
+    if (!force && key === pageKey) {
+      updateModeProgress();
+      return;
+    }
     pageKey = key;
     renderModeSelector();
     renderPrimaryAction();
@@ -416,6 +494,16 @@ export function models(root, ctx) {
       mode.engine === "auto"
         ? detectBestEngine(ctx.desktop?.platform)
         : mode.engine;
+    if (!isProfileModel(modelID) && !inventory?.tokenizer_installed) {
+      const completed = await openDownloadModal({
+        model: modelID,
+        variant: "tokenizer",
+        label: mode.title,
+        getMirror: currentMirror,
+      }).done;
+      if (!completed || !root.isConnected) return;
+      inventory = await fetchInventory(modelID);
+    }
     const variant = modeVariant(mode);
     if (!variant?.installed) {
       stateOverride = null;
@@ -451,7 +539,12 @@ export function models(root, ctx) {
       if (result.fallback || result.failed) {
         // Reflect what the runtime actually fell back to; the mode tag and
         // the status card must not advertise the failed selection.
-        engineState = { engine: result.engine, model: result.variant };
+        if (isProfileModel(modelID)) {
+          const active = result.details?.active;
+          if (active) engineState = { engine: active.engine, model: active.variant };
+        } else {
+          engineState = { engine: result.engine, model: result.variant };
+        }
         stateOverride = PAGE_STATES.FALLBACK;
         notify(result.warning || "验证失败，已回退到兼容模式", true);
       } else {
@@ -473,6 +566,80 @@ export function models(root, ctx) {
       renderVariants();
       await ctx.refresh();
     }
+  }
+  // Fusion panel: the first line is what the Runtime will use next query
+  // (defaults + saved settings + env overrides); the editor below shows the
+  // saved draft. No receipt capability → editor stays hidden.
+  function renderFusion() {
+    const area = $("[data-fusion]", root);
+    if (!area) return;
+    const runtime = fusion.runtime;
+    const editor = $("[data-fusion-form]", root);
+    const state = $("[data-fusion-state]", root);
+    if (!runtime?.effective) {
+      editor.hidden = true;
+      $("[data-fusion-effective]", root).textContent = fusion.loadFailed
+        ? "融合配置读取失败，请刷新页面。"
+        : fusion.checked
+          ? "当前 CLI 不支持五轴融合设置，请升级 CLI 后再使用。"
+          : "正在读取配置…";
+      return;
+    }
+    editor.hidden = false;
+    const overrides = Array.isArray(runtime.overrides) ? runtime.overrides : [];
+    const configured = runtime.configured || {};
+    let text = `当前生效模式：${fusionModeName(runtime.effective.fusion)} · 修改在下一次召回时生效。`;
+    text += Object.keys(configured).length
+      ? "编辑区显示已保存设置。"
+      : "未保存自定义设置，当前按默认值运行。";
+    if (overrides.length)
+      text += ` 环境覆盖 ${overrides.length} 项：${overrides
+        .map(
+          (key) =>
+            `${fusionLabel(key)} 生效 ${runtime.effective[key]}${
+              configured[key] !== undefined
+                ? `（已保存 ${configured[key]}）`
+                : ""
+            }`,
+        )
+        .join("；")}。保存不会清除 Runtime 环境变量。`;
+    $("[data-fusion-effective]", root).textContent = text;
+    state.textContent = "";
+    const draft = fusion.draft || {};
+    $("[name=fusion]", editor).value = draft.fusion || "legacy";
+    for (const [key] of FUSION_NUMERIC) {
+      const node = $(`[name=${key}]`, editor);
+      if (node) node.value = draft[key] === undefined ? "" : String(draft[key]);
+    }
+  }
+  // Collect + validate the draft. Only instant feedback: the host and the
+  // Runtime re-validate the whole object on save.
+  function fusionDraft() {
+    const form = $("[data-fusion-form]", root);
+    const draft = { fusion: $("[name=fusion]", form).value };
+    for (const [key, label] of FUSION_NUMERIC) {
+      const text = $(`[name=${key}]`, form).value.trim();
+      if (!text) throw new Error(`${label}不能为空`);
+      const value = Number(text);
+      if (!Number.isFinite(value)) throw new Error(`${label}必须是有限数字`);
+      if (key === "fusion_temperature") {
+        if (value <= 0 || value > 10)
+          throw new Error(`${label}需大于 0 且不大于 10`);
+      } else if (value < 0 || value > 1) {
+        throw new Error(`${label}取值范围为 0–1`);
+      }
+      draft[key] = value;
+    }
+    if (draft.fusion_alpha + draft.fusion_beta > 1)
+      throw new Error("先验总份额与词法份额之和不能大于 1");
+    return draft;
+  }
+  function adoptFusion(runtime) {
+    fusion.checked = true;
+    fusion.runtime = runtime || null;
+    if (fusion.runtime?.effective)
+      fusion.draft = { ...fusion.runtime.defaults, ...fusion.runtime.configured };
+    renderFusion();
   }
   // Polling refreshes status cells in place; rebuilding the whole table would
   // replace buttons mid-click every 3 seconds.
@@ -539,6 +706,7 @@ export function models(root, ctx) {
     )}${panel("模型任务", `<div class="panel-body"><p>${h(op.active ? `${phase(op.phase)} · ${op.item || ""}` : "当前没有模型任务")}</p>${op.active ? `<div class="progress-label"><span>${h(bytes(op.done))} / ${h(bytes(op.total))}</span><span>${h(op.elapsed_secs !== undefined ? op.elapsed_secs + " 秒" : "")}</span></div><progress ${op.total ? `value="${h(op.done)}" max="${h(op.total)}"` : ""}></progress>` : ""}${index.error ? `<p class="form-error section-gap">${h(index.error)}</p>` : ""}</div><details class="technical"><summary>推理与索引详情</summary><pre>${h(raw({ inference, index, model: op }))}</pre></details>`)}</div>`;
     updateVariantsProgress();
     renderDynamic();
+    renderEngineHint();
     // The client downloaded the baseline files: have the Runtime build the
     // index once, right after the tokenizer shows up.
     if (inventory) {
@@ -572,6 +740,8 @@ export function models(root, ctx) {
       if (!root.isConnected) return;
       if (values[0].status === "fulfilled") {
         agent = summary(values[0].value);
+        fusion.loadFailed = false;
+        adoptFusion(agent.recall_fusion_runtime);
         $("[data-recall] [name=mode]", root).value =
           agent.recall_mode || "fast";
         const mirror = agent.model_mirror || "auto";
@@ -605,10 +775,10 @@ export function models(root, ctx) {
       }
       if (values[4].status === "fulfilled") {
         profileState = values[4].value;
-        // An active profile selection is what the runtime actually uses; the
-        // selector keeps an explicit local choice when one exists.
-        const details = readProfileState(profileState);
-        const activeModel = details.active_model || details.model || "";
+        // The runtime's catalog carries what is actually active; the selector
+        // keeps an explicit local choice when one exists.
+        const { active, switchState } = readProfileState(profileState);
+        const activeModel = active?.model || "";
         if (activeModel && !switchInFlight) {
           const known = MODEL_OPTIONS.some(([id]) => id === activeModel);
           if (!savedModel && known) modelID = activeModel;
@@ -617,10 +787,24 @@ export function models(root, ctx) {
               inventory = await fetchInventory(modelID);
             }
             engineState = {
-              engine: details.engine || "cpu",
-              model: details.active_variant || "quantized",
+              engine: active.engine || "cpu",
+              model: active.variant || "quantized",
             };
           }
+        }
+        // A switch left pending by a previous page session keeps being
+        // watched so its outcome still reaches the notice.
+        if (
+          isProfileModel(modelID) &&
+          !switchInFlight &&
+          switchState.state === "pending"
+        ) {
+          switchInFlight = true;
+          switchingVariant = "";
+          switchTicks = 0;
+          if (!switchTimer)
+            switchTimer = setInterval(() => refreshProfileState(), 3000);
+          notify("检测到未完成的模型切换任务，继续等待 Runtime 结果…");
         }
       } else {
         profileState = null;
@@ -632,6 +816,10 @@ export function models(root, ctx) {
         savedMode && MODEL_MODES.some((mode) => mode.id === savedMode)
           ? savedMode
           : modeForVariant(engineState.model);
+      if (values[0].status === "rejected") {
+        fusion.loadFailed = true;
+        renderFusion();
+      }
       $("[data-mirror] [name=model]", root).value = modelID;
       $("[data-api] [name=base]", root).value =
         agent.recall_api_base ||
@@ -679,39 +867,50 @@ export function models(root, ctx) {
     })();
   });
   async function refreshProfileState() {
-    if (!isProfileModel()) {
+    if (!isProfileModel(modelID)) {
       profileState = null;
       renderVariants();
       return;
     }
     profileState = await fetchProfileState();
-    const details = readProfileState(profileState);
-    const activeModel = details.active_model || details.model || "";
-    if (activeModel === modelID) {
+    const { active } = readProfileState(profileState);
+    if (active?.model === modelID) {
       engineState = {
-        engine: details.engine || "cpu",
-        model: details.active_variant || switchingVariant || "quantized",
+        engine: active.engine || "cpu",
+        model: active.variant || switchingVariant || "quantized",
       };
     }
-    renderVariants();
-    renderDynamic();
+    if (root.isConnected) {
+      renderVariants();
+      renderDynamic();
+    }
     if (switchInFlight) {
       const verdict = profileStateSettled(profileState);
-      if (verdict.settled) {
+      switchTicks += 1;
+      // 3s × 600 = 30 min: never poll forever; the runtime itself abandons a
+      // switch after 30 minutes.
+      const expired = switchTicks > 600;
+      if (verdict.settled || expired) {
+        const { switchState } = readProfileState(profileState);
         switchInFlight = false;
         switchingVariant = "";
         clearInterval(switchTimer);
         switchTimer = null;
-        if (!verdict.failed) lastVerifiedAt = new Date();
+        if (!verdict.failed && !expired) lastVerifiedAt = new Date();
+        switchTicks = 0;
         notify(
-          verdict.failed
-            ? "模型切换失败，Runtime 已回退原模型；详情见切换状态。"
-            : `已切换使用 ${modelID} · ${engineState.model}，真实推理验证通过。`,
-          verdict.failed,
+          expired
+            ? "模型切换状态等待超时，请到本页查看最终结果。"
+            : verdict.failed
+              ? `模型切换失败${switchState.error ? `：${switchState.error}` : ""}；Runtime 已恢复原模型。`
+              : `已切换使用 ${modelID} · ${engineState.model}，真实推理验证通过。`,
+          expired || verdict.failed,
         );
-        renderVariants();
-        renderDynamic(true);
-        await ctx.refresh();
+        if (root.isConnected) {
+          renderVariants();
+          renderDynamic(true);
+          await ctx.refresh();
+        }
       }
     }
   }
@@ -735,16 +934,17 @@ export function models(root, ctx) {
     const apply = event.target.closest("[data-apply]");
     if (apply) {
       action(apply, async () => {
-        if (isProfileModel()) {
-          const engine = apply.dataset.engine;
-          const variant = apply.dataset.variant;
+        const engine = apply.dataset.engine;
+        const variant = apply.dataset.variant;
+        if (isProfileModel(modelID)) {
           switchingVariant = variant;
           switchInFlight = true;
+          switchTicks = 0;
           if (!switchTimer)
             switchTimer = setInterval(() => refreshProfileState(), 3000);
           try {
             await submitProfileSwitch(modelID, engine, variant);
-            notify("切换任务已提交；Runtime 正在验证并加载模型。");
+            notify(`切换任务已提交：${modelID} · ${engine.toUpperCase()} · ${variant}；Runtime 正在验证并加载，完成后在此提示。`);
           } catch (error) {
             switchInFlight = false;
             switchingVariant = "";
@@ -755,23 +955,37 @@ export function models(root, ctx) {
           await refreshProfileState();
           return;
         }
-        const { envelope, result } = await applyLegacyEngine(
-          apply.dataset.engine,
-          apply.dataset.variant,
-        );
-        engineState = { engine: result.engine, model: result.model };
-        if (!result.fallback) lastVerifiedAt = new Date();
-        if (result.fallback)
-          notify(fallbackMessage(apply.dataset.engine, result), true);
-        else
-          notify(
-            `已切换到 ${apply.dataset.engine.toUpperCase()} · ${result.model}，实际推理验证通过。`,
-          );
-        if (root.isConnected)
-          $("[data-result]", root).innerHTML = resultView("应用结果", envelope);
+        // Legacy m3: one host operation saves the selection, reloads the
+        // model and probes it; on failure the host restores the previous
+        // selection and the receipt carries the cause.
+        switchingVariant = variant;
+        switchInFlight = true;
         renderVariants();
-        renderDynamic(true);
-        await ctx.refresh();
+        notify(`正在切换到 ${engine.toUpperCase()} · ${variant}：重载模型并运行真实推理验证，期间推理可能短暂停顿…`);
+        try {
+          const { envelope, result } = await applyLegacyEngine(engine, variant);
+          engineState = { engine: result.engine, model: result.model };
+          if (!result.fallback) lastVerifiedAt = new Date();
+          const probe = result.probe || {};
+          if (typeof probe.elapsed_ms === "number" && probe.selected)
+            lastProbe = { selected: probe.selected, elapsed_ms: probe.elapsed_ms };
+          if (result.fallback)
+            notify(fallbackMessage(engine, result), true);
+          else
+            notify(
+              `已切换到 ${engine.toUpperCase()} · ${result.model}，实际推理验证通过${probe.selected ? `（${probe.selected} · ${probe.elapsed_ms}ms）` : ""}。`,
+            );
+          if (root.isConnected)
+            $("[data-result]", root).innerHTML = resultView("应用结果", envelope);
+        } finally {
+          switchInFlight = false;
+          switchingVariant = "";
+          if (root.isConnected) {
+            renderVariants();
+            renderDynamic(true);
+          }
+          await ctx.refresh();
+        }
       });
       return;
     }
@@ -843,8 +1057,17 @@ export function models(root, ctx) {
         )
           return;
         result = await execute("model_uninstall");
-      } else if (operation === "probe") result = await execute("model_probe");
-      else if (operation === "providers")
+      } else if (operation === "probe") {
+        // Real inference on the active settings: the receipt names the
+        // execution provider the runtime actually selected.
+        result = await execute("model_probe");
+        const probe = summary(result) || {};
+        if (probe.selected && typeof probe.elapsed_ms === "number")
+          lastProbe = { selected: probe.selected, elapsed_ms: probe.elapsed_ms };
+        notify(
+          `实际推理验证通过：${probe.selected || "当前引擎"} · ${probe.elapsed_ms ?? "—"}ms · cosine ${typeof probe.cosine === "number" ? probe.cosine.toFixed(4) : "—"}`,
+        );
+      } else if (operation === "providers")
         result = await execute("model_install_engines");
       else if (operation === "index") result = await execute("index_prepare");
       else if (operation === "rebuild") {
@@ -860,7 +1083,8 @@ export function models(root, ctx) {
       }
       if (result && root.isConnected)
         $("[data-result]", root).innerHTML = resultView("操作结果", result);
-      notify("请求已处理；模型与索引状态会继续刷新。");
+      if (operation !== "probe")
+        notify("请求已处理；模型与索引状态会继续刷新。");
       await ctx.refresh();
     });
   });
@@ -912,16 +1136,61 @@ export function models(root, ctx) {
       await load();
     });
   });
+  // Save the whole recall_fusion object in one agent_set, then read it back:
+  // a mismatch means the stored config changed under us, a failed readback
+  // means the write outcome is unconfirmed — never auto-retry the write.
+  $("[data-fusion-form]", root).addEventListener("submit", (event) => {
+    event.preventDefault();
+    action($("[type=submit]", event.target), async () => {
+      if (!fusion.runtime?.effective)
+        throw new Error("请先升级支持五轴融合设置的 CLI");
+      const draft = fusionDraft();
+      await execute("agent_set", {
+        setting: "recall_fusion=" + JSON.stringify(draft),
+      });
+      let readBack;
+      try {
+        readBack = summary(await execute("agent_config")).recall_fusion_runtime;
+      } catch {
+        notify("写入已提交，但回读失败：结果待确认，请刷新设置。", true);
+        return;
+      }
+      if (readBack?.effective) adoptFusion(readBack);
+      if (
+        !readBack?.configured ||
+        Object.keys(draft).some((key) => readBack.configured[key] !== draft[key])
+      )
+        throw new Error("保存后的回读与草稿不一致，配置可能已变化，请刷新设置");
+      const overrides = readBack.overrides || [];
+      notify(
+        overrides.length
+          ? `已保存；但这些字段由 Runtime 环境覆盖：${overrides
+              .map(fusionLabel)
+              .join("、")}，保存值不会生效。`
+          : "五轴融合设置已保存，下一次召回生效。",
+        overrides.length > 0,
+      );
+    });
+  });
+  // Restoring defaults only rewrites the draft; nothing persists until 保存.
+  $("[data-fusion-reset]", root).addEventListener("click", (event) => {
+    action(event.target, async () => {
+      if (!fusion.runtime?.defaults)
+        throw new Error("请先升级支持五轴融合设置的 CLI");
+      fusion.draft = { ...fusion.runtime.defaults };
+      renderFusion();
+      $("[data-fusion-state]", root).textContent = "已恢复默认草稿；保存后生效。";
+    });
+  });
   update();
   const dispose = recallChecks(root);
   if (ctx.desktop?.connected) load();
   return {
     dispose() {
-      if (switchTimer) {
-        clearInterval(switchTimer);
-        switchTimer = null;
-      }
-      switchInFlight = false;
+      // An in-flight switch keeps polling (bounded by switchTicks): the page
+      // is gone but the outcome must still reach the global notice instead of
+      // failing silently in the background. switchInFlight stays set so the
+      // settle branch in refreshProfileState can fire.
       dispose();
     },
     update() {

@@ -24,7 +24,7 @@ export function diary(root, ctx) {
     loading = false;
   root.innerHTML =
     heading("把日常，留在日历里。", "按日期查看活动轨迹，或检索日记片段。") +
-    `<div class="memory-toolbar"><button data-prev aria-label="上个月">‹</button><input type="month" name="month" aria-label="日记月份" value="${month}"><button data-next aria-label="下个月">›</button><button data-today>本月</button><button data-search>搜索日记片段</button></div><div class="grid"><div class="panel"><div data-calendar class="calendar"></div></div><section class="panel"><div class="panel-heading"><h2 data-day-title>选择日期</h2></div><div data-entries class="empty">选择日期查看当天记录。</div></section></div>`;
+    `<div class="memory-toolbar"><button data-prev aria-label="上个月">‹</button><input type="month" name="month" aria-label="日记月份" value="${month}"><button data-next aria-label="下个月">›</button><button data-today>本月</button><button data-search>搜索日记片段</button></div><div class="grid diary-grid"><div class="panel"><div data-calendar class="calendar"></div></div><section class="panel diary-day-panel"><div class="panel-heading"><h2 data-day-title>选择日期</h2></div><div class="diary-entries"><div data-entries class="empty">选择日期查看当天记录。</div></div></section></div>`;
   function render() {
     const [year, m] = month.split("-").map(Number),
       first = new Date(year, m - 1, 1),
@@ -112,13 +112,19 @@ export function diary(root, ctx) {
       $("[name=month]", root).value = month;
       load();
     }
-    if (button.dataset.entry)
+    if (button.dataset.entry) {
+      // Persistent selection highlight, matching the memory tree rows.
+      root
+        .querySelectorAll(".timeline-body button.active")
+        .forEach((el) => el.classList.remove("active"));
+      button.classList.add("active");
       action(button, async () => {
         const memory = entry(
           await execute("memory_show", { id: button.dataset.entry }),
         );
         showText(memory.title, memory.content || "");
       });
+    }
     if (button.hasAttribute("data-search"))
       dialog({
         title: "搜索日记片段",

@@ -154,11 +154,20 @@ export async function fetchProfileState() {
   }
 }
 
-// The runtime reports the active selection in either details or summary;
-// read both so either shape works.
+// The runtime reports a switch in progress.summary: `switch` carries the
+// terminal state (pending / ready / failed + error), `operation` the live
+// phase, and catalog.active the running selection. Read that shape in one
+// place so the models page, the wizard and the overview never diverge.
 export function readProfileState(state) {
-  const progress = state?.progress || {};
-  return progress.details || progress.summary || {};
+  const progressEnvelope = state?.progress || {};
+  const progress = progressEnvelope.details || progressEnvelope.summary || {};
+  const catalogEnvelope = state?.catalog || {};
+  const catalog = catalogEnvelope.details || catalogEnvelope.summary || {};
+  return {
+    switchState: progress.switch || {},
+    operation: progress.operation || {},
+    active: catalog.active || null,
+  };
 }
 
 export async function applyLegacyEngine(engine, variant) {
@@ -175,14 +184,13 @@ export async function submitProfileSwitch(model, engine, variant) {
 }
 
 // profileStateSettled reports whether a switch task reached a terminal
-// state, and whether that state is success.
+// state, and whether that state is success. Only switch.state is authoritative:
+// pending → ready | failed; the live operation phase never settles.
 export function profileStateSettled(state) {
-  const details = readProfileState(state);
-  const text = String(
-    details.state || details.phase || details.status || "",
-  );
-  if (/failed|失败/i.test(text)) return { settled: true, failed: true };
-  if (/ready|完成/i.test(text)) return { settled: true, failed: false };
+  const { switchState } = readProfileState(state);
+  const text = String(switchState.state || "");
+  if (/failed/i.test(text)) return { settled: true, failed: true };
+  if (/ready/i.test(text)) return { settled: true, failed: false };
   return { settled: false, failed: false };
 }
 
@@ -242,22 +250,32 @@ export function openDownloadModal({
   }
   let timer = null;
   let startPromise = Promise.resolve();
+  // While our POST is in flight a terminal task snapshot may still describe
+  // the previous task, so poll() must not treat it as our result.
+  let submitting = false;
   function start() {
     errorNode.hidden = true;
     setMode("downloading");
     const mirror = getMirror?.() || "auto";
+    submitting = true;
     startPromise = api("model-download", {
       model,
       variant,
       ...(mirror && mirror !== "auto" ? { mirror } : {}),
-    }).catch((error) => {
-      // The bridge rejects with 409 when another task is running.
-      stageNode.textContent = "无法开始下载";
-      errorNode.textContent = error.message;
-      errorNode.hidden = false;
-      setMode("failed");
-      throw error;
-    });
+    }).then(
+      () => {
+        submitting = false;
+      },
+      (error) => {
+        submitting = false;
+        // The bridge rejects with 409 when another task is running.
+        stageNode.textContent = "无法开始下载";
+        errorNode.textContent = error.message;
+        errorNode.hidden = false;
+        setMode("failed");
+        throw error;
+      },
+    );
     return startPromise;
   }
   function applyTask(task) {
@@ -271,6 +289,7 @@ export function openDownloadModal({
     }
   }
   async function poll() {
+    if (submitting) return;
     try {
       const state = await api("state");
       const task = state.task || {};
@@ -340,21 +359,24 @@ export function openDownloadModal({
     { once: true },
   );
   setMode("downloading");
-  start()
-    .then(() => {
-      timer = setInterval(poll, 700);
-      poll();
-    })
-    .catch(() => {});
+  // Poll from the start, not after the POST resolves: the server answers as
+  // soon as the task is registered, so progress streams in while it runs.
+  timer = setInterval(poll, 700);
+  start();
   return { element, done };
 }
 
 // notifyFallback surfaces the runtime's real post-probe engine when the
 // selected device failed verification; the wizard and models page share it so
-// a fallback can never be presented as success of the chosen device.
+// a fallback can never be presented as success of the chosen device. The
+// probe failure cause travels in result.warning — always show it.
 export function fallbackMessage(engine, result) {
   if (!result?.fallback) return "";
-  return `${engine.toUpperCase()} 验证失败，已自动回退 CPU（${result.model}）；详情见应用结果。`;
+  const reason = result.warning ? `（${result.warning}）` : "";
+  const restored = result.engine
+    ? `${result.engine.toUpperCase()} · ${result.model}`
+    : `CPU（${result.model}）`;
+  return `${engine.toUpperCase()} 验证失败${reason}，已恢复切换前的 ${restored}；详情见应用结果。`;
 }
 
 export async function applyEngineChoice({ model, engine, variant }) {

@@ -16,7 +16,9 @@ type ExternalRuntime struct {
 
 // npm and manual installations share the data-root bin directory but are not client-managed.
 func (m *Manager) External(ctx context.Context) (ExternalRuntime, error) {
-	path := filepath.Join(filepath.Dir(m.Root), "bin", runtimeBinary())
+	// The external host executable is the CLI; only the managed runtime
+	// switched to the split rsrs-runtime binary.
+	path := filepath.Join(filepath.Dir(m.Root), "bin", cliBinary())
 	if _, err := os.Stat(path); err != nil {
 		return ExternalRuntime{}, err
 	}

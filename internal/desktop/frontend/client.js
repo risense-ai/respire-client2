@@ -14,6 +14,7 @@ import { accounts } from "./pages/accounts.js";
 import { injection } from "./pages/injection.js";
 import { applyTypography } from "./ui/typography.js";
 import { grants } from "./pages/grants.js";
+import { stats } from "./pages/stats.js";
 import {
   applyTranslations,
   currentLanguage,
@@ -29,6 +30,7 @@ const definitions = {
   overview: ["概览", overview],
   memories: ["记忆", memoryWorkspace],
   diary: ["日记", diary],
+  stats: ["统计", stats],
   organize: ["整理", organize],
   models: ["模型与索引", models],
   accounts: ["账户与空间", accounts],
@@ -381,9 +383,13 @@ async function poll() {
     if (preferred) setLanguage(preferred);
   }
   route();
-  poll();
   // First run: the wizard replaces the old first-language layer and covers
-  // every step from language to model enablement.
-  if (ctx.desktop && !ctx.desktop.preferences?.onboardingCompleted)
-    wizard.show();
+  // every step from language to model enablement. The auto-show waits for
+  // the first status read and never opens when this machine already has a
+  // local account; the entry in Settings → About still opens a full re-run.
+  const firstPoll = poll();
+  if (!ctx.desktop || ctx.desktop.preferences?.onboardingCompleted) return;
+  await firstPoll;
+  if (ctx.status?.summary?.session?.has_token) return;
+  wizard.show();
 })();

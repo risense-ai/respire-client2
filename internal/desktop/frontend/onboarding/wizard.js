@@ -195,6 +195,8 @@ export function createWizard(ctx) {
     body.addEventListener("click", (event) => {
       const back = event.target.closest("[data-back]");
       if (back && !busy) goto(back.dataset.back);
+      const skip = event.target.closest("[data-skip-wizard]");
+      if (skip && !busy && !state.agentBusy) skipWizard();
     });
     const render = {
       language: renderLanguage,
@@ -210,8 +212,14 @@ export function createWizard(ctx) {
     (render || renderSync)(body);
   }
 
-  function frame(title, subtitle, inner, actions = "") {
-    return `<h1>${h(title)}</h1>${subtitle ? `<p class="wizard-sub">${h(subtitle)}</p>` : ""}${inner}<div class="wizard-actions">${actions}</div><p class="form-error" role="alert" data-wizard-error ${state.error ? "" : "hidden"}>${h(state.error || "")}</p>`;
+  function frame(title, subtitle, inner, actions = "", { skip = true } = {}) {
+    // First run has no exit button, so every step carries an explicit skip
+    // that ends the wizard for good; a re-run already exits from the card
+    // corner without writing anything.
+    const skipButton = state.reRun
+      ? ""
+      : `<button type="button" data-skip-wizard>跳过向导</button>`;
+    return `<h1>${h(title)}</h1>${subtitle ? `<p class="wizard-sub">${h(subtitle)}</p>` : ""}${inner}<div class="wizard-actions">${skip ? skipButton : ""}${actions}</div><p class="form-error" role="alert" data-wizard-error ${state.error ? "" : "hidden"}>${h(state.error || "")}</p>`;
   }
 
   function card(
@@ -388,10 +396,30 @@ export function createWizard(ctx) {
     await goto("model", { onboardingSyncChoice: "offline" });
   }
 
+  // One busy control: spinner + disabled label so an in-flight remote call
+  // is visible; the button restores itself on failure without re-rendering
+  // (a re-render would wipe the typed credentials).
+  function setButtonBusy(button, busyText) {
+    if (!button) return () => {};
+    const original = button.innerHTML;
+    button.disabled = true;
+    button.classList.add("wizard-busy");
+    button.innerHTML = `<span class="wizard-spinner" aria-hidden="true"></span>${h(busyText)}`;
+    return () => {
+      button.disabled = false;
+      button.classList.remove("wizard-busy");
+      button.innerHTML = original;
+    };
+  }
+
   async function submitAuthentication(values) {
     if (busy) return;
     busy = true;
     await setError("");
+    const restore = setButtonBusy(
+      $('button[form="wizard-auth-form"]', root),
+      state.accountMode === "register" ? t("正在创建账户…") : t("正在登录…"),
+    );
     try {
       validateAuthentication(state.accountMode, values);
       const envelope = await runAuthentication(state.accountMode, values);
@@ -408,6 +436,7 @@ export function createWizard(ctx) {
       render();
     } catch (error) {
       setError(error.message);
+      restore();
     } finally {
       busy = false;
     }
@@ -423,15 +452,16 @@ export function createWizard(ctx) {
       `<label class="checkbox-label"><input type="checkbox" name="autosync" ${state.autoSync ? "checked" : ""}>启用自动同步（推荐）</label><p class="hint">${t("本机密钥")}：${keys ? t("已就绪") : t("未初始化")}。${t("云端的记忆正文始终加密后同步。")}</p>`,
       `<button type="button" class="primary" data-autosync-continue>继续</button>`,
     );
-    $("[data-autosync-continue]", body).addEventListener("click", () => {
-      saveAutosync($("[name=autosync]", body).checked);
+    $("[data-autosync-continue]", body).addEventListener("click", (event) => {
+      saveAutosync($("[name=autosync]", body).checked, event.currentTarget);
     });
   }
 
-  async function saveAutosync(enabled) {
+  async function saveAutosync(enabled, button) {
     if (busy) return;
     busy = true;
     await setError("");
+    const restore = setButtonBusy(button, t("正在保存…"));
     try {
       state.autoSync = enabled;
       await execute("autosync_set", { enabled });
@@ -457,6 +487,7 @@ export function createWizard(ctx) {
       render();
     } catch (error) {
       setError(error.message);
+      restore();
     } finally {
       busy = false;
     }
@@ -715,6 +746,7 @@ export function createWizard(ctx) {
   }
 
   function setStage(stage, status, note = "") {
+    if (!state) return; // wizard closed by skip mid-execute
     state.stages = state.stages || {};
     state.stages[stage] = status;
     const node = root.querySelector(
@@ -783,21 +815,23 @@ export function createWizard(ctx) {
     try {
       if (startStage === "download") {
         if (!(await runDownloadStage())) {
-          state.executing = false;
+          if (state) state.executing = false;
           return;
         }
       }
       if (startStage === "download" || startStage === "enable") {
         if (!(await runEnableStage())) {
-          state.executing = false;
+          if (state) state.executing = false;
           return;
         }
       }
       await runIndexStage();
-      state.executing = false;
-      renderExecuteSuccess();
+      if (state) {
+        state.executing = false;
+        renderExecuteSuccess();
+      }
     } catch (error) {
-      state.executing = false;
+      if (state) state.executing = false;
       failure(startStage === "index" ? "index" : "probe", error.message);
     }
   }
@@ -863,6 +897,7 @@ export function createWizard(ctx) {
   // the modal was closed; follow the client task state to its end.
   async function trackRunningDownload() {
     for (let rounds = 0; rounds < 7200; rounds++) {
+      if (!state) return false; // wizard closed by skip: stop tracking
       await ctx.refresh();
       const task = ctx.desktop?.task || {};
       if (!task.busy) return task.stage === "完成";
@@ -893,10 +928,10 @@ export function createWizard(ctx) {
       return false;
     }
     if (outcome.fallback) {
-      // Report the runtime's real post-probe engine: never present the
-      // selected device as successful when verification fell back.
+      // Report the engine the host restored after the failed probe: never
+      // present the selected device as successful when verification fell back.
       setStage("load", "done");
-      setStage("probe", "done", `${t("已回退 CPU")} · ${outcome.variant}`);
+      setStage("probe", "done", `${outcome.engine.toUpperCase()} · ${t("已恢复原设置")}`);
       executeStatus(outcome.warning, true);
     } else {
       setStage("load", "done");
@@ -923,17 +958,19 @@ export function createWizard(ctx) {
   }
 
   function renderExecuteSuccess() {
+    if (!state) return; // wizard closed by skip mid-execute
     const outcome = state.enableOutcome || {};
     const body = $(".wizard-body", root);
-    const actualEngine = outcome.fallback ? "cpu" : outcome.engine;
+    const actualEngine = outcome.engine || "cpu";
     const note = outcome.fallback
-      ? `${h(state.device.toUpperCase())} ${t("验证未通过，实际启用 CPU ·")} ${h(outcome.variant)}。${h(outcome.warning || "")}`
+      ? `${h(state.device.toUpperCase())} ${t("验证未通过，已恢复 ")}${h(actualEngine.toUpperCase())} · ${h(outcome.variant)}。${h(outcome.warning || "")}`
       : `${t("模型已可用")}：${h(modelLabel(state.model))} · ${h(actualEngine.toUpperCase())} · ${h(outcome.variant || state.variant)}。`;
     body.innerHTML = frame(
       "开始使用 Respire",
       "",
       `<p>${note}</p><p class="hint">${t("模型已可用；后台索引可以继续构建，「全部索引完成」以「模型与索引」页的索引状态为准。")}</p>`,
       `<button type="button" data-skip-agents>直接开始</button><button type="button" class="primary" data-next-agents>下一步：配置 Agent 工具</button>`,
+      { skip: false },
     );
     $("[data-next-agents]", body).addEventListener("click", () => goto("agents"));
     $("[data-skip-agents]", body).addEventListener("click", () => complete());
@@ -1112,6 +1149,25 @@ export function createWizard(ctx) {
   async function exitToModels() {
     await complete();
     ctx.navigate("models");
+  }
+
+  // Skip ends the wizard on any first-run step: onboardingCompleted is set,
+  // so neither the wizard nor the resume pill ever comes back on its own.
+  // Applied settings are kept; an in-flight model task keeps running in the
+  // background and stays visible on the models page.
+  async function skipWizard() {
+    const tail = state.executing
+      ? "正在执行的模型任务会在后台继续，可在「模型与索引」页查看进度。"
+      : "之后可以在「设置 → 关于」重新运行向导。";
+    if (
+      !(await confirm(
+        "跳过初始化向导",
+        `剩余步骤不再执行，已应用的设置保留。${tail}`,
+        "跳过向导",
+      ))
+    )
+      return;
+    complete();
   }
 
   async function complete() {

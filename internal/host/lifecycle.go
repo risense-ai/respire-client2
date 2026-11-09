@@ -31,7 +31,7 @@ func (m *Manager) runtimeDir(v string) string { return filepath.Join(m.Root, "ru
 
 func (m *Manager) Owns(exe string) bool {
 	rel, err := filepath.Rel(filepath.Join(m.Root, "runtime"), exe)
-	return err == nil && filepath.IsLocal(rel) && samePath(filepath.Base(rel), runtimeBinary())
+	return err == nil && filepath.IsLocal(rel) && acceptsRuntimeBinary(filepath.Base(rel))
 }
 
 func (m *Manager) hostCommand(ctx context.Context, info InstalledRuntime, args ...string) error {

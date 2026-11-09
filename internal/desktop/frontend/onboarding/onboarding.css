@@ -194,6 +194,10 @@
   margin-top: 1.25rem;
 }
 
+.wizard-actions [data-skip-wizard] {
+  margin-right: auto;
+}
+
 .wizard-tabs {
   display: inline-flex;
   gap: 4px;
@@ -226,6 +230,28 @@
 
 .wizard-form input {
   color: var(--text);
+}
+
+/* In-flight button state: the spinner replaces the label while a remote
+   call runs; disabled dimming comes from the base button rule. */
+button.wizard-busy {
+  cursor: default;
+}
+
+.wizard-spinner {
+  width: 0.875rem;
+  height: 0.875rem;
+  flex: none;
+  border: 2px solid currentColor;
+  border-top-color: transparent;
+  border-radius: 50%;
+  animation: wizard-spin 0.7s linear infinite;
+}
+
+@keyframes wizard-spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .wizard-recovery textarea {
