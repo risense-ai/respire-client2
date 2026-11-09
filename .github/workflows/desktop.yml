@@ -107,6 +107,58 @@ jobs:
           if (('${{ github.ref_type }}' -eq 'tag') -and ('${{ github.ref_name }}' -notmatch '-')) { $channel = 'stable' }
           choco install innosetup -y --no-progress
           ./scripts/build-installer.ps1 -Version $version -Arch '${{ matrix.arch }}' -Channel $channel
+      - name: Install and uninstall Windows package
+        if: matrix.os == 'windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $smokeRoot = [IO.Path]::GetFullPath((Join-Path $env:RUNNER_TEMP 'respire-installer-smoke'))
+          $tempRoot = [IO.Path]::GetFullPath($env:RUNNER_TEMP).TrimEnd('\') + '\'
+          if (!$smokeRoot.StartsWith($tempRoot, [StringComparison]::OrdinalIgnoreCase) -or (Test-Path -LiteralPath $smokeRoot)) { throw 'Unsafe or reused installer smoke directory' }
+          $uninstallKeys = @('HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\{AFCA612B-7DD5-4380-8DD2-ADE8E2DA28C4}_is1', 'HKCU:\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\{AFCA612B-7DD5-4380-8DD2-ADE8E2DA28C4}_is1')
+          if ($uninstallKeys | Where-Object { Test-Path -LiteralPath $_ }) { throw 'Existing Respire installation on runner' }
+          if (Test-Path -LiteralPath 'HKCU:\Software\Respire\Installer') { throw 'Existing Respire installer state on runner' }
+          $webViewKey = 'SOFTWARE\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}'
+          $webViewVersions = @('HKLM:\SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}', "HKLM:\$webViewKey", "HKCU:\$webViewKey") | ForEach-Object { (Get-ItemProperty -LiteralPath $_ -Name pv -ErrorAction SilentlyContinue).pv }
+          if (!($webViewVersions | Where-Object { $_ -and ([version]$_ -ge [version]'86.0.622.0') })) { throw 'Preinstalled WebView2 required for isolated installer check' }
+          $appRoot = Join-Path $smokeRoot 'app'
+          $env:RSRS_DATA_DIR = Join-Path $smokeRoot 'existing-data'
+          New-Item -ItemType Directory -Path (Join-Path $env:RSRS_DATA_DIR 'client2') | Out-Null
+          $preferences = Join-Path $env:RSRS_DATA_DIR 'client2\preferences.json'
+          $dataSentinel = Join-Path $env:RSRS_DATA_DIR 'legacy-data.sentinel'
+          [IO.File]::WriteAllText($preferences, '{"theme":"dark","language":"en"}')
+          [IO.File]::WriteAllText($dataSentinel, 'preserve-existing-data')
+          $preferencesHash = (Get-FileHash -LiteralPath $preferences -Algorithm SHA256).Hash
+          $dataHash = (Get-FileHash -LiteralPath $dataSentinel -Algorithm SHA256).Hash
+          $pathBefore = (Get-ItemProperty -LiteralPath 'HKCU:\Environment' -Name Path -ErrorAction SilentlyContinue).Path
+          $setup = Join-Path $PWD 'dist\respire-windows-${{ matrix.arch }}-setup.exe'
+          $install = Start-Process -FilePath $setup -ArgumentList @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/SP-', '/NOICONS', '/TASKS=""', ('/DIR="{0}"' -f $appRoot), ('/LOG="{0}"' -f (Join-Path $smokeRoot 'install.log'))) -WindowStyle Hidden -PassThru
+          if (!$install.WaitForExit(120000)) { throw 'Installer smoke timed out' }
+          $install.WaitForExit()
+          if ($install.ExitCode -ne 0) { throw 'Installer smoke failed' }
+          try {
+            $version = '0.2.56-dev.${{ github.run_number }}'
+            if ('${{ github.ref_type }}' -eq 'tag') { $version = '${{ github.ref_name }}'.TrimStart('v') }
+            foreach ($check in @(@{ Name = 'version'; Args = @('--version') }, @{ Name = 'fonts'; Args = @('--headless', 'fonts') })) {
+              $output = Join-Path $smokeRoot ($check.Name + '.json')
+              $process = Start-Process -FilePath (Join-Path $appRoot 'Respire.exe') -ArgumentList $check.Args -RedirectStandardOutput $output -WindowStyle Hidden -PassThru
+              if (!$process.WaitForExit(15000)) { throw 'Installed executable check timed out' }
+              $process.WaitForExit()
+              if ($process.ExitCode -ne 0) { throw 'Installed executable check failed' }
+              $info = Get-Content -LiteralPath $output -Raw | ConvertFrom-Json
+              if ($check.Name -eq 'version' -and ($info.version -ne $version -or $info.platform -ne 'windows-${{ matrix.arch }}')) { throw 'Installed executable identity mismatch' }
+              if ($check.Name -eq 'fonts' -and (!$info.ok -or $info.result.Count -eq 0)) { throw 'Installed font enumeration failed' }
+            }
+          } finally {
+            $uninstall = Start-Process -FilePath (Join-Path $appRoot 'unins000.exe') -ArgumentList @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART') -WindowStyle Hidden -PassThru
+            if (!$uninstall.WaitForExit(60000)) { throw 'Uninstaller smoke timed out' }
+            $uninstall.WaitForExit()
+            if ($uninstall.ExitCode -ne 0) { throw 'Uninstaller smoke failed' }
+          }
+          if (Test-Path -LiteralPath (Join-Path $appRoot 'Respire.exe')) { throw 'Uninstall left the application executable' }
+          if ($uninstallKeys | Where-Object { Test-Path -LiteralPath $_ }) { throw 'Uninstall left registration' }
+          if ((Get-FileHash -LiteralPath $preferences -Algorithm SHA256).Hash -ne $preferencesHash -or (Get-FileHash -LiteralPath $dataSentinel -Algorithm SHA256).Hash -ne $dataHash) { throw 'Install/uninstall changed existing data' }
+          if ((Get-ItemProperty -LiteralPath 'HKCU:\Environment' -Name Path -ErrorAction SilentlyContinue).Path -cne $pathBefore -or (Test-Path -LiteralPath 'HKCU:\Software\Respire\Installer')) { throw 'Install/uninstall changed user PATH state' }
       - name: Build Unix
         if: matrix.os != 'windows'
         shell: bash
@@ -125,6 +177,25 @@ jobs:
           ./dist/respire --headless fonts > "$RUNNER_TEMP/respire-fonts.json"
           node -e 'const fs=require("fs");const r=JSON.parse(fs.readFileSync(process.argv[1],"utf8"));if(!r.ok||!Array.isArray(r.result)||!r.result.length)throw Error("No system fonts returned")' "$RUNNER_TEMP/respire-fonts.json"
           if [[ -n "$channel" ]]; then bash scripts/build-dmg.sh; fi
+      - name: Check application copied from DMG
+        if: matrix.os == 'darwin' && matrix.arch == 'arm64'
+        shell: bash
+        run: |
+          set -euo pipefail
+          smoke_root="$RUNNER_TEMP/respire-dmg-smoke"
+          [[ ! -e "$smoke_root" ]] || { echo 'DMG smoke directory already exists' >&2; exit 1; }
+          mkdir -p "$smoke_root/mount"
+          hdiutil attach -readonly -nobrowse -mountpoint "$smoke_root/mount" dist/respire-darwin-arm64.dmg >/dev/null
+          trap 'hdiutil detach "$smoke_root/mount" >/dev/null' EXIT
+          ditto "$smoke_root/mount/Respire.app" "$smoke_root/Respire.app"
+          version='0.2.56-dev.${{ github.run_number }}'
+          if [[ '${{ github.ref_type }}' == tag ]]; then version='${{ github.ref_name }}'; version="${version#v}"; fi
+          RSRS_DATA_DIR="$smoke_root/profile" "$smoke_root/Respire.app/Contents/MacOS/respire" --version > "$smoke_root/version.json"
+          python3 - "$smoke_root/version.json" "$version" <<'PY'
+          import json, sys
+          info = json.load(open(sys.argv[1]))
+          assert info['version'] == sys.argv[2] and info['platform'] == 'darwin-arm64', 'Copied DMG executable identity mismatch'
+          PY
       - uses: actions/upload-artifact@v7
         with:
           name: respire-${{ matrix.os }}-${{ matrix.arch }}
