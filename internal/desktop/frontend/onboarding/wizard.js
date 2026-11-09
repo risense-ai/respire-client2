@@ -20,6 +20,7 @@ import {
   runAuthentication,
   validateAuthentication,
 } from "../pages/authentication.js";
+import { wizardImportStep } from "../pages/session-import.js";
 import {
   MODEL_CARDS,
   MODEL_OPTIONS,
@@ -47,6 +48,7 @@ const STEP_ORDER = [
   "confirm",
   "execute",
   "agents",
+  "import",
 ];
 
 const STEP_TITLES = {
@@ -59,6 +61,7 @@ const STEP_TITLES = {
   confirm: "确认",
   execute: "完成",
   agents: "Agent 工具",
+  import: "导入已有会话",
 };
 
 const DEFAULT_SERVER = "https://api.rsrs.rs";
@@ -175,6 +178,7 @@ export function createWizard(ctx) {
       confirm: renderConfirm,
       execute: renderExecute,
       agents: renderAgents,
+      import: renderImport,
     }[state.step];
     (render || renderSync)(body);
   }
@@ -957,9 +961,11 @@ export function createWizard(ctx) {
   }
 
   async function renderAgents(body) {
-    const finishButton = `<button type="button" class="primary" data-finish>开始使用 Respire</button>`;
+    // The agents step now advances to the optional import step; completing
+    // without either stays available through the import step's 完成 button.
+    const finishButton = `<button type="button" class="primary" data-finish>下一步：导入已有会话</button>`;
     const wireFinish = () =>
-      $("[data-finish]", body).addEventListener("click", () => complete());
+      $("[data-finish]", body).addEventListener("click", () => goto("import"));
     if (!connected()) {
       body.innerHTML = frame(
         "配置 Agent 工具",
@@ -1111,6 +1117,32 @@ export function createWizard(ctx) {
     } catch {}
     state.agentSelected = defaultAgentSelection();
     render();
+  }
+
+  // Optional last step: the session-import flow mounted inside the wizard.
+  // Completing or skipping never starts a write; an in-flight import keeps
+  // running like any host operation and stays visible in 操作记录.
+  function renderImport(body) {
+    body.innerHTML = frame(
+      "导入已有会话",
+      "可选：把其他编码 Agent 工具的历史会话导入为摘要记忆；每个会话一条摘要，不是完整对话。也可以直接完成，稍后在主导航「会话导入」处理。",
+      '<div data-import-mount></div>',
+      backButton("agents") +
+        `<button type="button" class="primary" data-finish-import>完成</button>`,
+    );
+    wizardImportStep($("[data-import-mount]", body), {
+      ...ctx,
+      get desktop() {
+        return ctx.desktop;
+      },
+      // The mounted flow's page links must pause the wizard before routing,
+      // like the updates-page escape on the account step.
+      navigate: (page) => {
+        pause();
+        ctx.navigate(page);
+      },
+    });
+    $("[data-finish-import]", body).addEventListener("click", () => complete());
   }
 
   async function exitToModels() {

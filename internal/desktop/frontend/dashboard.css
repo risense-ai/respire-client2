@@ -1461,7 +1461,7 @@ button.success {
   cursor: default;
   opacity: 0.62;
 }
-.si-source input[type="radio"] {
+.si-source input[type="checkbox"] {
   width: 1rem;
   height: 1rem;
   flex: none;
