@@ -505,12 +505,12 @@ export function models(root, ctx) {
       inventory = await fetchInventory(modelID);
     }
     const variant = modeVariant(mode);
-    if (!variant?.installed) {
+    if (!variant?.installed || !inventory?.tokenizer_installed) {
       stateOverride = null;
       renderDynamic(true);
       // The modal resolves `done` true only when the download completed;
       // closing or cancelling never enables the mode on its own.
-      const completed = await openDownloadModal({
+      await openDownloadModal({
         model: modelID,
         variant: mode.variant,
         label: mode.title,
@@ -519,7 +519,7 @@ export function models(root, ctx) {
       const fresh = await fetchInventory(modelID).catch(() => null);
       if (fresh) inventory = fresh;
       if (!root.isConnected) return;
-      if (completed || modeVariant(mode)?.installed)
+      if (inventory?.tokenizer_installed && modeVariant(mode)?.installed)
         await applyEngineAfterDownload(mode, engine);
       else renderDynamic(true);
       return;
