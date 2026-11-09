@@ -7,10 +7,8 @@ from datetime import datetime, timezone
 
 
 tag, dist, notes, output = sys.argv[1:5]
-# The expected artifact count follows the release matrix (zip-only platforms,
-# plus the Apple Silicon DMG); CI passes it so a missing upload fails here
-# instead of publishing a partial manifest. The default keeps the historic
-# six-artifact zip-only matrix.
+# Only the six application update assets enter this manifest. Standalone
+# installers remain release downloads and are included in SHA256SUMS.
 expected = int(sys.argv[5]) if len(sys.argv) > 5 else 6
 if not tag.startswith("v"):
     raise SystemExit("tag must start with v")
@@ -23,7 +21,7 @@ for line in (folder / "SHA256SUMS").read_text().splitlines():
 
 artifacts = []
 for name, digest in sorted(checksums.items()):
-    if not name.startswith("respire-"):
+    if not name.startswith("respire-") or name.endswith(".dmg") or name.endswith("-setup.exe"):
         continue
     artifacts.append({
         "filename": name,

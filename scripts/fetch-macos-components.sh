@@ -102,7 +102,9 @@ assemble() {
     local rt_dir="$1" cli="$2" cli_version="$3" cli_sha="$4" version="$5" binary_sha="$6" min_cli="$7" max_cli="$8"
     rm -rf "$out/runtime"
     cp -R "$rt_dir" "$out/runtime"
+    [[ "$(sha_of "$cli")" == "$cli_sha" ]] || { echo "cached CLI binary SHA256 mismatch" >&2; exit 1; }
     cp "$cli" "$out/rsrs"
+    [[ "$(sha_of "$out/rsrs")" == "$cli_sha" ]] || { echo "payload CLI binary SHA256 mismatch" >&2; exit 1; }
     chmod 0755 "$out/rsrs" "$out/runtime/rsrs-runtime"
     python3 - "$out" "$target" "$channel" "$cli_version" "$cli_sha" "$version" "$binary_sha" "$min_cli" "$max_cli" <<'PY'
 import json, os, sys

@@ -120,6 +120,9 @@ func parseBootstrapManifest(b []byte, manifest *bootstrapManifest) error {
 	if err := dec.Decode(manifest); err != nil {
 		return err
 	}
+	if err := dec.Decode(new(any)); !errors.Is(err, io.EOF) {
+		return errors.New("trailing bootstrap manifest data")
+	}
 	target, err := runtimeTarget()
 	if err != nil {
 		return err
@@ -143,7 +146,7 @@ func parseBootstrapManifest(b []byte, manifest *bootstrapManifest) error {
 		(manifest.Runtime.MaxCLI != "*" && !validVersion(manifest.Runtime.MaxCLI)) {
 		return errors.New("embedded Runtime compat window invalid")
 	}
-	return nil
+	return CheckCLICompat(manifest.CLI.Version, Compat{MinCLI: manifest.Runtime.MinCLI, MaxCLI: manifest.Runtime.MaxCLI})
 }
 
 // runtimeMetadata converts the manifest into the normalized Runtime metadata

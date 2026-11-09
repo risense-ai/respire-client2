@@ -242,7 +242,7 @@ func newInstallTestManager(t *testing.T) *Manager {
 	t.Helper()
 	root := t.TempDir()
 	m := &Manager{Root: filepath.Join(root, "client2"), DataRoot: root,
-		Endpoint: "http://127.0.0.1:1", HTTPClient: &http.Client{},
+		Endpoint: "http://127.0.0.1:1", HTTPClient: &http.Client{}, prefs: defaultPreferences(),
 		localClient: &http.Client{Transport: &http.Transport{Proxy: nil}}}
 	if err := os.MkdirAll(m.Root, 0700); err != nil {
 		t.Fatal(err)
@@ -600,10 +600,15 @@ func TestInstallRuntimeWithPayload(t *testing.T) {
 			t.Fatal(err)
 		}
 		stubCLIProbe(t, cliProbeFixture{tmpVersion: "1.2.3", destAbsent: true})
-		// Offline: the guard short-circuits and Start cannot bring the fake
-		// runtime up, so the call fails — but never downwards.
+		// An existing installation checks online updates instead of reusing
+		// the bundled version. A failed check must preserve the receipt.
+		releaseServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			http.Error(w, "offline fixture", http.StatusServiceUnavailable)
+		}))
+		defer releaseServer.Close()
+		m.HTTPClient = &http.Client{Transport: fakeGH{server: releaseServer.URL}}
 		if err = m.InstallRuntime(false, false); err == nil {
-			t.Fatal("offline start of the fake runtime cannot succeed")
+			t.Fatal("offline release check cannot succeed")
 		}
 		current, readErr := m.Installed()
 		if readErr != nil || current.Version != "1.9.9" {
@@ -612,8 +617,8 @@ func TestInstallRuntimeWithPayload(t *testing.T) {
 		if _, err = os.Stat(m.runtimeDir("1.0.21")); !errors.Is(err, os.ErrNotExist) {
 			t.Fatal("the older payload version must not be published")
 		}
-		if _, err = os.Stat(filepath.Join(m.DataRoot, "bin", cliBinary())); err != nil {
-			t.Fatal("CLI install still applies on the guard path")
+		if _, err = os.Stat(filepath.Join(m.DataRoot, "bin", cliBinary())); !errors.Is(err, os.ErrNotExist) {
+			t.Fatal("a failed online update must not replace the CLI from the bundle")
 		}
 	})
 	t.Run("PATH failure keeps components and surfaces guidance", func(t *testing.T) {

@@ -197,12 +197,16 @@ func (m *Manager) InstallRuntime(automatic bool, restart bool) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
 	defer cancel()
 	m.progress("检查 Runtime 发布", 0, 0)
+	previous, prevErr := m.Installed()
+	if prevErr != nil && !errors.Is(prevErr, os.ErrNotExist) {
+		return prevErr
+	}
 	var release ReleaseInfo
 	var meta RuntimeMetadata
 	var payload *bootstrapPayload
-	if embedded, payloadErr := readBootstrapPayload(); payloadErr == nil {
-		// A valid platform-matching payload replaces the download step; every
-		// later verification, ownership, and activity rule still applies.
+	if embedded, payloadErr := readBootstrapPayload(); errors.Is(prevErr, os.ErrNotExist) && payloadErr == nil && embedded.Manifest.Channel == m.Preferences().RuntimeChannel {
+		// Only bootstrap an absent installation from a matching channel.
+		// Installed clients use release discovery so the bundle cannot pin updates.
 		payload = &embedded
 		meta = embedded.runtimeMetadata()
 	} else {
@@ -214,30 +218,16 @@ func (m *Manager) InstallRuntime(automatic bool, restart bool) error {
 			return err
 		}
 	}
-	previous, prevErr := m.Installed()
-	if prevErr != nil && !errors.Is(prevErr, os.ErrNotExist) {
-		return prevErr
-	}
 	if prevErr == nil && semver.Compare("v"+previous.Version, "v"+meta.RuntimeVersion) >= 0 {
-		// The version guard only short-circuits when the installed layout
-		// verifies against the incoming metadata. Legacy combined installs
-		// (runtime/<ver>/rsrs) fail that check under the split runtime
-		// binary name; fall through and reinstall from the new source.
-		if verifyErr := verifyRuntime(m.runtimeDir(previous.Version), meta.BinaryHash); verifyErr == nil {
-			if payload != nil {
-				if err := m.installBootstrapCLI(ctx, payload); err != nil {
-					return err
-				}
-			}
+		// Verify the selected version against its own receipt. A newer
+		// version cannot share the incoming release's binary hash.
+		if verifyErr := verifyRuntime(m.runtimeDir(previous.Version), previous.SHA256); verifyErr == nil {
 			if startErr := m.Start(); startErr != nil {
 				return startErr
 			}
 			return m.finishBootstrapPath(payload)
-		}
-	}
-	if payload != nil {
-		if err := m.installBootstrapCLI(ctx, payload); err != nil {
-			return err
+		} else if semver.Compare("v"+previous.Version, "v"+meta.RuntimeVersion) > 0 {
+			return fmt.Errorf("installed newer Runtime verification failed: %w", verifyErr)
 		}
 	}
 	h, _, err := m.Health(ctx)
@@ -287,6 +277,11 @@ func (m *Manager) InstallRuntime(automatic bool, restart bool) error {
 		}
 		if *load.RPC.Running > 0 || *load.RPC.Queued > 0 {
 			return errors.New("Runtime 正忙，本次自动更新已延后；已下载版本会保留")
+		}
+	}
+	if payload != nil {
+		if err := m.installBootstrapCLI(ctx, payload); err != nil {
+			return err
 		}
 	}
 	// Without restart the new files publish under their own version dir and
