@@ -1461,8 +1461,12 @@ button.success {
   cursor: default;
   opacity: 0.62;
 }
-.si-source input {
+.si-source input[type="radio"] {
+  width: 1rem;
+  height: 1rem;
+  flex: none;
   margin-top: 0.25rem;
+  accent-color: var(--text);
 }
 .si-sessions {
   display: grid;
