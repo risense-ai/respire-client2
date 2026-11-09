@@ -1132,6 +1132,9 @@ export function createWizard(ctx) {
     );
     wizardImportStep($("[data-import-mount]", body), {
       ...ctx,
+      get desktop() {
+        return ctx.desktop;
+      },
       // The mounted flow's page links must pause the wizard before routing,
       // like the updates-page escape on the account step.
       navigate: (page) => {
