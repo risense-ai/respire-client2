@@ -82,6 +82,23 @@ func (m *Manager) fetchJSON(ctx context.Context, url string, v any) error {
 	return err
 }
 
+// httpStatusError reports a non-200 response from a release source so
+// callers can react to specific codes (e.g. a stable channel whose
+// repository has no full release yet).
+type httpStatusError struct{ code int }
+
+func (e *httpStatusError) Error() string { return fmt.Sprintf("release source HTTP %d", e.code) }
+
+// stableChannelMissing reports a stable-channel lookup that GitHub answered
+// with 404: /releases/latest returns that when the repository has no
+// published non-prerelease release, which is the current gated state of the
+// runtime train (respire-runtime docs/version-contract.md: stable promotion
+// stays closed until G1 evidence is verified and separately authorized).
+func stableChannelMissing(err error) bool {
+	var status *httpStatusError
+	return errors.As(err, &status) && status.code == http.StatusNotFound
+}
+
 func (m *Manager) fetchJSONOnce(ctx context.Context, url string, v any) error {
 	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
@@ -94,7 +111,7 @@ func (m *Manager) fetchJSONOnce(ctx context.Context, url string, v any) error {
 	}
 	defer res.Body.Close()
 	if res.StatusCode != 200 {
-		return fmt.Errorf("release source HTTP %d", res.StatusCode)
+		return &httpStatusError{code: res.StatusCode}
 	}
 	b, err := io.ReadAll(io.LimitReader(res.Body, 2<<20+1))
 	if err != nil {
@@ -127,6 +144,9 @@ func (m *Manager) LatestRuntime(ctx context.Context) (githubRelease, runtimeMeta
 	if m.Preferences().RuntimeChannel == "stable" {
 		var stable githubRelease
 		if err := m.fetchJSON(ctx, "https://api.github.com/repos/risense-ai/"+runtimeRepo+"/releases/latest", &stable); err != nil {
+			if stableChannelMissing(err) {
+				return stable, runtimeMetadata{}, errors.New("Runtime stable 通道暂无正式发布；可在「设置 → 更新」把 Runtime 通道切换为 dev")
+			}
 			return stable, runtimeMetadata{}, err
 		}
 		if stable.Prerelease || semver.Prerelease(stable.Tag) != "" {
