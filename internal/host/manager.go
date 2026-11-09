@@ -60,8 +60,13 @@ var onboardingSyncChoices = map[string]bool{
 // defaultPreferences is the state of a brand-new installation: the wizard
 // has not run yet, so onboardingCompleted stays false.
 func defaultPreferences() Preferences {
+	// RuntimeChannel starts on dev until the runtime stable train opens:
+	// stable promotion is gated on G1 acceptance (respire-runtime
+	// docs/version-contract.md), and /releases/latest answers 404 while the
+	// repository has no full release. Flip back to "stable" once the first
+	// stable runtime is published.
 	return Preferences{
-		AutoRuntime: true, AutoUpdate: true, RuntimeChannel: "stable", ClientChannel: "stable", Layout: "sidebar", Theme: "system", Language: "",
+		AutoRuntime: true, AutoUpdate: true, RuntimeChannel: "dev", ClientChannel: "stable", Layout: "sidebar", Theme: "system", Language: "",
 		ClientUpdateInterval: "6h", RuntimeUpdateInterval: "6h", ClientAutoUpdate: true, RuntimeAutoUpdate: true,
 		ClientAutoRestart: true, RuntimeAutoRestart: true,
 		OnboardingVersion:   1,
