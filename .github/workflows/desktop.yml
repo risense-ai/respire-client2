@@ -88,6 +88,25 @@ jobs:
           if ($fontProcess.ExitCode -ne 0) { throw 'Font enumeration failed' }
           $fonts = Get-Content $fontsFile -Raw | ConvertFrom-Json
           if (!$fonts.ok -or $fonts.result.Count -eq 0) { throw 'No system fonts returned' }
+      - name: Build installer
+        if: matrix.os == 'windows'
+        shell: pwsh
+        env:
+          # The fetch scripts read this for authenticated GitHub API calls;
+          # runner gh is unauthenticated and shared egress IPs exhaust the
+          # anonymous rate limit quickly.
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $version = '0.2.56-dev.${{ github.run_number }}'
+          if ('${{ github.ref_type }}' -eq 'tag') { $version = '${{ github.ref_name }}'.TrimStart('v') }
+          # Channel follows the release convention: a plain v* tag is a stable
+          # release and must bundle the stable Runtime; everything else (main
+          # pushes, PRs, prerelease tags) rides the dev channel until a stable
+          # Runtime release exists.
+          $channel = 'dev'
+          if (('${{ github.ref_type }}' -eq 'tag') -and ('${{ github.ref_name }}' -notmatch '-')) { $channel = 'stable' }
+          choco install innosetup -y --no-progress
+          ./scripts/build-installer.ps1 -Version $version -Arch '${{ matrix.arch }}' -Channel $channel
       - name: Build Unix
         if: matrix.os != 'windows'
         shell: bash
@@ -111,6 +130,7 @@ jobs:
           name: respire-${{ matrix.os }}-${{ matrix.arch }}
           path: |
             dist/respire-${{ matrix.os }}-${{ matrix.arch }}.*
+            dist/respire-${{ matrix.os }}-${{ matrix.arch }}-setup.exe
             dist/SHA256SUMS
             dist/LICENSE.txt
             dist/THIRD_PARTY_NOTICES.txt
@@ -140,10 +160,8 @@ jobs:
           cp artifacts/respire-windows-amd64/THIRD_PARTY_NOTICES.txt dist/
           cd dist
           sha256sum --check SHA256SUMS
-          # Two Windows exes, two macOS zips + one DMG, two Linux tarballs:
-          # derived from the current release matrix, coordinated with the
-          # manifest below rather than an independent hardcode.
-          test "$(wc -l < SHA256SUMS)" -eq 7
+          # Six application update assets, two Windows installers and one DMG.
+          test "$(wc -l < SHA256SUMS)" -eq 9
       - name: Generate release notes
         shell: bash
         env:

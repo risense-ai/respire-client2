@@ -60,7 +60,7 @@ func bootstrapDir() (string, error) {
 	if override := os.Getenv(bootstrapEnvOverride); override != "" {
 		return override, nil
 	}
-	if runtime.GOOS != "darwin" {
+	if runtime.GOOS != "darwin" && runtime.GOOS != "windows" {
 		return "", os.ErrNotExist
 	}
 	exe, err := os.Executable()
@@ -68,6 +68,9 @@ func bootstrapDir() (string, error) {
 		return "", err
 	}
 	dir := filepath.Join(filepath.Dir(exe), "..", "Resources", "bootstrap")
+	if runtime.GOOS == "windows" {
+		dir = filepath.Join(filepath.Dir(exe), "bootstrap")
+	}
 	if _, err = os.Stat(filepath.Join(dir, bootstrapManifestFile)); err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return "", os.ErrNotExist

@@ -178,8 +178,8 @@ func (d *desktop) handler(static http.Handler) http.Handler {
 					err = d.cancelUpdate()
 					result = "已请求取消"
 				case "/api/client-restart":
-					if !d.canRestartClient() {
-						err = errors.New("仍有业务操作在执行，请等待完成后应用客户端更新")
+					if blocked := d.clientRestartBlocked(); blocked != nil {
+						err = blocked
 					} else {
 						go func() {
 							if restartErr := d.restartClient(); restartErr != nil {

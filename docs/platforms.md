@@ -6,11 +6,17 @@ The first release targets x64 and ARM64 on Windows, macOS and Linux. Artifact ar
 
 | OS | Architectures | Build method | Distribution |
 | --- | --- | --- | --- |
-| Windows | amd64, arm64 | Native Windows runners | One `.exe` per architecture |
+| Windows | amd64, arm64 | Native Windows runners | One `.exe` plus one `-setup.exe` installer per architecture |
 | macOS | amd64, arm64 | macOS runner with Xcode | `.zip` containing one `Respire.app`; plus `respire-darwin-arm64.dmg`, the Apple Silicon full installer with a bundled CLI and Runtime |
 | Linux | amd64, arm64 | Native Ubuntu 22.04 runners | `.tar.gz` containing one `respire` |
 
 The workflow is the source of build status. A green build verifies compilation and packaging; it does not verify every desktop environment or CPU. Windows amd64 has local interactive verification. Non-Windows UI, tray, login integration and self-update require native acceptance before a production-support claim.
+
+## Windows installer
+
+Each Windows architecture also ships a `respire-windows-<arch>-setup.exe` built with Inno Setup (`scripts/setup.iss`). Install-time scope selection: per-user (default, no elevation, in-app updates work) or per-machine (Program Files, elevation). The installer creates Start-menu and desktop shortcuts plus an uninstall entry, installs Microsoft Edge WebView2 when missing via the official bootstrapper (an offline failure does not abort the install; the finish page links the official download), places a bundled `rsrs.exe` into `%USERPROFILE%\.rsrs\bin` without ever downgrading an existing newer CLI, pre-stages the bundled managed Runtime into `~/.rsrs/client2/runtime/<version>/` with its `runtime.json` state so the first launch needs no download, and can append the bin folder to the user PATH (checkbox, on by default). Uninstalling removes program files, shortcuts and the PATH entry the installer added; `~/.rsrs` user data — CLI, managed Runtime and its state included — is never touched, and later Runtime updates keep flowing through the app's own channel.
+
+CLI and Runtime are bundled from the same release channel, pinned at build time and verified against the published `cli-build-<triple>.json` / `runtime-build-<triple>.json` sha256 metadata; the build asserts the bundled CLI version sits inside the Runtime compat range and fails on a missing target, hash mismatch or an empty stable channel rather than silently substituting a prerelease. `scripts/build-installer.ps1 -Channel dev` produces a dev-channel installer. Installers are not code-signed, so SmartScreen shows an "unknown publisher" warning on first run. The bare `.exe` stays supported for portable use (first-run Runtime download unchanged), and npm's `rsrs-cli` installs to the same location - the last installation wins. Per-machine installs cannot apply in-app updates because the app directory is not writable; the client detects this with a write probe and directs the user to run the latest setup.exe.
 
 ## Deferred architectures
 

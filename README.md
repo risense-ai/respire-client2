@@ -6,6 +6,8 @@ A desktop client built with Wails v3 and Go for Windows, macOS and Linux. It rep
 
 Download the asset matching your OS and architecture from [Releases](https://github.com/risense-ai/respire-client2/releases). Keep the extracted application in a writable, permanent folder. Windows uses one EXE and requires Microsoft Edge WebView2. On Apple Silicon, prefer `respire-darwin-arm64.dmg`: drag `Respire.app` to Applications and the first launch installs the bundled CLI and managed Runtime locally, offline, and adds `rsrs` to new zsh terminals. Intel Macs use the zip, which does not carry a runnable Runtime bundle. Linux uses a tarball containing one executable and requires GTK 3, WebKitGTK 4.1 and X11 libraries. No Node.js, Go, npm or Rust installation is needed by the end user. Without a bundled payload the application downloads the CLI and its native libraries separately when available; it does not contain Core or model weights. If no client-managed CLI exists, it can recognize and start an external CLI at `<root>/bin/rsrs[.exe]`, including an npm installation.
 
+Windows offers a per-user `respire-windows-<arch>-setup.exe` installer alongside the portable EXE. It installs the application under LocalAppData without requesting elevation, bundles verified CLI and Runtime components under the application directory, and lets the first launch publish them through the same ownership, activity, hash and receipt checks used by the managed Runtime installer. It optionally adds the user CLI directory to PATH. Removing the application preserves user databases, identity, CLI, Runtime and receipts under `~/.rsrs`; subsequent component updates use the selected online channel. A build fails when its requested component releases are unavailable.
+
 ### macOS notes (DMG install)
 
 - The DMG is ad-hoc signed and **not** notarized: Gatekeeper may warn on first open. Use "Open" in the warning dialog (or right-click → Open); this does not disable system security. Remove the quarantine attribute only if your own policy allows it.
@@ -124,6 +126,14 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build.ps1 -Version 0
 ```
 
 `-Arch` accepts `amd64` or `arm64`. The resource generator runs on the build machine's architecture; the application is built for the requested architecture. The output is `dist/respire-windows-<arch>.exe`, `dist/SHA256SUMS`, `dist/LICENSE.txt` and `dist/THIRD_PARTY_NOTICES.txt`.
+
+To compile the Windows installer, run after `build.ps1` (requires [Inno Setup 6](https://jrsoftware.org/isinfo.php); the script fetches and verifies the bundled `rsrs.exe` from the respire-cli stable release via its `cli-build-<triple>.json` metadata):
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-installer.ps1 -Version 0.2.0 -Arch amd64
+```
+
+The output is `dist/respire-windows-<arch>-setup.exe`, appended to `dist/SHA256SUMS`.
 
 On macOS (Xcode Command Line Tools) or Linux (C/C++ compiler, pkg-config, GTK/WebKit development libraries):
 

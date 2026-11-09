@@ -6,6 +6,8 @@
 
 从 [Releases](https://github.com/risense-ai/respire-client2/releases) 下载与操作系统和架构匹配的产物。请将解压后的应用保存在可写入的固定目录。Windows 为单个 EXE，需要 Microsoft Edge WebView2。Apple Silicon 优先选择 `respire-darwin-arm64.dmg`：将 `Respire.app` 拖入 Applications，首次启动即在本地离线安装随包的 CLI 与托管 Runtime，并为新开的 zsh 终端配置 `rsrs`。Intel Mac 使用 zip，其中不含可运行的 Runtime 包。Linux 为包含单个可执行文件的 tarball，需要 GTK 3、WebKitGTK 4.1 和 X11 库。最终用户无需安装 Node.js、Go、npm 或 Rust。无随包组件时，应用在可用时单独下载 CLI 及其原生库；本体不包含 Core 与模型权重。若不存在客户端管理的 CLI，客户端可识别并启动 `<root>/bin/rsrs[.exe]` 处的外部 CLI，包括 npm 安装的版本。
 
+Windows 除便携 EXE 外还提供每用户安装器 `respire-windows-<arch>-setup.exe`。安装器不请求提权，应用安装在 LocalAppData。CLI 与 Runtime 随包放在应用目录，首次启动通过原有托管安装流程完成身份、忙碌状态、哈希和收据校验，并按需加入用户 PATH。卸载保留 `~/.rsrs` 下的数据库、身份、CLI、Runtime 与收据。后续组件更新使用用户选择的在线通道。构建所需组件尚未发布时，构建会失败。
+
 ### macOS 说明（DMG 安装）
 
 - DMG 为 ad-hoc 签名且**未经公证**：首次打开可能触发 Gatekeeper 提示。在提示中选择「打开」（或右键 → 打开）即可；该操作不会关闭系统安全机制。除非你自己的策略允许，不要移除 quarantine 属性。
@@ -124,6 +126,14 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build.ps1 -Version 0
 ```
 
 `-Arch` 接受 `amd64` 或 `arm64`。资源生成器运行在构建机的架构上；应用按请求的架构构建。产物为 `dist/respire-windows-<arch>.exe`、`dist/SHA256SUMS`、`dist/LICENSE.txt` 与 `dist/THIRD_PARTY_NOTICES.txt`。
+
+编译 Windows 安装器：先跑 `build.ps1`，再执行（需要 [Inno Setup 6](https://jrsoftware.org/isinfo.php)；脚本按 respire-cli stable release 的 `cli-build-<triple>.json` 元数据获取并校验内置 `rsrs.exe`）：
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-installer.ps1 -Version 0.2.0 -Arch amd64
+```
+
+产物为 `dist/respire-windows-<arch>-setup.exe`，并追加到 `dist/SHA256SUMS`。
 
 macOS（Xcode Command Line Tools）或 Linux（C/C++ 编译器、pkg-config、GTK/WebKit 开发库）：
 

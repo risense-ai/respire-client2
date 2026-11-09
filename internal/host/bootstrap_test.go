@@ -16,6 +16,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -565,9 +566,11 @@ func TestInstallRuntimeWithPayload(t *testing.T) {
 		if hash, err := fileHash(cli); err != nil || hash != payload.Manifest.CLI.SHA256 {
 			t.Fatalf("CLI not installed from payload: %v", err)
 		}
-		profile, err := os.ReadFile(filepath.Join(os.Getenv("HOME"), ".zprofile"))
-		if err != nil || !strings.Contains(string(profile), shellPathBegin) {
-			t.Fatalf("shell PATH block missing: %v", err)
+		if runtime.GOOS != "windows" {
+			profile, err := os.ReadFile(filepath.Join(os.Getenv("HOME"), ".zprofile"))
+			if err != nil || !strings.Contains(string(profile), shellPathBegin) {
+				t.Fatalf("shell PATH block missing: %v", err)
+			}
 		}
 	})
 	t.Run("external runtime is not taken over", func(t *testing.T) {
@@ -626,6 +629,9 @@ func TestInstallRuntimeWithPayload(t *testing.T) {
 		}
 	})
 	t.Run("PATH failure keeps components and surfaces guidance", func(t *testing.T) {
+		if runtime.GOOS == "windows" {
+			t.Skip("Windows PATH is configured by the per-user installer")
+		}
 		if os.Geteuid() == 0 {
 			t.Skip("permission-based failure needs a non-root runner")
 		}

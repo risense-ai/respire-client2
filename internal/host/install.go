@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
@@ -321,7 +322,7 @@ func (m *Manager) InstallRuntime(automatic bool, restart bool) error {
 // verified and published; a failure surfaces as manual guidance without ever
 // rolling back the verified components.
 func (m *Manager) finishBootstrapPath(payload *bootstrapPayload) error {
-	if payload == nil {
+	if payload == nil || runtime.GOOS == "windows" {
 		return nil
 	}
 	m.progress("配置终端 PATH", 0, 0)
