@@ -48,7 +48,7 @@ var updateIntervalValues = map[string]bool{
 var onboardingSteps = map[string]bool{
 	"language": true, "sync": true, "account": true, "recovery": true,
 	"model": true, "device": true, "confirm": true, "execute": true,
-	"agents": true, "done": true,
+	"agents": true, "import": true, "done": true,
 }
 
 // onboardingSyncChoices records the cloud/offline intent picked in the
