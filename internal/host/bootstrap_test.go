@@ -157,7 +157,11 @@ func TestBootstrapPayloadDiscovery(t *testing.T) {
 		if err := json.Unmarshal(b, &manifest); err != nil {
 			t.Fatal(err)
 		}
-		manifest["target"] = "x86_64-unknown-linux-gnu"
+		if manifest["target"] == "x86_64-unknown-linux-gnu" {
+			manifest["target"] = "aarch64-apple-darwin"
+		} else {
+			manifest["target"] = "x86_64-unknown-linux-gnu"
+		}
 		b, _ = json.Marshal(manifest)
 		if err := os.WriteFile(filepath.Join(dir, bootstrapManifestFile), b, 0600); err != nil {
 			t.Fatal(err)
