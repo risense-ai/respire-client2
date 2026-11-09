@@ -3,6 +3,7 @@ import { overview } from "./pages/overview.js";
 import { memoryWorkspace } from "./memory/workspace.js";
 import { diary } from "./memory/diary.js";
 import { organize } from "./pages/organize.js";
+import { sessionImport } from "./pages/session-import.js";
 import { models } from "./pages/models.js";
 import {
   settings,
@@ -30,6 +31,7 @@ const definitions = {
   memories: ["记忆", memoryWorkspace],
   diary: ["日记", diary],
   organize: ["整理", organize],
+  "session-import": ["会话导入", sessionImport],
   models: ["模型与索引", models],
   accounts: ["账户与空间", accounts],
   injection: ["配置Agent", injection],
