@@ -36,4 +36,11 @@ var memoryCommands = map[string]commandSpec{
 	"organize_counter":        {words: []string{"resort", "--status"}},
 	"query_log":               {words: []string{"query-log"}, args: []argument{integer("limit", "--limit", 100), flag("stats", "--stats")}},
 	"query_mark":              {words: []string{"query-log", "mark"}, write: true, args: []argument{pos("ids"), flag("good", "--good"), flag("bad", "--bad")}},
+	// Session import over the CLI's non-TUI extract contract. Preview bakes
+	// --dry-run into the command words so a preview can never write, and the
+	// forced re-import / subagent / parent / kind / importance flags stay
+	// unreachable from the desktop.
+	"session_import_targets": {words: []string{"extract", "--targets"}},
+	"session_import_preview": {words: []string{"extract", "--dry-run"}, args: []argument{opt("id", "--id"), opt("since", "--since"), opt("cwd", "--cwd"), opt("model", "--model"), integer("limit", "--limit", 2000)}},
+	"session_import_apply":   {words: []string{"extract"}, write: true, args: []argument{opt("id", "--id"), opt("since", "--since"), opt("cwd", "--cwd"), opt("model", "--model"), integer("limit", "--limit", 2000)}},
 }
