@@ -48,6 +48,8 @@ jobs:
           go vet -tags production,gtk3 ./...
           while IFS= read -r -d '' source; do node --check "$source"; done < <(find internal/desktop/frontend -name '*.js' -type f -print0)
           go test -tags production,gtk3 ./...
+          node --check scripts/test-account-session-state.cjs
+          node scripts/test-account-session-state.cjs
       - name: Bootstrap fetch fixture self-test
         run: bash scripts/test-fetch-macos-components.sh
   native:

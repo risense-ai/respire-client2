@@ -38,26 +38,60 @@ export function accounts(root, ctx) {
       '<div class="panel-body stack"><p class="hint">先检查候选旧库，再明确选择来源 ID 和新账户名称。</p><div class="actions"><button data-account="migration">检查旧账户</button><button data-account="migrate">迁移所选旧账户</button></div><div data-migration></div></div>',
     ) +
     '<div data-result class="section-gap"></div>';
+  const pendingSessionActions = new WeakSet();
+  const sessionRoot = $("[data-session]", root);
+  sessionRoot.innerHTML = panel(
+    "当前身份",
+    '<div class="identity-grid">' +
+      [
+        ["账户", "user"],
+        ["云端会话", "token"],
+        ["本机密钥", "keys"],
+        ["记忆库", "dir"],
+      ]
+        .map(
+          ([label, field]) =>
+            `<div class="identity-cell"><small>${h(label)}</small><strong data-session-field="${field}"></strong></div>`,
+        )
+        .join("") +
+      "</div>" +
+      `<div class="panel-body actions"><button data-account="login" class="primary">浏览器登录</button><button data-account="dashboard">打开 dashboard</button><button data-account="keygen" disabled>初始化离线记忆库</button><button data-account="keys" disabled>导出密钥</button><button data-account="logout" disabled>退出云端会话</button></div>`,
+  );
   function update() {
     const s = ctx.status?.summary || {},
       session = s.session || {};
-    $("[data-session]", root).innerHTML = panel(
-      "当前身份",
-      '<div class="identity-grid">' +
-        [
-          ["账户", session.user || "本机离线"],
-          ["云端会话", session.has_token ? "已登录" : "未登录"],
-          ["本机密钥", session.has_local_keys ? "已保存" : "未初始化"],
-          ["记忆库", s.data_dir],
-        ]
-          .map(
-            ([label, value]) =>
-              `<div class="identity-cell"><small>${h(label)}</small><strong>${h(value ?? "—")}</strong></div>`,
-          )
-          .join("") +
-        "</div>" +
-        `<div class="panel-body actions"><button data-account="login" class="primary">浏览器登录</button><button data-account="dashboard">打开 dashboard</button><button data-account="keygen" ${session.has_local_keys ? "disabled" : ""}>初始化离线记忆库</button><button data-account="keys" ${!session.has_local_keys ? "disabled" : ""}>导出密钥</button><button data-account="logout" ${!session.has_token ? "disabled" : ""}>退出云端会话</button></div>`,
-    );
+    const values = {
+      user: session.user || "本机离线",
+      token: session.has_token ? "已登录" : "未登录",
+      keys: session.has_local_keys ? "已保存" : "未初始化",
+      dir: s.data_dir ?? "—",
+    };
+    for (const [field, value] of Object.entries(values)) {
+      const target = $(`[data-session-field="${field}"]`, sessionRoot);
+      if (target.textContent !== String(value)) target.textContent = value;
+    }
+    const disabled = {
+      login: false,
+      dashboard: false,
+      keygen: Boolean(session.has_local_keys),
+      keys: !session.has_local_keys,
+      logout: !session.has_token,
+    };
+    for (const [kind, unavailable] of Object.entries(disabled)) {
+      const button = $(`[data-account="${kind}"]`, sessionRoot);
+      button.disabled = unavailable || pendingSessionActions.has(button);
+    }
+  }
+  async function accountAction(button, fn) {
+    if (button.disabled) return;
+    pendingSessionActions.add(button);
+    try {
+      await action(button, fn);
+    } finally {
+      pendingSessionActions.delete(button);
+      // action() clears disabled; restore the current session constraints.
+      update();
+    }
   }
   async function load() {
     if (loading) return;
@@ -162,7 +196,7 @@ export function accounts(root, ctx) {
         });
     }
     if (button.dataset.account)
-      action(button, async () => {
+      accountAction(button, async () => {
         const kind = button.dataset.account;
         if (commands[kind]) {
           const result = await execute(commands[kind]);
