@@ -63,7 +63,15 @@ export async function execute(
   { secret = "", onProgress } = {},
 ) {
   const id = "desktop-" + crypto.randomUUID();
-  let job = await api("execute", { name, id, args, confirmed: true, secret });
+  let job;
+  try {
+    job = await api("execute", { name, id, args, confirmed: true, secret });
+  } catch (error) {
+    // The server may have accepted the write before its response was lost.
+    // Keep the original id available for reconciliation; never resubmit it.
+    error.requestId = id;
+    throw error;
+  }
   pending.set(id, name);
   try {
     let rounds = 0;

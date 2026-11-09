@@ -183,10 +183,38 @@ export function sessionImport(root, ctx) {
     renderApply();
   }
 
+  async function reconcileApply(requestId) {
+    try {
+      const job = await api("operation?id=" + encodeURIComponent(requestId));
+      if (job.state === "done" && job.envelope) {
+        applyResult = { state: "done", envelope: job.envelope, requestId };
+      } else if (["failed", "running", "unconfirmed"].includes(job.state)) {
+        applyResult = { state: job.state, error: job.error || "写入结果尚未确认。", requestId };
+      } else {
+        applyResult = { state: "unconfirmed", error: "操作回执尚未确认。", requestId };
+      }
+    } catch (error) {
+      applyResult = { state: "unconfirmed", error: error.message, requestId };
+    }
+  }
+
   async function runApply() {
-    if (applyBusy || !preview || preview.stale || preview.error) return;
+    if (applyBusy) return;
+    if (["running", "unconfirmed"].includes(applyResult?.state)) {
+      if (!applyResult.requestId) return;
+      applyBusy = true;
+      renderApply();
+      await reconcileApply(applyResult.requestId);
+      applyBusy = false;
+      renderApply();
+      return;
+    }
+    if (!preview || preview.stale || preview.error || previewBusy) return;
+    const selectedPreview = preview;
+    const token = previewToken;
     const model = preview.model; // frozen at confirm time (D2)
     const pending = preview.envelope?.summary?.pending ?? 0;
+    if (pending <= 0) return;
     if (
       !(await confirm(
         "导入预览的会话",
@@ -195,33 +223,28 @@ export function sessionImport(root, ctx) {
       ))
     )
       return;
+    if (applyBusy || preview !== selectedPreview || previewToken !== token) return;
     applyBusy = true;
     applyResult = { state: "running" };
+    preview = null; // consumed before submission, including uncertain outcomes
+    previewToken++;
+    renderPreview();
     renderApply();
     try {
       const envelope = await execute("session_import_apply", argsFor(model));
       applyResult = { state: "done", envelope };
-      preview = null; // consumed: the next view must rescan (D4)
-      previewToken++;
-      await ctx.refresh();
     } catch (error) {
-      // The shared execute() tags every non-done receipt with a request id;
-      // reconcile against the operation record so an explicit CLI failure is
-      // not misreported as an unknown outcome.
-      let state = "failed";
-      if (error.requestId) {
-        try {
-          const job = await api(
-            "operation?id=" + encodeURIComponent(error.requestId),
-          );
-          state = job.state === "unconfirmed" ? "unconfirmed" : "failed";
-        } catch {
-          state = "unconfirmed";
-        }
-      }
-      applyResult = { state, error: error.message };
+      applyResult = { state: "unconfirmed", error: error.message, requestId: error.requestId };
+      if (error.requestId) await reconcileApply(error.requestId);
     } finally {
       applyBusy = false;
+    }
+    if (applyResult.state === "done") {
+      try {
+        await ctx.refresh();
+      } catch (error) {
+        notify(error.message, true);
+      }
     }
     renderSources();
     renderPreview();
@@ -369,22 +392,25 @@ export function sessionImport(root, ctx) {
         !previewBusy &&
         preview.envelope?.summary?.pending > 0,
     );
-    button.disabled = !ready || applyBusy;
+    const unresolved = ["running", "unconfirmed"].includes(applyResult?.state);
+    button.disabled = applyBusy || (unresolved ? !applyResult.requestId : !ready);
     button.textContent = applyBusy
       ? "正在导入…"
-      : ready
+      : unresolved
+        ? "核对原操作"
+        : ready
         ? `导入 ${number(preview.envelope.summary.pending)} 条预览会话`
         : "导入预览的会话";
     // The submission freezes the preview model; filter editing stays locked
     // until the apply settles.
     all("[data-since],[data-cwd],[data-model],[data-limit]", root).forEach(
-      (input) => (input.disabled = applyBusy),
+      (input) => (input.disabled = applyBusy || unresolved),
     );
     const previewButton = $("[data-preview]", root);
-    if (previewButton) previewButton.disabled = applyBusy;
+    if (previewButton) previewButton.disabled = applyBusy || unresolved;
     const memories = $("[data-open-memories]", root);
     const operations = $("[data-open-operations]", root);
-    const showNav = Boolean(applyResult && applyResult.state !== "running");
+    const showNav = Boolean(applyResult);
     memories.hidden = !showNav;
     operations.hidden = !showNav;
     const area = $("[data-apply-result]", root);
