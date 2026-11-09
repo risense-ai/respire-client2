@@ -2,6 +2,12 @@ import { $, all, h, api, action, notify, confirm, panel } from "../ui/core.js";
 import { heading } from "./overview.js";
 import { hostIcons } from "../icons.js";
 import { currentLanguage } from "../ui/i18n.js";
+import {
+  agentResultMessage,
+  agentStatus,
+  targetDetected,
+  targetsForScope,
+} from "../ui/agent-install.js";
 
 const modes = [
   ["normal", "正常（召回 + 写入）"],
@@ -9,12 +15,6 @@ const modes = [
   ["off", "关闭（记忆层停用）"],
 ];
 
-const stateNames = {
-  fresh: "已注入且最新",
-  stale: "已注入但过期",
-  none: "未注入",
-  absent: "应用未检测到",
-};
 const modeNames = {
   inject: "覆盖",
   block: "区块",
@@ -30,9 +30,29 @@ const modeHints = {
   plugin: "无独立提示词文件，仅释放插件",
 };
 
+const SCOPE_LABELS = {
+  prompt: "提示词注入",
+  plugin: "插件安装",
+};
+
+const SCOPE_NOTES = {
+  prompt:
+    "把 Respire 提示词写入可写提示词的 Agent 工具；内容统一管理，之后可随时更新或移除。",
+  plugin:
+    "为提供 Respire 插件的宿主准备并安装插件，获得更完整的宿主集成；仅适用于有对应插件的 Agent 工具。",
+};
+
+const SCOPE_EMPTY = {
+  prompt:
+    "没有已检测到且支持提示词注入的 Agent 工具；可显示其余目标或更换安装方式。",
+  plugin:
+    "没有已检测到且提供插件的 Agent 工具；可显示其余目标、更换安装方式或稍后配置。",
+};
+
 export function injection(root, ctx) {
   let targets = [],
     mode = "normal",
+    scope = "prompt",
     openIds = new Set(),
     showAll = false,
     busy = false,
@@ -41,7 +61,7 @@ export function injection(root, ctx) {
   root.innerHTML =
     heading(
       "安装提示词与插件。",
-      "按 Agent 逐一启用：开启后 Client2 直接写入提示词，并释放该宿主的 Respire 插件；关闭即移除注入内容。",
+      "两种安装方式相互独立：在对应标签页中只执行当前方式的操作；已有提示词与已装插件一律保留，切换方式不会移除它们。",
     ) +
     panel(
       "提示词模式",
@@ -51,7 +71,13 @@ export function injection(root, ctx) {
     ) +
     panel(
       "Agent",
-      `<div class="panel-body hint">开启 = 写入提示词 + 安装 / 更新该宿主插件；关闭 = 移除注入内容（插件保留）。</div><div data-agents class="ag-list"><div class="empty">等待读取</div></div>`,
+      `<div class="panel-body hint" data-scope-note>${h(
+        SCOPE_NOTES[scope],
+      )}</div><div class="wizard-tabs" role="tablist" aria-label="安装方式"><button type="button" role="tab" data-scope-tab="prompt" aria-selected="true">${h(
+        SCOPE_LABELS.prompt,
+      )}</button><button type="button" role="tab" data-scope-tab="plugin" aria-selected="false">${h(
+        SCOPE_LABELS.plugin,
+      )}</button></div><div data-agents class="ag-list"><div class="empty">等待读取</div></div>`,
     );
 
   const monogram = (name) => (String(name).trim()[0] || "·").toUpperCase();
@@ -63,11 +89,11 @@ export function injection(root, ctx) {
     return icon.svg;
   };
 
-  // Scoped actions inside the details: prompt write/remove and plugin install
-  // stay available separately next to the row's combined switch.
+  // Scoped actions inside the details follow the active tab: the prompt tab
+  // only writes or removes prompts, the plugin tab only installs plugins.
   const detailActionsHTML = (t) => {
     const buttons = [];
-    if (t.mode !== "plugin") {
+    if (scope === "prompt") {
       if (t.state === "fresh")
         buttons.push(
           `<button class="danger" data-scope="${h(t.id)}" data-enable="false" data-only="prompt">移除注入</button>`,
@@ -79,11 +105,10 @@ export function injection(root, ctx) {
           }</button>`,
         );
     }
-    if (t.plugin)
+    if (scope === "plugin" && t.plugin) {
       buttons.push(
-        `<button data-scope="${h(t.id)}" data-enable="true" data-only="plugin">安装 / 更新插件</button>`,
+        `<button class="primary" data-scope="${h(t.id)}" data-enable="true" data-only="plugin">安装 / 更新插件</button>`,
       );
-    if (t.plugin) {
       buttons.push(
         `<button data-repo="${h(t.plugin.id)}">仓库</button>`,
       );
@@ -96,16 +121,9 @@ export function injection(root, ctx) {
     return buttons.length ? `<div class="actions">${buttons.join("")}</div>` : "";
   };
 
-  const statusText = (t) =>
-    t.mode === "plugin"
-      ? t.plugin?.source
-        ? "插件源目录已就绪"
-        : "插件未安装"
-      : (stateNames[t.state] || t.state || "未知");
-
   const statusLine = (t) => {
-    const parts = [statusText(t)];
-    if (t.mode === "plugin" && t.plugin) {
+    const parts = [agentStatus(t, scope)];
+    if (scope === "plugin" && t.plugin) {
       parts.push(t.plugin.command ? "宿主命令已找到" : "宿主命令未找到");
     } else if (t.path) {
       parts.push(t.path);
@@ -114,11 +132,22 @@ export function injection(root, ctx) {
   };
 
   const factsHTML = (t) => {
+    const pluginSide = scope === "plugin";
+    // Only plugin-only hosts carry the plugin directory in path/realPath; a
+    // dual host's row shows the prompt file there, so its plugin side
+    // reports the prepared state instead of a wrong path.
+    const sourceValue = pluginSide
+      ? t.mode === "plugin"
+        ? t.realPath || t.path
+        : t.plugin?.source
+          ? "源目录已就绪"
+          : "源目录未准备"
+      : t.realPath || t.path;
     const lines = [
-      [t.mode === "plugin" ? "插件源目录" : "注入文件", t.realPath || t.path],
+      [pluginSide ? "插件源目录" : "注入文件", sourceValue],
       [
-        t.mode === "plugin" ? "安装方式" : "写入方式",
-        t.mode === "plugin"
+        pluginSide ? "安装方式" : "写入方式",
+        pluginSide
           ? t.plugin?.auto
             ? "自动调用宿主命令"
             : "在宿主插件界面添加源目录"
@@ -138,14 +167,12 @@ export function injection(root, ctx) {
   };
 
   const rowHTML = (t) => {
-    const on =
-      t.mode === "plugin" ? !!t.plugin?.source : t.state === "fresh";
-    const active = on || t.state === "stale" || !!t.plugin?.source;
-    const known =
-      t.likelyInstalled || t.state !== "absent" || !!t.plugin?.source;
+    const promptSide = scope === "prompt";
+    const on = promptSide ? t.state === "fresh" : !!t.plugin?.source;
+    const active = promptSide ? on || t.state === "stale" : on;
     const open = openIds.has(t.id);
-    return `<div class="ag-row${t.state === "stale" ? " drifted" : ""}${
-      known ? "" : " ag-folded"
+    return `<div class="ag-row${promptSide && t.state === "stale" ? " drifted" : ""}${
+      targetDetected(t) ? "" : " ag-folded"
     }" data-row="${h(t.id)}">
 <span class="ag-icon" aria-hidden="true">${iconHTML(t)}</span>
 <div class="ag-who">
@@ -153,7 +180,7 @@ export function injection(root, ctx) {
       modeNames[t.mode] || h(t.mode)
     }</span></div>
 <div class="ag-line"><span class="ag-dot ${
-      on ? "on" : t.state === "stale" || active ? "stale" : ""
+      on ? "on" : active ? "stale" : ""
     }"></span><small>${h(statusLine(t))}</small></div>
 </div>
 <button class="ag-detail" data-detail="${h(t.id)}" aria-expanded="${
@@ -163,11 +190,11 @@ export function injection(root, ctx) {
     }</span></button>
 <label class="ag-switch"><input type="checkbox" data-toggle="${h(
       t.id,
-    )}" data-kind="${h(t.mode)}"${on ? " checked" : ""}${
-      t.mode === "plugin" && !t.plugin ? " disabled" : ""
-    }><span class="ag-slider"></span><span class="sr-only">启用 ${h(
-      t.name,
-    )}</span></label>
+    )}" data-kind="${h(t.mode)}"${on ? " checked" : ""}><span class="ag-slider"></span><span class="sr-only">${
+      promptSide
+        ? `注入 ${h(t.name)} 提示词`
+        : `安装 ${h(t.name)} 插件`
+    }</span></label>
 <div class="ag-open" data-open="${h(t.id)}"${
       open ? "" : " hidden"
     }>${factsHTML(t)}${detailActionsHTML(t)}</div>
@@ -175,19 +202,26 @@ export function injection(root, ctx) {
   };
 
   function render() {
+    all("[data-scope-tab]", root).forEach((tab) =>
+      tab.setAttribute("aria-selected", String(tab.dataset.scopeTab === scope)),
+    );
+    const note = $("[data-scope-note]", root);
+    if (note) note.textContent = SCOPE_NOTES[scope];
     const list = $("[data-agents]", root);
     if (!targets.length) {
       list.innerHTML = '<div class="empty">没有返回注入目标</div>';
       return;
     }
-    const inUse = targets.filter(
-      (t) => t.likelyInstalled || t.state !== "absent" || !!t.plugin?.source,
-    );
-    const rest = targets.filter((t) => !inUse.includes(t));
-    const shown = showAll ? targets : inUse;
+    // The tab filter always applies; undetected targets stay behind 显示其余.
+    const supported = targetsForScope(targets, scope);
+    const inUse = supported.filter((t) => targetDetected(t));
+    const rest = supported.filter((t) => !inUse.includes(t));
+    const shown = showAll ? supported : inUse;
     list.classList.toggle("busy", busy);
     list.innerHTML =
-      shown.map(rowHTML).join("") +
+      (shown.length
+        ? shown.map(rowHTML).join("")
+        : `<div class="empty">${h(SCOPE_EMPTY[scope])}</div>`) +
       (rest.length
         ? `<div class="ag-fold"><button data-fold>${
             showAll ? "收起" : "显示其余"
@@ -227,53 +261,45 @@ export function injection(root, ctx) {
     if (data.mode) {
       return `模式已保存为${modes.find(([key]) => key === data.mode)?.[1] || data.mode}，已更新 ${data.updated ?? 0} 个目标的提示词`;
     }
-    if (data.message) return data.message; // plugin-only hosts report the install result directly
-    const parts = [];
-    if (data.changed !== undefined)
-      parts.push(
-        data.changed
-          ? data.enabled
-            ? "提示词已写入"
-            : "注入内容已移除"
-          : "提示词已是最新，未改动",
-      );
-    if (data.plugin)
-      parts.push(
-        data.plugin.ok ? `插件：${data.plugin.message}` : `插件失败：${data.plugin.message}`,
-      );
-    return parts.join(" · ");
+    return agentResultMessage(data);
   };
 
-  async function setTarget(id, enable, scope = "all") {
+  // Every apply on this page carries the active tab's scope; the combined
+  // scope=all switch is no longer exposed here.
+  async function setTarget(id, enable, opScope = scope) {
     const target = targets.find((t) => t.id === id);
     if (!target) return;
-    if (!enable && (target.mode === "plugin" || scope === "plugin")) {
+    if (!enable && opScope === "plugin") {
       notify("该插件需要在宿主的插件界面移除，Client2 不自动卸载。", true);
       render();
       return;
     }
-    const promptText = target.mode === "plugin" ? "" :
-      scope === "prompt"
-        ? enable
-          ? `将${target.state === "stale" ? "按当前模式更新" : "写入"} ${target.name} 的提示词。`
-          : `将移除 ${target.name} 中的注入内容。`
-        : enable
-          ? `将${target.plugin ? "写入提示词，并安装 / 更新该宿主的 Respire 插件" : "写入提示词"}。`
-          : `将移除 ${target.name} 中的注入内容${target.plugin ? "；插件保留，可在详情中查看。" : "。"}`;
     const what =
-      scope === "plugin"
+      opScope === "plugin"
         ? "将准备本机插件源目录，并在支持时调用宿主命令完成安装。"
-        : promptText;
+        : enable
+          ? `将${target.state === "stale" ? "按当前模式更新" : "写入"} ${target.name} 的提示词。`
+          : `将移除 ${target.name} 中的注入内容。`;
     const label =
-      scope === "plugin" ? "安装插件" : enable ? `启用 ${target.name}` : `停用 ${target.name}`;
-    if (what && !(await confirm(label, what, enable ? "启用" : scope === "prompt" && !enable ? "移除" : "停用"))) {
+      opScope === "plugin"
+        ? "安装插件"
+        : enable
+          ? `启用 ${target.name}`
+          : "移除注入";
+    if (
+      !(await confirm(
+        label,
+        what,
+        opScope === "plugin" ? "安装" : enable ? "启用" : "移除",
+      ))
+    ) {
       render();
       return;
     }
     busy = true;
     render();
     try {
-      const result = await api("inject-set", { id, enable, scope });
+      const result = await api("inject-set", { id, enable, scope: opScope });
       notify(resultMessage(result));
     } catch (error) {
       notify(error.message, true);
@@ -289,12 +315,21 @@ export function injection(root, ctx) {
       input.checked = !input.checked;
       return;
     }
-    setTarget(input.dataset.toggle, input.checked);
+    setTarget(input.dataset.toggle, input.checked, scope);
   });
 
   root.addEventListener("click", (event) => {
     const button = event.target.closest("button");
     if (!button) return;
+    if (button.dataset.scopeTab) {
+      if (busy || scope === button.dataset.scopeTab) return;
+      // Switching tabs keeps page state but never carries the other tab's
+      // fold/results into this one's actions.
+      scope = button.dataset.scopeTab;
+      showAll = false;
+      render();
+      return;
+    }
     if (button.dataset.detail) {
       const id = button.dataset.detail;
       if (openIds.has(id)) openIds.delete(id);
@@ -332,7 +367,7 @@ export function injection(root, ctx) {
       setTarget(
         button.dataset.scope,
         button.dataset.enable === "true",
-        button.dataset.only || "all",
+        button.dataset.only,
       );
     if (button.dataset.repo)
       action(button, () =>
@@ -346,7 +381,12 @@ export function injection(root, ctx) {
       );
   });
 
+  // Disconnected Runtime: an honest explanation, never cached or fake
+  // targets; re-detect becomes available once connected again.
   if (ctx.desktop?.connected) load();
+  else
+    $("[data-agents]", root).innerHTML =
+      '<div class="empty">Runtime 未连接，无法读取注入目标</div>';
   return {
     refresh: load,
     update() {
