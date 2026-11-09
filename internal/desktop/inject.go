@@ -133,6 +133,7 @@ func injectTargets(e injectHome) []injectTarget {
 		id    string
 		known bool
 	}{
+		{"generic", true},
 		{"dsh", dirAt(".dsh")},
 		{"opencode", dirAt(".config", "opencode")},
 		{"codex", dirAt(".codex")},
@@ -146,7 +147,6 @@ func injectTargets(e injectHome) []injectTarget {
 		{"qwen", dirAt(".qwen") || dirAt(".config", "qwen")},
 		{"doubao", dirAt(".doubao") || dirAt(".config", "doubao")},
 		{"grok", dirAt(".grok")},
-		{"generic", true},
 	}
 	out := make([]injectTarget, 0, len(probe))
 	for _, item := range probe {
