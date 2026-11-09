@@ -11,7 +11,7 @@ export const hostIcons = {
   deepseek: { img: "icons/deepseek-color.svg" },
   qwen: { img: "icons/qwen-color.svg" },
   doubao: { img: "icons/doubao-color.svg" },
-  zigcode: { img: "icons/zcode.png" },
+  zcode: { img: "icons/zcode.png" },
   kimi: { img: "icons/kimi-code-desktop.png" },
   opencode: {
     svg: `<svg aria-hidden="true" fill="currentColor" fill-rule="evenodd" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M16 6H8v12h8V6zm4 16H4V2h16v20z"></path></svg>`,

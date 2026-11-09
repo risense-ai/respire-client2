@@ -141,7 +141,7 @@ func injectTargets(e injectHome) []injectTarget {
 		{"workbuddy", dirAt(".workbuddy")},
 		{"kylinbot", dirAt(".kylinbot")},
 		{"pi", dirAt(".pi")},
-		{"zigcode", dirAt(".zcode") || dirAt(".zigcode")},
+		{"zcode", dirAt(".zcode") || dirAt(".zigcode")},
 		{"deepseek", dirAt(".deepseek")},
 		{"qwen", dirAt(".qwen") || dirAt(".config", "qwen")},
 		{"doubao", dirAt(".doubao") || dirAt(".config", "doubao")},
@@ -166,8 +166,8 @@ func injectTargets(e injectHome) []injectTarget {
 			target.Name, target.Path, target.Mode = "workbuddy", "~/.workbuddy/MEMORY.md", "ref-block"
 		case "pi":
 			target.Name, target.Path, target.Mode = "pi agent", "~/.pi/AGENTS.md", "block"
-		case "zigcode":
-			target.Name, target.Path, target.Mode = "zig code", "~/.zcode/AGENTS.md", "block"
+		case "zcode":
+			target.Name, target.Path, target.Mode = "ZCode", "~/.zcode/AGENTS.md", "block"
 		case "deepseek":
 			target.Name, target.Path, target.Mode = "deepseek harness", "~/.deepseek/AGENTS.md", "block"
 		case "qwen":
@@ -273,7 +273,7 @@ func injectOne(e injectHome, id string) (bool, error) {
 		return injectWorkbuddy(e)
 	case "pi":
 		return writeBlock(e, joinHome(e.home, ".pi", "AGENTS.md"))
-	case "zigcode":
+	case "zcode":
 		return writeBlock(e, joinHome(e.home, ".zcode", "AGENTS.md"))
 	case "deepseek":
 		return writeBlock(e, joinHome(e.home, ".deepseek", "AGENTS.md"))
@@ -309,7 +309,7 @@ func removeOne(e injectHome, id string) (bool, error) {
 		return removeBlock(e, joinHome(e.home, ".workbuddy", "MEMORY.md"))
 	case "pi":
 		return removeBlock(e, joinHome(e.home, ".pi", "AGENTS.md"))
-	case "zigcode":
+	case "zcode":
 		return removeBlock(e, joinHome(e.home, ".zcode", "AGENTS.md"))
 	case "deepseek":
 		return removeBlock(e, joinHome(e.home, ".deepseek", "AGENTS.md"))
@@ -748,7 +748,7 @@ var hostPluginRepo = map[string]string{
 	"codex":     "respire-codex",
 	"workbuddy": "respire-workbuddy",
 	"pi":        "respire-pi",
-	"zigcode":   "respire-zcode",
+	"zcode":     "respire-zcode",
 }
 
 // pluginOnlyHosts have a plugin but no prompt target of their own.
