@@ -36,6 +36,7 @@ PrivilegesRequired=lowest
 MinVersion=0,10.0
 WizardStyle=modern
 DisableProgramGroupPage=yes
+AllowNoIcons=yes
 Compression=lzma2/max
 SolidCompression=yes
 OutputDir=..\dist
@@ -72,8 +73,8 @@ Source: "..\dist\bootstrap\*"; DestDir: "{app}\bootstrap"; Flags: recursesubdirs
 Name: "addpath"; Description: "{cm:AddPathTask}"
 
 [Icons]
-Name: "{autoprograms}\Respire"; Filename: "{app}\Respire.exe"
-Name: "{autodesktop}\Respire"; Filename: "{app}\Respire.exe"
+Name: "{autoprograms}\Respire"; Filename: "{app}\Respire.exe"; Check: not WizardNoIcons
+Name: "{autodesktop}\Respire"; Filename: "{app}\Respire.exe"; Check: not WizardNoIcons
 
 [Run]
 Filename: "{app}\Respire.exe"; Description: "{cm:LaunchProgram,Respire}"; Flags: nowait postinstall skipifsilent runasoriginaluser
