@@ -33,24 +33,8 @@ const LIMIT_DEFAULT = 200,
 const DISCLOSURE =
   "导入会为每个会话生成一条摘要记忆（context / important），只保留首末请求与元数据，不是完整逐轮对话。源 Harness 数据只读取、不修改；凭据清洗尽力而为，不保证检出所有敏感信息；导入后的记忆按当前 Runtime 配置可能自动同步。";
 
-export function sessionImport(root, ctx) {
-  let discovery = { state: "idle", sources: [], error: "" };
-  // Batch selection over the detected Harnesses (default: all). The CLI
-  // takes one --id per invocation, so a subset runs one extraction per
-  // selected Harness while the full selection omits --id entirely.
-  let selected = new Set();
-  let preview = null; // { model, envelope, error, stale }
-  let previewToken = 0;
-  let previewBusy = false;
-  let applyBusy = false;
-  let applyResult = null; // { state, results?, error?, requestId? }
-  let attempted = false;
-
-  root.innerHTML =
-    heading(
-      "会话导入。",
-      "发现本机其他编码 Agent 工具的会话记录，筛选并预览后导入为摘要记忆。",
-    ) +
+function sessionImportMarkup() {
+  return (
     `<p class="hint si-disclosure">${h(DISCLOSURE)}</p>` +
     panel(
       "1 · 来源",
@@ -65,7 +49,37 @@ export function sessionImport(root, ctx) {
     panel(
       "3 · 确认导入与结果",
       `<div class="panel-body stack"><p class="hint">导入只处理当前预览中确认过的条件；执行时 CLI 会重新扫描，已导入的会话自动跳过。</p><div class="actions"><button class="primary" data-apply disabled>导入预览的会话</button><button data-open-memories hidden>打开记忆</button><button data-open-operations hidden>查看操作记录</button></div><div data-apply-result class="section-gap"></div></div>`,
-    );
+    )
+  );
+}
+
+export function sessionImport(root, ctx) {
+  root.innerHTML =
+    heading(
+      "会话导入。",
+      "发现本机其他编码 Agent 工具的会话记录，筛选并预览后导入为摘要记忆。",
+    ) + sessionImportMarkup();
+  return sessionImportController(root, ctx);
+}
+
+// The onboarding wizard mounts the same regions without the page heading.
+export function wizardImportStep(root, ctx) {
+  root.innerHTML = sessionImportMarkup();
+  return sessionImportController(root, ctx);
+}
+
+function sessionImportController(root, ctx) {
+  let discovery = { state: "idle", sources: [], error: "" };
+  // Batch selection over the detected Harnesses (default: all). The CLI
+  // takes one --id per invocation, so a subset runs one extraction per
+  // selected Harness while the full selection omits --id entirely.
+  let selected = new Set();
+  let preview = null; // { model, envelope, error, stale }
+  let previewToken = 0;
+  let previewBusy = false;
+  let applyBusy = false;
+  let applyResult = null; // { state, results?, error?, requestId? }
+  let attempted = false;
 
   const filterError = () => {
     const limit = Number($("[data-limit]", root).value);
@@ -631,6 +645,13 @@ export function sessionImport(root, ctx) {
     attempted = true;
     discover();
   } else {
+    // Disconnected at mount: the honest offline state with a retry, never
+    // an empty-sources result.
+    discovery = {
+      state: "offline",
+      sources: [],
+      error: "Runtime 未连接，无法读取本机 Harness；连接后可重试。",
+    };
     renderSources();
   }
   return {
