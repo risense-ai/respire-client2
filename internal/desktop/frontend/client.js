@@ -14,6 +14,7 @@ import { accounts } from "./pages/accounts.js";
 import { injection } from "./pages/injection.js";
 import { applyTypography } from "./ui/typography.js";
 import { grants } from "./pages/grants.js";
+import { stats } from "./pages/stats.js";
 import {
   applyTranslations,
   currentLanguage,
@@ -29,6 +30,7 @@ const definitions = {
   overview: ["概览", overview],
   memories: ["记忆", memoryWorkspace],
   diary: ["日记", diary],
+  stats: ["统计", stats],
   organize: ["整理", organize],
   models: ["模型与索引", models],
   accounts: ["账户与空间", accounts],
