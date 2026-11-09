@@ -4,7 +4,14 @@
 
 基于 Wails v3 与 Go 构建的 Windows、macOS、Linux 桌面客户端，用于替代 `risense-ai/respire-client` 中的桌面应用。CLI、TUI、托管 Dashboard 以及既有用户数据保持独立。
 
-从 [Releases](https://github.com/risense-ai/respire-client2/releases) 下载与操作系统和架构匹配的产物。请将解压后的应用保存在可写入的固定目录。Windows 为单个 EXE，需要 Microsoft Edge WebView2；macOS 为压缩的 `Respire.app`；Linux 为包含单个可执行文件的 tarball，需要 GTK 3、WebKitGTK 4.1 和 X11 库。最终用户无需安装 Node.js、Go、npm 或 Rust。应用在可用时单独下载 CLI 及其原生库；本体不包含 Core 与模型权重。若不存在客户端管理的 CLI，客户端可识别并启动 `<root>/bin/rsrs[.exe]` 处的外部 CLI，包括 npm 安装的版本。
+从 [Releases](https://github.com/risense-ai/respire-client2/releases) 下载与操作系统和架构匹配的产物。请将解压后的应用保存在可写入的固定目录。Windows 为单个 EXE，需要 Microsoft Edge WebView2。Apple Silicon 优先选择 `respire-darwin-arm64.dmg`：将 `Respire.app` 拖入 Applications，首次启动即在本地离线安装随包的 CLI 与托管 Runtime，并为新开的 zsh 终端配置 `rsrs`。Intel Mac 使用 zip，其中不含可运行的 Runtime 包。Linux 为包含单个可执行文件的 tarball，需要 GTK 3、WebKitGTK 4.1 和 X11 库。最终用户无需安装 Node.js、Go、npm 或 Rust。无随包组件时，应用在可用时单独下载 CLI 及其原生库；本体不包含 Core 与模型权重。若不存在客户端管理的 CLI，客户端可识别并启动 `<root>/bin/rsrs[.exe]` 处的外部 CLI，包括 npm 安装的版本。
+
+### macOS 说明（DMG 安装）
+
+- DMG 为 ad-hoc 签名且**未经公证**：首次打开可能触发 Gatekeeper 提示。在提示中选择「打开」（或右键 → 打开）即可；该操作不会关闭系统安全机制。除非你自己的策略允许，不要移除 quarantine 属性。
+- 首次启动将随包 CLI 复制到 `~/.rsrs/bin/rsrs`，将 Runtime 复制到 `~/.rsrs/client2/runtime/<版本>/`，全部经哈希校验；已装的更高版本会被保留，绝不降级。
+- 客户端会在 `~/.zprofile` 写入一个带明确标记的块，使新终端能找到 `rsrs`。若该文件不可写，客户端会展示需要手动添加的确切内容。
+- 删除应用不会删除 `~/.rsrs`（记忆、账户、CLI、Runtime），也不会移除 `~/.zprofile` 块。如需彻底清理：删除 `~/.rsrs`，并从 `~/.zprofile` 移除由 `# >>> respire-client2 >>>` / `# <<< respire-client2 <<<` 界定的块。
 
 架构、原生库前置条件，以及桌面构建与 CLI 可用性的差异见[平台支持](docs/platforms.md)。缺失的 CLI/Core 发布目标记录在 [respire-cli#163](https://github.com/risense-ai/respire-cli/issues/163)。
 
@@ -166,14 +173,14 @@ client.log                桌面运行错误
 
 ```text
 respire-windows-<arch>.exe    # Windows: amd64, arm64
-respire-darwin-<arch>.zip     # macOS: amd64, arm64；单个 .app 包
-respire-linux-<arch>.tar.gz   # Linux: 单个 respire 可执行文件
+respire-darwin-arm64.dmg      # macOS Apple Silicon 完整安装包（内置 CLI + Runtime）
+respire-darwin-<arch>.zip     # macOS: amd64, arm64；单个 .app 包；应用内更新资产
 SHA256SUMS
 LICENSE.txt
 THIRD_PARTY_NOTICES.txt
 ```
 
-`SHA256SUMS` 对每个平台产物使用标准 `hex-digest  filename` 行。更新器精确匹配正在运行的操作系统/架构，并拒绝缺失或无效的 SHA-256 校验和。下载暂存、解压与基于 helper 的替换/重启恢复由 Wails 完成；macOS 替换完整应用包。helper 从同一应用内重新执行：不单独分发更新器。自动检查在启动后及每六小时运行；下载先暂存，再由用户重启生效。空仓库/未发布仓库无法提供生产更新，并会在更新面板中报告。
+`SHA256SUMS` 对每个平台产物使用标准 `hex-digest  filename` 行。更新器精确匹配正在运行的操作系统/架构，并拒绝缺失或无效的 SHA-256 校验和；macOS 上更新器始终选择 zip，绝不选择仅用于首次安装的 DMG。下载暂存、解压与基于 helper 的替换/重启恢复由 Wails 完成；macOS 替换完整应用包。helper 从同一应用内重新执行：不单独分发更新器。自动检查在启动后及每六小时运行；下载先暂存，再由用户重启生效。空仓库/未发布仓库无法提供生产更新，并会在更新面板中报告。
 
 初始版本使用 HTTPS GitHub release 元数据与 SHA-256。未实现发布者密钥签名或 Authenticode 签名。同一发布源提供的哈希无法防御该源被攻破。在更改该信任假设之前先增加发布签名；不要静默绕过失败的校验。
 

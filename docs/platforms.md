@@ -7,7 +7,7 @@ The first release targets x64 and ARM64 on Windows, macOS and Linux. Artifact ar
 | OS | Architectures | Build method | Distribution |
 | --- | --- | --- | --- |
 | Windows | amd64, arm64 | Native Windows runners | One `.exe` per architecture |
-| macOS | amd64, arm64 | macOS runner with Xcode | `.zip` containing one `Respire.app` |
+| macOS | amd64, arm64 | macOS runner with Xcode | `.zip` containing one `Respire.app`; plus `respire-darwin-arm64.dmg`, the Apple Silicon full installer with a bundled CLI and Runtime |
 | Linux | amd64, arm64 | Native Ubuntu 22.04 runners | `.tar.gz` containing one `respire` |
 
 The workflow is the source of build status. A green build verifies compilation and packaging; it does not verify every desktop environment or CPU. Windows amd64 has local interactive verification. Non-Windows UI, tray, login integration and self-update require native acceptance before a production-support claim.
@@ -24,7 +24,8 @@ MIPS and LoongArch64 requests are Linux-only. Any later MIPS support must specif
 ## Runtime prerequisites
 
 - Windows: Windows 10+ with the corresponding WebView2 Runtime. An ARM64 build does not contain an x64 CLI fallback.
-- macOS: macOS 12+ for the pinned Go 1.26 toolchain. Native oldest-supported-OS acceptance is still needed. App bundles currently have ad-hoc signatures, without Developer ID signing or notarization. See [Go's platform requirements](https://go.dev/doc/go1.26#darwin).
+- macOS: macOS 12+ for the pinned Go 1.26 toolchain. Native oldest-supported-OS acceptance is still needed. App bundles and the DMG currently have ad-hoc signatures, without Developer ID signing or notarization; Gatekeeper therefore warns on first open of the DMG or app, and the documentation says so instead of bypassing the check. See [Go's platform requirements](https://go.dev/doc/go1.26#darwin).
+- macOS (Apple Silicon full installer): `respire-darwin-arm64.dmg` carries a build-time-verified CLI and managed Runtime for `aarch64-apple-darwin`; first launch installs them into `~/.rsrs` (offline, with hash verification) and adds an owned PATH block to `~/.zprofile` for new zsh terminals. Already-installed newer versions are never downgraded, and deleting the app removes nothing from `~/.rsrs`; the README documents manual cleanup. The Intel zip ships without a runnable Runtime bundle, and the stable DMG build fails on purpose until the runtime stable train publishes.
 - Linux: graphical session with GTK 3, WebKitGTK 4.1, X11 client libraries, `fontconfig` (`fc-list` for system font selection), and the libc/CPU baseline of Ubuntu 22.04. These are GNU libc builds, not Alpine/musl binaries. Do not copy libc or WebKit between incompatible distributions.
 - Linux Runtime stop/update requires kernel 5.3+ for a process-bound pidfd wait. Tray visibility depends on the desktop's StatusNotifierItem support; GNOME may need an AppIndicator extension.
 

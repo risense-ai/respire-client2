@@ -132,8 +132,13 @@ func verifyRuntime(dir, binaryHash string) error {
 	return nil
 }
 
-// stageRuntime publishes a complete immutable version before lifecycle changes begin.
-func (m *Manager) stageRuntime(ctx context.Context, release githubRelease, meta runtimeMetadata) error {
+// publishRuntime promotes a verified Runtime tree into the immutable version
+// directory. The fill callback materializes the candidate version inside a
+// staging directory on the same filesystem as the runtime parent so the final
+// rename is atomic; any interruption or failed verification leaves the
+// existing installation untouched. An existing directory for the same version
+// is only verified and reused, never merged.
+func (m *Manager) publishRuntime(meta RuntimeMetadata, fill func(stage string) error) error {
 	dest := m.runtimeDir(meta.RuntimeVersion)
 	if _, err := os.Stat(dest); err == nil {
 		return verifyRuntime(dest, meta.BinaryHash)
@@ -144,61 +149,85 @@ func (m *Manager) stageRuntime(ctx context.Context, release githubRelease, meta 
 	if err := os.MkdirAll(versions, 0700); err != nil {
 		return err
 	}
-	stage, err := os.MkdirTemp(versions, ".download-*")
+	stage, err := os.MkdirTemp(versions, ".stage-*")
 	if err != nil {
 		return err
 	}
 	defer os.RemoveAll(stage)
-	binURL, err := assetURL(release, runtimeRepo, meta.Binary)
-	if err != nil {
-		return err
-	}
-	archiveURL, err := assetURL(release, runtimeRepo, runtimeArchive(meta.Target))
-	if err != nil {
-		return err
-	}
-	if err = m.download(ctx, binURL, filepath.Join(stage, runtimeBinary()), meta.BinaryHash, 128<<20); err != nil {
-		return err
-	}
-	if err = os.Chmod(filepath.Join(stage, runtimeBinary()), 0700); err != nil {
-		return err
-	}
-	archive := filepath.Join(stage, "runtime.tar.gz")
-	if err = m.download(ctx, archiveURL, archive, meta.ArchiveHash, 128<<20); err != nil {
+	if err = fill(stage); err != nil {
 		return err
 	}
 	m.progress("校验并准备 Runtime", 0, 0)
-	if err = extractRuntime(archive, stage); err != nil {
-		return err
-	}
 	if err = verifyRuntime(stage, meta.BinaryHash); err != nil {
 		return err
 	}
-	if err = os.Remove(archive); err != nil {
-		return err
-	}
 	return os.Rename(stage, dest)
+}
+
+// stageDownloadRuntime materializes the online release into the staging
+// directory: the raw binary plus the verified archive expansion.
+func (m *Manager) stageDownloadRuntime(ctx context.Context, release ReleaseInfo, meta RuntimeMetadata) func(string) error {
+	return func(stage string) error {
+		binURL, err := ReleaseAssetURL(release, runtimeRepo, meta.Binary)
+		if err != nil {
+			return err
+		}
+		archiveURL, err := ReleaseAssetURL(release, runtimeRepo, runtimeArchive(meta.Target))
+		if err != nil {
+			return err
+		}
+		if err = m.download(ctx, binURL, filepath.Join(stage, runtimeBinary()), meta.BinaryHash, 128<<20); err != nil {
+			return err
+		}
+		if err = os.Chmod(filepath.Join(stage, runtimeBinary()), 0700); err != nil {
+			return err
+		}
+		archive := filepath.Join(stage, "runtime.tar.gz")
+		if err = m.download(ctx, archiveURL, archive, meta.ArchiveHash, 128<<20); err != nil {
+			return err
+		}
+		if err = extractRuntime(archive, stage); err != nil {
+			return err
+		}
+		return os.Remove(archive)
+	}
 }
 
 func (m *Manager) InstallRuntime(automatic bool, restart bool) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
 	defer cancel()
 	m.progress("检查 Runtime 发布", 0, 0)
-	release, meta, err := m.LatestRuntime(ctx)
-	if err != nil {
-		return err
-	}
 	previous, prevErr := m.Installed()
 	if prevErr != nil && !errors.Is(prevErr, os.ErrNotExist) {
 		return prevErr
 	}
+	var release ReleaseInfo
+	var meta RuntimeMetadata
+	var payload *bootstrapPayload
+	if embedded, payloadErr := readBootstrapPayload(); errors.Is(prevErr, os.ErrNotExist) && payloadErr == nil && embedded.Manifest.Channel == m.Preferences().RuntimeChannel {
+		// Only bootstrap an absent installation from a matching channel.
+		// Installed clients use release discovery so the bundle cannot pin updates.
+		payload = &embedded
+		meta = embedded.runtimeMetadata()
+	} else {
+		// No valid payload (absent, foreign platform, or failed verification):
+		// keep the documented online path so non-DMG builds behave unchanged.
+		var err error
+		release, meta, err = m.LatestRuntime(ctx)
+		if err != nil {
+			return err
+		}
+	}
 	if prevErr == nil && semver.Compare("v"+previous.Version, "v"+meta.RuntimeVersion) >= 0 {
-		// The version guard only short-circuits when the installed layout
-		// verifies against the remote metadata. Legacy combined installs
-		// (runtime/<ver>/rsrs) fail that check under the split runtime
-		// binary name; fall through and reinstall from the new source.
-		if verifyErr := verifyRuntime(m.runtimeDir(previous.Version), meta.BinaryHash); verifyErr == nil {
-			return m.Start()
+		// Verify the selected version against its own receipt. A newer
+		// version cannot share the incoming release's binary hash.
+		if verifyErr := verifyRuntime(m.runtimeDir(previous.Version), previous.SHA256); verifyErr == nil {
+			if startErr := m.Start(); startErr != nil {
+				return startErr
+			}
+			return m.finishBootstrapPath(payload)
+		} else if semver.Compare("v"+previous.Version, "v"+meta.RuntimeVersion) > 0 {
+			return fmt.Errorf("installed newer Runtime verification failed: %w", verifyErr)
 		}
 	}
 	h, _, err := m.Health(ctx)
@@ -211,10 +240,15 @@ func (m *Manager) InstallRuntime(automatic bool, restart bool) error {
 	if err != nil && !IsUnavailable(err) {
 		return err
 	}
-	if err = m.stageRuntime(ctx, release, meta); err != nil {
+	if payload != nil {
+		err = m.publishRuntime(meta, stageBootstrapRuntime(payload.Dir))
+	} else {
+		err = m.publishRuntime(meta, m.stageDownloadRuntime(ctx, release, meta))
+	}
+	if err != nil {
 		return err
 	}
-	// Check activity after downloading; work may have arrived during the download.
+	// Check activity after staging; work may have arrived during the copy.
 	h, body, err := m.Health(ctx)
 	if err != nil && !IsUnavailable(err) {
 		return err
@@ -245,11 +279,19 @@ func (m *Manager) InstallRuntime(automatic bool, restart bool) error {
 			return errors.New("Runtime 正忙，本次自动更新已延后；已下载版本会保留")
 		}
 	}
+	if payload != nil {
+		if err := m.installBootstrapCLI(ctx, payload); err != nil {
+			return err
+		}
+	}
 	// Without restart the new files publish under their own version dir and
 	// the running instance stays on the old one until the next start.
 	if !restart {
 		next := InstalledRuntime{Version: meta.RuntimeVersion, SHA256: meta.BinaryHash}
-		return writeJSON(filepath.Join(m.Root, "runtime.json"), next)
+		if err = writeJSON(filepath.Join(m.Root, "runtime.json"), next); err != nil {
+			return err
+		}
+		return m.finishBootstrapPath(payload)
 	}
 	m.progress("等待 Runtime 停止", 0, 0)
 	if err = m.Stop(true); err != nil {
@@ -267,10 +309,21 @@ func (m *Manager) InstallRuntime(automatic bool, restart bool) error {
 		err = m.requireActive(next)
 	}
 	if err == nil {
-		return nil
+		return m.finishBootstrapPath(payload)
 	}
 	if prevErr != nil {
 		return err
 	}
 	return errors.Join(err, m.restoreRuntime(previous, next))
+}
+
+// finishBootstrapPath configures the shell PATH once every component is
+// verified and published; a failure surfaces as manual guidance without ever
+// rolling back the verified components.
+func (m *Manager) finishBootstrapPath(payload *bootstrapPayload) error {
+	if payload == nil {
+		return nil
+	}
+	m.progress("配置终端 PATH", 0, 0)
+	return configureUserShellPath()
 }
