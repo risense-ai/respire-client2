@@ -10,6 +10,11 @@ import {
 } from "../ui/core.js";
 import { setLanguage, t } from "../ui/i18n.js";
 import {
+  agentResultMessage,
+  agentStatus,
+  targetsForScope,
+} from "../ui/agent-install.js";
+import {
   issuedRecoveryMaterial,
   recoveryMaterialJson,
   runAuthentication,
@@ -58,59 +63,21 @@ const STEP_TITLES = {
 
 const DEFAULT_SERVER = "https://api.rsrs.rs";
 
+// Two mutually exclusive install modes; one apply only ever runs the chosen
+// mode, and existing prompts/plugins on the machine are always kept.
 const AGENT_SCOPES = [
   {
-    id: "all",
-    title: "提示词 + 插件",
-    detail: "写入 Respire 提示词，并为受支持的宿主安装 / 更新 Respire 插件。",
+    id: "prompt",
+    title: "提示词注入",
+    detail: "把 Respire 提示词写入可写提示词的 Agent 工具；内容统一管理，之后可随时更新或移除。",
     badge: "推荐",
   },
   {
-    id: "prompt",
-    title: "仅提示词注入",
-    detail: "只把 Respire 提示词写入所选 Agent 工具，不安装插件。",
-  },
-  {
     id: "plugin",
-    title: "仅安装插件",
-    detail: "只为受支持的宿主准备并安装 Respire 插件，不改写提示词。",
+    title: "插件安装",
+    detail: "为提供 Respire 插件的宿主安装插件，获得更完整的宿主集成；仅适用于有对应插件的 Agent 工具。",
   },
 ];
-
-const AGENT_STATE_NAMES = {
-  fresh: "已注入且最新",
-  stale: "已注入但过期",
-  none: "未注入",
-  absent: "应用未检测到",
-};
-
-function agentScopeEligible(scope, target) {
-  if (scope === "prompt") return target.mode !== "plugin";
-  if (scope === "plugin") return Boolean(target.plugin);
-  return true;
-}
-
-// agentResultMessage mirrors the injection page's receipt rendering so the
-// wizard reports the same per-target outcome wording.
-function agentResultMessage(result) {
-  if (result.message) return result.message;
-  const parts = [];
-  if (result.changed !== undefined)
-    parts.push(
-      result.changed
-        ? result.enabled
-          ? "提示词已写入"
-          : "注入内容已移除"
-        : "提示词已是最新，未改动",
-    );
-  if (result.plugin)
-    parts.push(
-      result.plugin.ok
-        ? `插件：${result.plugin.message}`
-        : `插件失败：${result.plugin.message}`,
-    );
-  return parts.join(" · ") || "已完成";
-}
 
 const EXECUTE_STAGES = [
   ["download", "下载"],
@@ -978,16 +945,14 @@ export function createWizard(ctx) {
 
   // ------------------------------------------------------- agent tools step
 
-  function agentStatus(t) {
-    if (t.mode === "plugin")
-      return t.plugin?.source ? "插件源目录已就绪" : "插件未安装";
-    return AGENT_STATE_NAMES[t.state] || t.state || "未知";
-  }
-
   function defaultAgentSelection() {
     const selected = new Set();
-    for (const target of state.agentTargets || [])
-      if (agentScopeEligible(state.agentScope, target)) selected.add(target.id);
+    // First run offers only targets this machine actually detected, for the
+    // currently chosen mode.
+    for (const target of targetsForScope(state.agentTargets, state.agentScope, {
+      detectedOnly: true,
+    }))
+      selected.add(target.id);
     return selected;
   }
 
@@ -1025,9 +990,9 @@ export function createWizard(ctx) {
       if (root.isConnected && state.step === "agents") render();
       return;
     }
-    const eligible = (state.agentTargets || []).filter((target) =>
-      agentScopeEligible(state.agentScope, target),
-    );
+    const eligible = targetsForScope(state.agentTargets, state.agentScope, {
+      detectedOnly: true,
+    });
     if (!state.agentSelected) state.agentSelected = defaultAgentSelection();
     const results = state.agentResults || [];
     body.innerHTML = frame(
@@ -1053,7 +1018,9 @@ export function createWizard(ctx) {
                     state.agentSelected.has(target.id) ? " checked" : ""
                   }${state.agentBusy ? " disabled" : ""}><span class="wizard-agent-copy"><strong>${h(
                     target.name,
-                  )}</strong><small>${h(agentStatus(target))}</small></span></label>`,
+                  )}</strong><small>${h(
+                    agentStatus(target, state.agentScope),
+                  )}</small></span></label>`,
               )
               .join("")
           : '<p class="hint">没有支持该方式的已安装 Agent 工具；可更换配置方式或稍后在「配置Agent」页处理。</p>'
@@ -1236,7 +1203,7 @@ export function createWizard(ctx) {
       variantTouched: false,
       inventories: {},
       stages: {},
-      agentScope: "all",
+      agentScope: "prompt",
       agentTargets: null,
       agentSelected: null,
       agentResults: null,
