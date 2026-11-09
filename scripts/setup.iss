@@ -83,7 +83,7 @@ const
   WebView2MinVersion = '86.0.622.0';
   // Official Evergreen Bootstrapper link (MicrosoftEdgeWebview2Setup.exe).
   WebView2BootstrapperURL = 'https://go.microsoft.com/fwlink/?linkid=2124703';
-  WebView2ClientsKey = 'SOFTWARE\Microsoft\EdgeUpdate\Clients\{F3017226-FDF2-4B09-9EB3-A7EE8C27C5C8}';
+  WebView2ClientsKey = 'SOFTWARE\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}';
 
 var
   WebView2Failed: Boolean;
