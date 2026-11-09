@@ -48,6 +48,8 @@ jobs:
           go vet -tags production,gtk3 ./...
           while IFS= read -r -d '' source; do node --check "$source"; done < <(find internal/desktop/frontend -name '*.js' -type f -print0)
           go test -tags production,gtk3 ./...
+      - name: Bootstrap fetch fixture self-test
+        run: bash scripts/test-fetch-macos-components.sh
   native:
     name: ${{ matrix.os }}-${{ matrix.arch }}
     needs: [plan]
@@ -111,10 +113,18 @@ jobs:
         run: |
           version='0.2.56-dev.${{ github.run_number }}'
           if [[ '${{ github.ref_type }}' == tag ]]; then version='${{ github.ref_name }}'; version="${version#v}"; fi
-          bash scripts/build.sh "$version" '${{ matrix.arch }}'
+          # Only the darwin/arm64 job fetches the bootstrap payload; stable
+          # release tags lock to the stable channel, everything else verifies
+          # against dev. An empty channel keeps plain zip-only behavior.
+          channel=''
+          if [[ '${{ matrix.os }}-${{ matrix.arch }}' == darwin-arm64 ]]; then
+            if [[ '${{ github.ref_type }}' == tag && '${{ github.ref_name }}' != *-* ]]; then channel=stable; else channel=dev; fi
+          fi
+          RESPIRE_BOOTSTRAP_CHANNEL=$channel bash scripts/build.sh "$version" '${{ matrix.arch }}'
           ./dist/respire --version
           ./dist/respire --headless fonts > "$RUNNER_TEMP/respire-fonts.json"
           node -e 'const fs=require("fs");const r=JSON.parse(fs.readFileSync(process.argv[1],"utf8"));if(!r.ok||!Array.isArray(r.result)||!r.result.length)throw Error("No system fonts returned")' "$RUNNER_TEMP/respire-fonts.json"
+          if [[ -n "$channel" ]]; then bash scripts/build-dmg.sh; fi
       - uses: actions/upload-artifact@v7
         with:
           name: respire-${{ matrix.os }}-${{ matrix.arch }}
@@ -150,7 +160,8 @@ jobs:
           cp artifacts/respire-windows-amd64/THIRD_PARTY_NOTICES.txt dist/
           cd dist
           sha256sum --check SHA256SUMS
-          test "$(wc -l < SHA256SUMS)" -eq 8
+          # Six application update assets, two Windows installers and one DMG.
+          test "$(wc -l < SHA256SUMS)" -eq 9
       - name: Generate release notes
         shell: bash
         env:
@@ -158,7 +169,7 @@ jobs:
         run: bash scripts/release-notes.sh "$GITHUB_REF_NAME" .release-notes.md
       - name: Generate update manifest
         shell: bash
-        run: python3 scripts/update-manifest.py "$GITHUB_REF_NAME" dist .release-notes.md dist/client-updates.json
+        run: python3 scripts/update-manifest.py "$GITHUB_REF_NAME" dist .release-notes.md dist/client-updates.json 6
       - name: Publish tagged release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

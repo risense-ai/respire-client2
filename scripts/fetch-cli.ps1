@@ -114,6 +114,8 @@ try {
         $meta = Get-Content $metaPath -Raw | ConvertFrom-Json
         if ($meta.target -ne $target) { throw "metadata target mismatch: $($meta.target) != $target" }
         if (-not $meta.version -or -not $meta.binary_file) { throw 'metadata missing version/binary_file' }
+        if ($meta.version -ne ($release.tag_name -replace '^v', '')) { throw 'CLI metadata version does not match release tag' }
+        if ($meta.binary_sha256 -notmatch '^[0-9a-fA-F]{64}$') { throw 'CLI metadata hash invalid' }
         if ($meta.binary_file -ne "rsrs-$target.exe") { throw "metadata binary_file mismatch: $($meta.binary_file)" }
         $expectedHash = $meta.binary_sha256.ToLowerInvariant()
 
@@ -122,6 +124,7 @@ try {
         if ((Test-Path $cached) -and ((Get-FileHash -LiteralPath $cached -Algorithm SHA256).Hash.ToLowerInvariant() -eq $expectedHash)) {
             Write-Output "reusing cached rsrs $($meta.version) ($target), sha256 verified"
             [IO.File]::WriteAllText((Join-Path $outDir 'version.txt'), "$($meta.version)", (New-Object Text.UTF8Encoding($false)))
+            [IO.File]::WriteAllText((Join-Path $outDir 'channel.txt'), "$Channel", (New-Object Text.UTF8Encoding($false)))
             return
         }
 

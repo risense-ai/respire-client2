@@ -10,6 +10,21 @@ param(
 # to have produced dist/cli/version.txt (the compat assertion reads it).
 $ErrorActionPreference = 'Stop'
 $repoRoot = Split-Path -Parent $PSScriptRoot
+
+function Assert-RuntimeTree([string]$Tree, [string]$BinaryHash, [string]$TargetTriple) {
+    $treeRoot = [IO.Path]::GetFullPath($Tree).TrimEnd('\') + '\'
+    if ((Get-Item -LiteralPath $Tree).Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'runtime tree is a link' }
+    if (Get-ChildItem -LiteralPath $Tree -Recurse -Force | Where-Object { $_.Attributes -band [IO.FileAttributes]::ReparsePoint }) { throw 'runtime tree contains links' }
+    $manifest = Get-Content -LiteralPath (Join-Path $Tree 'core-runtime.json') -Raw | ConvertFrom-Json
+    if ($manifest.schema_version -ne 1 -or $manifest.target -ne $TargetTriple -or -not $manifest.files) { throw 'invalid core-runtime manifest' }
+    foreach ($entry in $manifest.files) {
+        if ($entry.path -match '(^/|\\|:|(^|/)\.\.(/|$))' -or $entry.sha256 -notmatch '^[0-9a-fA-F]{64}$') { throw 'unsafe core-runtime manifest entry' }
+        $file = [IO.Path]::GetFullPath((Join-Path $Tree $entry.path))
+        if (-not $file.StartsWith($treeRoot, [StringComparison]::OrdinalIgnoreCase)) { throw 'core-runtime path escapes tree' }
+        if ((Get-FileHash -LiteralPath $file -Algorithm SHA256).Hash.ToLowerInvariant() -ne $entry.sha256.ToLowerInvariant()) { throw 'core-runtime file hash mismatch' }
+    }
+    if ((Get-FileHash -LiteralPath (Join-Path $Tree 'rsrs-runtime.exe') -Algorithm SHA256).Hash.ToLowerInvariant() -ne $BinaryHash.ToLowerInvariant()) { throw 'runtime binary hash mismatch' }
+}
 $target = @{ 'amd64' = 'x86_64-pc-windows-msvc'; 'arm64' = 'aarch64-pc-windows-msvc' }[$Arch]
 $headers = @{
     'User-Agent' = 'respire-client2-installer-build'
@@ -125,14 +140,18 @@ try {
         # Accept schema v1 (triple/sha256) and v2 (target_triple/archive_sha256)
         # keys; the runtime repo currently publishes v2.
         if ($meta.schema_version -notin @(1, 2)) { throw "unsupported runtime metadata schema: $($meta.schema_version)" }
+        if ($meta.target_triple -and $meta.triple -and $meta.target_triple -ne $meta.triple) { throw 'conflicting runtime target aliases' }
+        if ($meta.archive_sha256 -and $meta.sha256 -and $meta.archive_sha256 -ne $meta.sha256) { throw 'conflicting runtime archive hash aliases' }
         $metaTarget = if ($meta.target_triple) { $meta.target_triple } else { $meta.triple }
         $metaArchiveHash = if ($meta.archive_sha256) { $meta.archive_sha256 } else { $meta.sha256 }
         if (-not $metaTarget) { throw 'metadata missing target' }
-        if ($meta.runtime_version -ne ($release.tag_name -replace '^v', '')) { throw "runtime_version mismatch: $($meta.runtime_version)" }
+        $parsedRuntimeVersion = $null
+        if (-not [System.Management.Automation.SemanticVersion]::TryParse([string]$meta.runtime_version, [ref]$parsedRuntimeVersion)) { throw 'invalid Runtime semantic version' }
+        if ($meta.runtime_version -cne ($release.tag_name -replace '^v', '')) { throw "runtime_version mismatch: $($meta.runtime_version)" }
         if ($meta.tag -ne $release.tag_name) { throw "tag mismatch: $($meta.tag) != $($release.tag_name)" }
         if ($metaTarget -ne $target) { throw "metadata target mismatch: $metaTarget != $target" }
         if ($meta.binary_file -ne "rsrs-runtime-$target.exe") { throw "metadata binary_file mismatch: $($meta.binary_file)" }
-        if (-not $meta.binary_sha256 -or -not $metaArchiveHash) { throw 'metadata missing hashes' }
+        if ($meta.binary_sha256 -notmatch '^[0-9a-fA-F]{64}$' -or $metaArchiveHash -notmatch '^[0-9a-fA-F]{64}$') { throw 'metadata hashes invalid' }
         $maxCli = if ($meta.compat.max_cli -eq '*') { $cliVersion } else { $meta.compat.max_cli }
         if (-not (Test-VersionInRange $cliVersion $meta.compat.min_cli $maxCli)) {
             throw "bundled CLI $cliVersion outside Runtime compat range [$($meta.compat.min_cli), $($meta.compat.max_cli)]"
@@ -145,6 +164,10 @@ try {
         # (runtimeBinary() in internal/host).
         $cached = (Test-Path (Join-Path $treeDir 'rsrs-runtime.exe')) -and (Test-Path (Join-Path $treeDir 'core-runtime.json')) -and (Test-Path (Join-Path $outDir 'sha256.txt'))
         if ($cached -and ((Get-Content (Join-Path $outDir 'sha256.txt') -Raw).Trim() -eq $meta.binary_sha256.ToLowerInvariant())) {
+            Assert-RuntimeTree $treeDir $meta.binary_sha256 $target
+            Copy-Item -LiteralPath $metaPath -Destination (Join-Path $outDir 'runtime-build.json')
+            [IO.File]::WriteAllText((Join-Path $outDir 'version.txt'), "$($meta.runtime_version)", (New-Object Text.UTF8Encoding($false)))
+            [IO.File]::WriteAllText((Join-Path $outDir 'channel.txt'), "$Channel", (New-Object Text.UTF8Encoding($false)))
             Write-Output "reusing cached rsrs-runtime $($meta.runtime_version) ($target), sha256 verified"
             return
         }
@@ -162,11 +185,20 @@ try {
         # remote hosts, so always pin the absolute System32 path.
         $tar = Join-Path $env:SystemRoot 'System32\tar.exe'
         if (-not (Test-Path $tar)) { throw "system tar not found: $tar" }
-        if (Test-Path $treeDir) { Remove-Item -LiteralPath $treeDir -Recurse -Force }
-        New-Item -ItemType Directory -Force -Path $treeDir | Out-Null
-        & $tar -xzf $archivePath -C $treeDir
+        $stageTree = Join-Path $tmp 'runtime-tree'
+        New-Item -ItemType Directory -Path $stageTree | Out-Null
+        & $tar -xzf $archivePath -C $stageTree
         if ($LASTEXITCODE -ne 0) { throw 'archive extraction failed' }
-        Copy-Item -LiteralPath $binPath -Destination (Join-Path $treeDir 'rsrs-runtime.exe') -Force
+        Copy-Item -LiteralPath $binPath -Destination (Join-Path $stageTree 'rsrs-runtime.exe')
+        Assert-RuntimeTree $stageTree $meta.binary_sha256 $target
+        New-Item -ItemType Directory -Force -Path $outDir | Out-Null
+        if (Test-Path -LiteralPath $treeDir) {
+            Assert-RuntimeTree $treeDir $meta.binary_sha256 $target
+        } else {
+            Move-Item -LiteralPath $stageTree -Destination $treeDir
+        }
+        Assert-RuntimeTree $treeDir $meta.binary_sha256 $target
+        Copy-Item -LiteralPath $metaPath -Destination (Join-Path $outDir 'runtime-build.json')
 
         [IO.File]::WriteAllText((Join-Path $outDir 'version.txt'), "$($meta.runtime_version)", (New-Object Text.UTF8Encoding($false)))
         [IO.File]::WriteAllText((Join-Path $outDir 'sha256.txt'), "$($meta.binary_sha256.ToLowerInvariant())", (New-Object Text.UTF8Encoding($false)))

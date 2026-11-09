@@ -1,9 +1,6 @@
 package host
 
-import (
-	"encoding/json"
-	"testing"
-)
+import "testing"
 
 // Fixture shape mirrors a published runtime-build-<triple>.json; the hashes
 // are the real values from respire-runtime v1.0.21-dev.17 (windows-msvc).
@@ -21,6 +18,7 @@ const runtimeMetadataV2 = `{
 }`
 
 const runtimeMetadataV1 = `{
+	"schema_version": 1,
 	"runtime_version": "1.0.20",
 	"tag": "v1.0.20",
 	"triple": "x86_64-pc-windows-msvc",
@@ -30,15 +28,14 @@ const runtimeMetadataV1 = `{
 	"compat": {"min_cli": "1.0.18", "max_cli": "1.9.9"}
 }`
 
-func parseAndValidateRuntimeMetadata(t *testing.T, payload string) runtimeMetadata {
+func parseAndValidateRuntimeMetadata(t *testing.T, payload string) RuntimeMetadata {
 	t.Helper()
-	var meta runtimeMetadata
-	if err := json.Unmarshal([]byte(payload), &meta); err != nil {
-		t.Fatalf("unmarshal: %v", err)
+	meta, err := NormalizeRuntimeMetadata([]byte(payload))
+	if err != nil {
+		t.Fatalf("normalize: %v", err)
 	}
-	normalizeRuntimeMetadata(&meta)
-	if meta.SchemaVersion != 0 && meta.SchemaVersion != 1 && meta.SchemaVersion != 2 {
-		t.Fatalf("schema %d must fail the contract check", meta.SchemaVersion)
+	if meta.Schema != 1 && meta.Schema != 2 {
+		t.Fatalf("schema %d must fail the contract check", meta.Schema)
 	}
 	if meta.Target != "x86_64-pc-windows-msvc" {
 		t.Fatalf("target = %q", meta.Target)

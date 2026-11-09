@@ -16,6 +16,52 @@ import (
 	"respire-client2/internal/host"
 )
 
+// actionInput is the strict shape of a POST /api/* action body: fields are
+// the union of what the action branches consume. Preference keys only pass
+// this shape check — patchPreferences applies them — so the struct must
+// carry one JSON field per preferencePatchKeys entry.
+type actionInput struct {
+	Enabled        bool   `json:"enabled"`
+	AutoRuntime    bool   `json:"autoRuntime"`
+	AutoUpdate     bool   `json:"autoUpdate"`
+	Command        string `json:"command"`
+	RuntimeChannel string `json:"runtimeChannel"`
+	ClientChannel  string `json:"clientChannel"`
+	Layout         string `json:"layout"`
+	Theme          string `json:"theme"`
+	Language       string `json:"language"`
+
+	ClientUpdateInterval  string `json:"clientUpdateInterval"`
+	RuntimeUpdateInterval string `json:"runtimeUpdateInterval"`
+	ClientAutoUpdate      bool   `json:"clientAutoUpdate"`
+	ClientAutoRestart     bool   `json:"clientAutoRestart"`
+	RuntimeAutoUpdate     bool   `json:"runtimeAutoUpdate"`
+	RuntimeAutoRestart    bool   `json:"runtimeAutoRestart"`
+	SidebarWidth          int    `json:"sidebarWidth"`
+	MemoryIndexWidth      int    `json:"memoryIndexWidth"`
+
+	OnboardingVersion    int    `json:"onboardingVersion"`
+	OnboardingCompleted  bool   `json:"onboardingCompleted"`
+	OnboardingStep       string `json:"onboardingStep"`
+	OnboardingSyncChoice string `json:"onboardingSyncChoice"`
+}
+
+// decodeActionBody strictly parses one action body: unknown fields are
+// rejected and trailing JSON content is an error.
+func decodeActionBody(body []byte) (actionInput, error) {
+	var input actionInput
+	decoder := json.NewDecoder(bytes.NewReader(body))
+	decoder.DisallowUnknownFields()
+	err := decoder.Decode(&input)
+	if err == nil {
+		var extra any
+		if trailing := decoder.Decode(&extra); trailing != io.EOF {
+			err = errors.New("desktop action must contain one JSON object")
+		}
+	}
+	return input, err
+}
+
 func (d *desktop) handler(static http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'")
@@ -76,41 +122,17 @@ func (d *desktop) handler(static http.Handler) http.Handler {
 				result.(map[string]any)["autostartError"] = autoErr.Error()
 			}
 		} else if r.Method == "POST" && r.Header.Get("X-Respire-Client") == "1" && strings.HasPrefix(r.Header.Get("Content-Type"), "application/json") {
-			var input struct {
-				Enabled        bool   `json:"enabled"`
-				AutoRuntime    bool   `json:"autoRuntime"`
-				AutoUpdate     bool   `json:"autoUpdate"`
-				Command        string `json:"command"`
-				RuntimeChannel string `json:"runtimeChannel"`
-				ClientChannel  string `json:"clientChannel"`
-				Layout         string `json:"layout"`
-				Theme          string `json:"theme"`
-				Language       string `json:"language"`
-
-				ClientUpdateInterval  string `json:"clientUpdateInterval"`
-				RuntimeUpdateInterval string `json:"runtimeUpdateInterval"`
-				ClientAutoUpdate      bool   `json:"clientAutoUpdate"`
-				ClientAutoRestart     bool   `json:"clientAutoRestart"`
-				RuntimeAutoUpdate     bool   `json:"runtimeAutoUpdate"`
-				RuntimeAutoRestart    bool   `json:"runtimeAutoRestart"`
-				SidebarWidth          int    `json:"sidebarWidth"`
-				MemoryIndexWidth      int    `json:"memoryIndexWidth"`
-			}
+			// Preference keys are only shape-checked here; patchPreferences
+			// applies them, so actionInput must carry one JSON field per
+			// preferencePatchKeys entry or valid patches are rejected.
+			var input actionInput
 			// Buffered so /api/preferences can re-read the same request as a
 			// field map and patch only the keys the sender included.
 			body, readErr := io.ReadAll(http.MaxBytesReader(w, r.Body, 4096))
 			if readErr != nil {
 				err = readErr
 			} else {
-				decoder := json.NewDecoder(bytes.NewReader(body))
-				decoder.DisallowUnknownFields()
-				err = decoder.Decode(&input)
-				if err == nil {
-					var extra any
-					if trailing := decoder.Decode(&extra); trailing != io.EOF {
-						err = errors.New("desktop action must contain one JSON object")
-					}
-				}
+				input, err = decodeActionBody(body)
 			}
 			if err == nil {
 				switch r.URL.Path {

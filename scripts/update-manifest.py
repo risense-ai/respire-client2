@@ -6,7 +6,10 @@ import sys
 from datetime import datetime, timezone
 
 
-tag, dist, notes, output = sys.argv[1:]
+tag, dist, notes, output = sys.argv[1:5]
+# Only the six application update assets enter this manifest. Standalone
+# installers remain release downloads and are included in SHA256SUMS.
+expected = int(sys.argv[5]) if len(sys.argv) > 5 else 6
 if not tag.startswith("v"):
     raise SystemExit("tag must start with v")
 version = tag[1:]
@@ -18,10 +21,7 @@ for line in (folder / "SHA256SUMS").read_text().splitlines():
 
 artifacts = []
 for name, digest in sorted(checksums.items()):
-    if not name.startswith("respire-"):
-        continue
-    if name.startswith("respire-windows-") and name.endswith("-setup.exe"):
-        # Installers ship as release assets but are never self-update targets.
+    if not name.startswith("respire-") or name.endswith(".dmg") or name.endswith("-setup.exe"):
         continue
     artifacts.append({
         "filename": name,
@@ -29,8 +29,8 @@ for name, digest in sorted(checksums.items()):
         "size": (folder / name).stat().st_size,
         "sha256": base64.b64encode(bytes.fromhex(digest)).decode(),
     })
-if len(artifacts) != 6:
-    raise SystemExit(f"expected six platform artifacts, found {len(artifacts)}")
+if len(artifacts) != expected:
+    raise SystemExit(f"expected {expected} platform artifacts, found {len(artifacts)}")
 
 release = {
     "version": version,

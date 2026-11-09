@@ -30,10 +30,30 @@ $cliVersion = (Get-Content (Join-Path $repoRoot 'dist\cli\version.txt') -Raw).Tr
 if ($LASTEXITCODE -ne 0) { throw 'fetch-runtime.ps1 failed' }
 $rtVersion = (Get-Content (Join-Path $repoRoot 'dist\runtime\version.txt') -Raw).Trim()
 $rtSha256 = (Get-Content (Join-Path $repoRoot 'dist\runtime\sha256.txt') -Raw).Trim()
+$rtMetadata = Get-Content (Join-Path $repoRoot 'dist\runtime\runtime-build.json') -Raw | ConvertFrom-Json
+$cliPath = Join-Path $repoRoot 'dist\cli\rsrs.exe'
+$cliHash = (Get-FileHash -LiteralPath $cliPath -Algorithm SHA256).Hash.ToLowerInvariant()
+$bootstrap = Join-Path $repoRoot 'dist\bootstrap'
+# Each architecture builds in its own CI job. Refuse a stale payload rather
+# than merging different component sets into one installation package.
+if (Test-Path -LiteralPath $bootstrap) { throw 'dist/bootstrap already exists; use a fresh build directory' }
+New-Item -ItemType Directory -Path $bootstrap | Out-Null
+Copy-Item -LiteralPath (Join-Path $repoRoot "dist\runtime\$rtVersion") -Destination (Join-Path $bootstrap 'runtime') -Recurse
+Copy-Item -LiteralPath $cliPath -Destination (Join-Path $bootstrap 'rsrs.exe')
+$target = @{ 'amd64' = 'x86_64-pc-windows-msvc'; 'arm64' = 'aarch64-pc-windows-msvc' }[$Arch]
+$manifest = [ordered]@{
+    schema_version = 1; target = $target; channel = $Channel
+    cli = [ordered]@{ version = $cliVersion; sha256 = $cliHash }
+    runtime = [ordered]@{
+        version = $rtVersion; sha256 = $rtSha256
+        min_cli = $rtMetadata.compat.min_cli; max_cli = $rtMetadata.compat.max_cli
+    }
+}
+[IO.File]::WriteAllText((Join-Path $bootstrap 'bootstrap.json'), (($manifest | ConvertTo-Json -Depth 4) + "`n"), (New-Object Text.UTF8Encoding($false)))
 
 Push-Location $repoRoot
 try {
-    & $iscc "/DAppVersion=$Version" "/DArch=$Arch" "/DCliVersion=$cliVersion" "/DRtVersion=$rtVersion" "/DRtSha256=$rtSha256" "/DOutputBaseName=respire-windows-$Arch-setup" (Join-Path $repoRoot 'scripts\setup.iss')
+    & $iscc "/DAppVersion=$Version" "/DArch=$Arch" "/DOutputBaseName=respire-windows-$Arch-setup" (Join-Path $repoRoot 'scripts\setup.iss')
     if ($LASTEXITCODE -ne 0) { throw 'ISCC compilation failed' }
 } finally {
     Pop-Location
