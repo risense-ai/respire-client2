@@ -164,4 +164,42 @@ PY
 run_fetch "$tmp/stable" "$tmp/out-stable" "$tmp/cache-stable" stable "no published Runtime release"
 echo "ok: stable without full release rejected"
 
+
+# Frontend-only CLI schema 2 paired with an independently released Runtime.
+fixture "$tmp/frontend" "2.0.0-dev.1" "*" yes
+python3 - "$tmp/frontend" "$target" <<'PYFIXTURE'
+import json, os, sys
+d, target = sys.argv[1:]
+p = os.path.join(d, f"cli-build-{target}.json")
+m = json.load(open(p))
+m.pop("runtime_file")
+m.pop("runtime_sha256")
+m.update(schema_version=2, artifact_layout="cli-frontend-v2",
+         binary_size=os.path.getsize(os.path.join(d, m["binary_file"])),
+         producer={"run_id": "42809360720", "run_attempt": 1})
+json.dump(m, open(p, "w"))
+# Versions remain independent: no CLI pin to the older embedded SDK runtime.
+p = os.path.join(d, f"runtime-build-{target}.json")
+m = json.load(open(p))
+m.update(runtime_version="2.0.0-dev.6", tag="v2.0.0-dev.6",
+         compat={"min_cli": "1.0.21-dev.5", "max_cli": "*"},
+         protocol_range={"minimum": 1, "maximum": 1},
+         capabilities={"business_executor": "1", "mcp_server": "1", "offline_keygen_handoff": "1"})
+json.dump(m, open(p, "w"))
+p = os.path.join(d, "runtime-releases.json")
+m = json.load(open(p))
+m[0]["tag_name"] = "v2.0.0-dev.6"
+json.dump(m, open(p, "w"))
+PYFIXTURE
+run_fetch "$tmp/frontend" "$tmp/out-frontend" "$tmp/cache-frontend" dev
+python3 - "$tmp/out-frontend/bootstrap.json" <<'PYFIXTURE'
+import json, sys
+m = json.load(open(sys.argv[1]))
+assert m["cli"]["version"] == "2.0.0-dev.1", m
+assert m["runtime"]["version"] == "2.0.0-dev.6", m
+PYFIXTURE
+printf 'tampered frontend\n' > "$tmp/frontend/rsrs-$target"
+run_fetch "$tmp/frontend" "$tmp/out-frontend-bad" "$tmp/cache-frontend-bad" dev "CLI binary SHA256 mismatch"
+echo "ok: schema 2 frontend plus independent Runtime and tamper rejection"
+
 echo "all fetch-macos-components fixture cases passed"
