@@ -166,6 +166,12 @@ async function refreshNavCounts() {
   }
   navCounts.running = false;
 }
+// Keep unchanged refresh labels' text nodes intact, including for accessibility.
+// Compare the live DOM rather than cached values so external changes are repaired.
+function setRefreshText(element, value) {
+  const text = value == null ? "" : `${value}`;
+  if (element.textContent !== text) element.textContent = text;
+}
 async function refresh() {
   if (refreshing) return;
   refreshing = true;
@@ -173,11 +179,11 @@ async function refresh() {
     ctx.desktop = await api("state");
     appearance();
     $("#connection-dot").classList.toggle("online", ctx.desktop.connected);
-    $("#connection-label").textContent = ctx.desktop.connected
+    setRefreshText($("#connection-label"), ctx.desktop.connected
       ? t("Runtime 已连接")
-      : t("Runtime 未连接");
-    $("#client-version").textContent = t("客户端") + " " + ctx.desktop.version;
-    $("#client-platform").textContent = ctx.desktop.platform;
+      : t("Runtime 未连接"));
+    setRefreshText($("#client-version"), t("客户端") + " " + ctx.desktop.version);
+    setRefreshText($("#client-platform"), ctx.desktop.platform);
     if (ctx.desktop.connected) {
       try {
         ctx.status = await api("runtime-status");
@@ -191,18 +197,18 @@ async function refresh() {
     ctx.statusError = ctx.desktop.connectionError || t("Runtime 未连接");
     }
     const s = ctx.status?.summary || {};
-    $("#nav-memory-count").textContent = number(s.local_alive);
-    $("#status-summary").textContent = ctx.desktop.connected
+    setRefreshText($("#nav-memory-count"), number(s.local_alive));
+    setRefreshText($("#status-summary"), ctx.desktop.connected
       ? currentLanguage() === "zh"
         ? `${number(s.local_alive)} 条记忆 · ${s.workspace || "normal"} · Runtime ${ctx.desktop.health?.bin || "—"}`
         : `${number(s.local_alive)} memories · ${s.workspace || "normal"} · Runtime ${ctx.desktop.health?.bin || "—"}`
-      : t("Runtime 未连接");
+      : t("Runtime 未连接"));
     const sync = s.sync_live || {};
-    $("#sync-summary").textContent = ctx.statusError
+    setRefreshText($("#sync-summary"), ctx.statusError
       ? "状态读取失败"
       : currentLanguage() === "zh"
         ? `同步 ${sync.phase || "—"} · 待处理 ${number(sync.pending)} · 冲突 ${number(sync.conflicts)}`
-        : `Sync ${sync.phase || "—"} · pending ${number(sync.pending)} · conflicts ${number(sync.conflicts)}`;
+        : `Sync ${sync.phase || "—"} · pending ${number(sync.pending)} · conflicts ${number(sync.conflicts)}`);
     view?.update?.();
   } catch (error) {
     notify(error.message, true);
