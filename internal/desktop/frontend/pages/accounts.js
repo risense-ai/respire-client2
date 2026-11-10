@@ -19,6 +19,9 @@ import { heading } from "./overview.js";
 import { invitationDialog, membersDialog } from "./space-members.js";
 import { authenticationPanel } from "./authentication.js";
 
+// Routes replace the page, but an account action still belongs to the same app.
+const accountActionStates = new WeakMap();
+
 export function accounts(root, ctx) {
   let loading = false,
     attempted = false;
@@ -38,7 +41,11 @@ export function accounts(root, ctx) {
       '<div class="panel-body stack"><p class="hint">先检查候选旧库，再明确选择来源 ID 和新账户名称。</p><div class="actions"><button data-account="migration">检查旧账户</button><button data-account="migrate">迁移所选旧账户</button></div><div data-migration></div></div>',
     ) +
     '<div data-result class="section-gap"></div>';
-  const pendingSessionActions = new WeakSet();
+  let actionState = accountActionStates.get(ctx);
+  if (!actionState) {
+    actionState = { pending: new Set(), update: null };
+    accountActionStates.set(ctx, actionState);
+  }
   const sessionRoot = $("[data-session]", root);
   sessionRoot.innerHTML = panel(
     "当前身份",
@@ -76,21 +83,29 @@ export function accounts(root, ctx) {
       keygen: Boolean(session.has_local_keys),
       keys: !session.has_local_keys,
       logout: !session.has_token,
+      sync: false,
+      conflicts: false,
+      migration: false,
+      migrate: false,
     };
     for (const [kind, unavailable] of Object.entries(disabled)) {
-      const button = $(`[data-account="${kind}"]`, sessionRoot);
-      button.disabled = unavailable || pendingSessionActions.has(button);
+      const button = $(`[data-account="${kind}"]`, root);
+      button.disabled = unavailable || actionState.pending.has(kind);
     }
   }
   async function accountAction(button, fn) {
-    if (button.disabled) return;
-    pendingSessionActions.add(button);
+    const kind = button.dataset.account;
+    if (button.disabled || actionState.pending.has(kind)) return;
+    actionState.pending.add(kind);
     try {
-      await action(button, fn);
+      await action(button, async () => {
+        actionState.update?.();
+        return fn();
+      });
     } finally {
-      pendingSessionActions.delete(button);
-      // action() clears disabled; restore the current session constraints.
-      update();
+      actionState.pending.delete(kind);
+      // The initiating page may be gone; restore the current page's controls.
+      actionState.update?.();
     }
   }
   async function load() {
@@ -291,6 +306,7 @@ export function accounts(root, ctx) {
     });
   });
   authenticationPanel(root, ctx, load);
+  actionState.update = update;
   update();
   if (ctx.desktop?.connected) load();
   return {
@@ -299,5 +315,8 @@ export function accounts(root, ctx) {
       if (!attempted && ctx.desktop?.connected) load();
     },
     refresh: load,
+    dispose() {
+      if (actionState.update === update) actionState.update = null;
+    },
   };
 }
