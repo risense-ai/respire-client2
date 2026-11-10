@@ -50,6 +50,8 @@ jobs:
           go test -tags production,gtk3 ./...
           node --check scripts/test-account-session-state.cjs
           node scripts/test-account-session-state.cjs
+          node --check scripts/test-client-refresh.cjs
+          node scripts/test-client-refresh.cjs
       - name: Bootstrap fetch fixture self-test
         run: bash scripts/test-fetch-macos-components.sh
   native:
