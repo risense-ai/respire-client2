@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"golang.org/x/mod/semver"
@@ -56,18 +57,22 @@ type RuntimeMetadata struct {
 	Compat         Compat `json:"compat"`
 }
 
-// CLIMetadata is the CLI build metadata published as cli-build-<triple>.json.
+// CLIMetadata is an internal projection of published cli-build-<triple>.json.
+// It is not a round-trip wire format: schema 2 producer fields are validated
+// during normalization but are not retained in this consumer representation.
 // NOTE: it keeps its risense-ai/respire-cli source and is consumed by
 // LatestCLIBuild; managed Runtime assets no longer come from it.
 type CLIMetadata struct {
-	Schema      int    `json:"schema_version"`
-	Version     string `json:"version"`
-	Target      string `json:"target"`
-	Commit      string `json:"git_sha"`
-	Binary      string `json:"binary_file"`
-	Runtime     string `json:"runtime_file"`
-	BinaryHash  string `json:"binary_sha256"`
-	RuntimeHash string `json:"runtime_sha256"`
+	Schema         int    `json:"schema_version"`
+	ArtifactLayout string `json:"artifact_layout,omitempty"`
+	BinarySize     int64  `json:"binary_size,omitempty"`
+	Version        string `json:"version"`
+	Target         string `json:"target"`
+	Commit         string `json:"git_sha"`
+	Binary         string `json:"binary_file"`
+	Runtime        string `json:"runtime_file"`
+	BinaryHash     string `json:"binary_sha256"`
+	RuntimeHash    string `json:"runtime_sha256"`
 }
 
 // Release repositories: Runtime assets moved to their own repository while
@@ -415,9 +420,32 @@ func NormalizeCLIMetadata(b []byte, releaseTag, target string) (CLIMetadata, err
 	if err := json.Unmarshal(b, &meta); err != nil {
 		return meta, err
 	}
-	if meta.Schema != 1 || meta.Target != target || meta.Version != strings.TrimPrefix(releaseTag, "v") ||
-		meta.Binary != "rsrs-"+target+binaryExtension() || meta.Runtime != "rsrs-"+target+"-runtime.tar.gz" ||
-		!validHash(meta.BinaryHash) || !validHash(meta.RuntimeHash) {
+	if meta.Target != target || meta.Version != strings.TrimPrefix(releaseTag, "v") ||
+		meta.Binary != "rsrs-"+target+binaryExtension() || !validHash(meta.BinaryHash) {
+		return meta, errors.New("CLI release metadata mismatch")
+	}
+	switch meta.Schema {
+	case 1:
+		// Keep the legacy bundled-runtime contract intact.
+		if meta.Runtime != "rsrs-"+target+"-runtime.tar.gz" || !validHash(meta.RuntimeHash) {
+			return meta, errors.New("CLI release metadata mismatch")
+		}
+	case 2:
+		// Frontend-only releases carry no Core/Runtime payload. Match the
+		// publisher's closed schema so mixed or unknown layouts fail closed.
+		var fields map[string]json.RawMessage
+		_ = json.Unmarshal(b, &fields)
+		if !exactMetadataKeys(fields, "schema_version", "artifact_layout", "git_sha", "version", "target", "binary_file", "binary_size", "binary_sha256", "producer") ||
+			meta.ArtifactLayout != "cli-frontend-v2" || meta.BinarySize <= 0 || meta.BinarySize > 9007199254740991 {
+			return meta, errors.New("CLI release metadata mismatch")
+		}
+		var producer map[string]json.RawMessage
+		if err := json.Unmarshal(fields["producer"], &producer); err != nil ||
+			!exactMetadataKeys(producer, "run_id", "run_attempt") ||
+			!positiveMetadataInteger(producer["run_id"]) || !positiveMetadataInteger(producer["run_attempt"]) {
+			return meta, errors.New("CLI release metadata mismatch")
+		}
+	default:
 		return meta, errors.New("CLI release metadata mismatch")
 	}
 	commit, err := hex.DecodeString(meta.Commit)
@@ -425,6 +453,39 @@ func NormalizeCLIMetadata(b []byte, releaseTag, target string) (CLIMetadata, err
 		return meta, errors.New("invalid CLI source commit")
 	}
 	return meta, nil
+}
+
+// Producer IDs may be strings (GITHUB_RUN_ID) or JSON integers. As with the
+// CLI publisher, accept only positive decimal integers within JS's safe range.
+func positiveMetadataInteger(raw json.RawMessage) bool {
+	value := string(raw)
+	if strings.HasPrefix(value, "\"") {
+		if err := json.Unmarshal(raw, &value); err != nil {
+			return false
+		}
+	}
+	if value == "" || value[0] < '1' || value[0] > '9' {
+		return false
+	}
+	for _, digit := range value {
+		if digit < '0' || digit > '9' {
+			return false
+		}
+	}
+	n, err := strconv.ParseUint(value, 10, 64)
+	return err == nil && n <= 9007199254740991
+}
+
+func exactMetadataKeys(fields map[string]json.RawMessage, keys ...string) bool {
+	if len(fields) != len(keys) {
+		return false
+	}
+	for _, key := range keys {
+		if _, ok := fields[key]; !ok {
+			return false
+		}
+	}
+	return true
 }
 
 func fileHash(path string) (string, error) {
