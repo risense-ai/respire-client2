@@ -36,10 +36,26 @@ export function heading(title, description, actions = "") {
 }
 const ENGINE_NAMES = { cpu: "CPU", gpu: "GPU", npu: "NPU" };
 export function overview(root, ctx) {
+  // Polls update status around these controls without replacing focused buttons.
+  root.innerHTML =
+    '<div data-overview-summary></div>' +
+    panel(
+      "Runtime",
+      '<div data-runtime-status></div><div class="panel-body"><div class="actions"><button data-host="start">启动 Runtime</button><button data-host="stop">停止 Runtime</button><button data-go="updates">安装与更新</button></div><div data-runtime-error></div></div>',
+    ) +
+    '<div data-overview-onboarding></div>';
+  const summaryRoot = $("[data-overview-summary]", root);
+  const runtimeStatus = $("[data-runtime-status]", root);
+  const runtimeError = $("[data-runtime-error]", root);
+  const startButton = $('[data-host="start"]', root);
+  const stopButton = $('[data-host="stop"]', root);
+  const onboarding = $("[data-overview-onboarding]", root);
+  runtimeStatus.closest(".panel").classList.add("section-gap");
   // Onboarding: prompt/plugin readiness is checked once per page visit.
   let promptsReady = null;
   // Runtime active selection (profile models); refreshed with the page.
   let profileSelection = null;
+  let hostPending = false;
   async function loadProfileSelection() {
     if (!ctx.desktop?.connected) return;
     try {
@@ -86,7 +102,7 @@ export function overview(root, ctx) {
     const variant = selection?.variant || snapshot.variant || "quantized";
     const file = selection?.variant ? null : snapshot.file;
     const note = selection ? "" : snapshot.note || "";
-    root.innerHTML =
+    summaryRoot.innerHTML =
       heading(
         "记忆，保持就绪。",
         "本机数据、云端同步、模型与索引，集中查看。",
@@ -145,28 +161,31 @@ export function overview(root, ctx) {
           ],
         ]) +
           `<div class="model-progress">${note ? `<p class="hint">${h(note)}</p>` : ""}${op.active ? `<div class="progress-label"><span>${h(op.item || op.phase)}</span><span>${h(bytes(op.done))} / ${h(bytes(op.total))}</span></div><progress ${op.total ? `value="${h(op.done)}" max="${h(op.total)}"></progress>` : ""}` : ""}<div class="actions"><button data-go="models">管理模型与索引</button></div></div>`,
-      )}</div>` +
-      panel(
-        "Runtime",
-        pairs([
-          ["连接", state.connected ? "已连接" : "未连接"],
-          ["版本", health.bin || "—"],
-          [
-            "管理方式",
-            state.managed
-              ? "客户端管理"
-              : state.connected
-                ? "外部 CLI 管理"
-                : "未连接",
-          ],
-          [
-            "运行中 / 排队",
-            `${number(health.rpc?.executing_until_reply)} / ${number(health.rpc?.queued_or_cancelled_pending_removal)}`,
-          ],
-          ["客户端当前操作", nowTask.stage || "—"],
-        ]) +
-          `${nowTask.busy && nowTask.total ? `<div class="model-progress"><div class="progress-label"><span>${h(nowTask.stage)}</span><span>${h(bytes(nowTask.done))} / ${h(bytes(nowTask.total))}</span></div><progress value="${h(nowTask.done)}" max="${h(nowTask.total)}"></progress></div>` : ""}<div class="panel-body"><div class="actions"><button data-host="start" ${nowTask.busy ? "disabled" : ""}>启动 Runtime</button><button data-host="stop" ${nowTask.busy || !state.connected ? "disabled" : ""}>停止 Runtime</button><button data-go="updates">安装与更新</button></div>${nowTask.error ? `<div class="panel-body form-error">${h(nowTask.error)}</div>` : ""}</div>`,
-      );
+      )}</div>`;
+    runtimeStatus.innerHTML =
+      pairs([
+        ["连接", state.connected ? "已连接" : "未连接"],
+        ["版本", health.bin || "—"],
+        [
+          "管理方式",
+          state.managed
+            ? "客户端管理"
+            : state.connected
+              ? "外部 CLI 管理"
+              : "未连接",
+        ],
+        [
+          "运行中 / 排队",
+          `${number(health.rpc?.executing_until_reply)} / ${number(health.rpc?.queued_or_cancelled_pending_removal)}`,
+        ],
+        ["客户端当前操作", nowTask.stage || "—"],
+      ]) +
+        `${nowTask.busy && nowTask.total ? `<div class="model-progress"><div class="progress-label"><span>${h(nowTask.stage)}</span><span>${h(bytes(nowTask.done))} / ${h(bytes(nowTask.total))}</span></div><progress value="${h(nowTask.done)}" max="${h(nowTask.total)}"></progress></div>` : ""}`;
+    startButton.disabled = hostPending || Boolean(nowTask.busy);
+    stopButton.disabled = hostPending || Boolean(nowTask.busy || !state.connected);
+    runtimeError.innerHTML = nowTask.error
+      ? `<div class="panel-body form-error">${h(nowTask.error)}</div>`
+      : "";
     // First-run checklist: each step clears by real state, and the whole card
     // disappears once everything is done.
     const steps = [
@@ -201,10 +220,8 @@ export function overview(root, ctx) {
         action: { go: "injection", label: "前往安装" },
       },
     ];
-    if (!steps.every((step) => step.done))
-      root.insertAdjacentHTML(
-        "beforeend",
-        `<div class="panel section-gap"><div class="panel-heading"><h2>开始使用</h2></div><div class="panel-body stack">${steps
+    onboarding.innerHTML = !steps.every((step) => step.done)
+      ? `<div class="panel section-gap"><div class="panel-heading"><h2>开始使用</h2></div><div class="panel-body stack">${steps
           .map(
             (step) =>
               `<div class="row spread"><div class="row-copy"><strong><span class="dot ${
@@ -217,10 +234,10 @@ export function overview(root, ctx) {
                     : ""
               }</div>`,
           )
-          .join("")}</div></div>`,
-      );
+          .join("")}</div></div>`
+      : "";
     if (ctx.statusError)
-      root.insertAdjacentHTML(
+      onboarding.insertAdjacentHTML(
         "beforeend",
         `<p class="form-error section-gap">状态读取失败：${h(ctx.statusError)}</p>`,
       );
@@ -237,8 +254,16 @@ export function overview(root, ctx) {
       });
     if (button.dataset.host)
       action(button, async () => {
-        await ctx.api(button.dataset.host, {});
-        await ctx.refresh();
+        hostPending = true;
+        update();
+        try {
+          await ctx.api(button.dataset.host, {});
+          await ctx.refresh();
+        } finally {
+          hostPending = false;
+        }
+      }).finally(() => {
+        if (root.isConnected) update();
       });
   });
   update();
