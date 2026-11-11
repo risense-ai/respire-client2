@@ -4,15 +4,15 @@ English | [简体中文](README.zh-CN.md)
 
 A desktop client built with Wails v3 and Go for Windows, macOS and Linux. It replaces the desktop application in `risense-ai/respire-client`. The CLI, TUI, hosted dashboard and existing user data remain independent.
 
-Download the asset matching your OS and architecture from [Releases](https://github.com/risense-ai/respire-client2/releases). Keep the extracted application in a writable, permanent folder. Windows uses one EXE and requires Microsoft Edge WebView2. On Apple Silicon, prefer `respire-darwin-arm64.dmg`: drag `Respire.app` to Applications and the first launch installs the bundled CLI and managed Runtime locally, offline, and adds `rsrs` to new zsh terminals. Intel Macs use the zip, which does not carry a runnable Runtime bundle. Linux uses a tarball containing one executable and requires GTK 3, WebKitGTK 4.1 and X11 libraries. No Node.js, Go, npm or Rust installation is needed by the end user. Without a bundled payload the application downloads the CLI and its native libraries separately when available; it does not contain Core or model weights. If no client-managed CLI exists, it can recognize and start an external CLI at `<root>/bin/rsrs[.exe]`, including an npm installation.
+Download the asset matching your OS and architecture from [Releases](https://github.com/risense-ai/respire-client2/releases). Keep the extracted application in a writable, permanent folder. Windows uses one EXE and requires Microsoft Edge WebView2. On Apple Silicon, drag `Respire.app` from `respire-darwin-arm64.dmg` to Applications. Linux uses a tarball containing one executable and requires GTK 3, WebKitGTK 4.1 and X11 libraries. No Node.js, Go, npm or Rust installation is needed by the end user. Desktop packages contain no CLI, Runtime, Core or model weights. At first use, missing components download independently from the selected channel with metadata and SHA-256 verification; this requires network access. If no client-managed CLI exists, the application can recognize an external CLI at `<root>/bin/rsrs[.exe]`, including an npm installation.
 
-Windows offers a per-user `respire-windows-<arch>-setup.exe` installer alongside the portable EXE. It installs the application under LocalAppData without requesting elevation, bundles verified CLI and Runtime components under the application directory, and lets the first launch publish them through the same ownership, activity, hash and receipt checks used by the managed Runtime installer. It optionally adds the user CLI directory to PATH. Removing the application preserves user databases, identity, CLI, Runtime and receipts under `~/.rsrs`; subsequent component updates use the selected online channel. A build fails when its requested component releases are unavailable.
+Windows offers a per-user `respire-windows-<arch>-setup.exe` installer alongside the portable EXE. It installs only the application under LocalAppData without requesting elevation and optionally adds the user CLI directory to PATH. Removing the application preserves user databases, identity, CLI, Runtime and receipts under `~/.rsrs`. Desktop builds do not require a CLI or Runtime release; component installation retains the existing ownership, activity, compatibility, hash and receipt checks.
 
 ### macOS notes (DMG install)
 
 - The DMG is ad-hoc signed and **not** notarized: Gatekeeper may warn on first open. Use "Open" in the warning dialog (or right-click → Open); this does not disable system security. Remove the quarantine attribute only if your own policy allows it.
-- First launch copies the bundled CLI to `~/.rsrs/bin/rsrs` and the Runtime to `~/.rsrs/client2/runtime/<version>/` after full hash verification; newer already-installed versions are kept, never downgraded.
-- It adds one clearly marked block to `~/.zprofile` so new terminal windows find `rsrs`. If that file cannot be written, the client shows the exact block to add manually.
+- Missing CLI and Runtime components download separately into `~/.rsrs/bin/rsrs` and `~/.rsrs/client2/runtime/<version>/`. Verified newer installed versions are kept.
+- To use the downloaded CLI from a terminal, add `~/.rsrs/bin` to your PATH. A desktop-only package does not install a shell profile block.
 - Deleting the app does not delete `~/.rsrs` (memory, accounts, CLI, Runtime) or the `~/.zprofile` block. To remove everything manually, delete `~/.rsrs` and remove the block delimited by `# >>> respire-client2 >>>` / `# <<< respire-client2 <<<` from `~/.zprofile`.
 
 See [platform support](docs/platforms.md) for architectures, native-library prerequisites and the distinction between desktop builds and matching CLI availability. Missing CLI/Core release targets are tracked in [respire-cli#163](https://github.com/risense-ai/respire-cli/issues/163).
@@ -127,7 +127,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build.ps1 -Version 0
 
 `-Arch` accepts `amd64` or `arm64`. The resource generator runs on the build machine's architecture; the application is built for the requested architecture. The output is `dist/respire-windows-<arch>.exe`, `dist/SHA256SUMS`, `dist/LICENSE.txt` and `dist/THIRD_PARTY_NOTICES.txt`.
 
-To compile the Windows installer, run after `build.ps1` (requires [Inno Setup 6](https://jrsoftware.org/isinfo.php); the script fetches and verifies the bundled `rsrs.exe` from the respire-cli stable release via its `cli-build-<triple>.json` metadata):
+To compile the desktop-only Windows installer, run after `build.ps1` (requires [Inno Setup 6](https://jrsoftware.org/isinfo.php)):
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-installer.ps1 -Version 0.2.0 -Arch amd64
@@ -184,7 +184,7 @@ Source: GitHub releases in `risense-ai/respire-client2`. Stable (the default) us
 
 ```text
 respire-windows-<arch>.exe    # Windows: amd64, arm64
-respire-darwin-arm64.dmg      # macOS Apple Silicon full installer (bundled CLI + Runtime)
+respire-darwin-arm64.dmg      # macOS Apple Silicon desktop installer
 respire-darwin-<arch>.zip     # macOS: amd64, arm64; one .app bundle; the in-app update asset
 respire-linux-<arch>.tar.gz   # Linux: one respire executable
 SHA256SUMS

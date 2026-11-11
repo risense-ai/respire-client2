@@ -1,10 +1,8 @@
 param(
     [Parameter(Mandatory)][string]$Version,
-    [ValidateSet('amd64', 'arm64')][string]$Arch = 'amd64',
-    [ValidateSet('stable', 'dev')][string]$Channel = 'stable'
+    [ValidateSet('amd64', 'arm64')][string]$Arch = 'amd64'
 )
-# Compile the Windows installer: verifies dist inputs exist, fetches+verifies
-# the bundled rsrs.exe, then compiles scripts/setup.iss with ISCC.
+# Compile only the desktop application; CLI and Runtime install independently.
 # Prerequisite: scripts/build.ps1 has produced the per-arch dist inputs.
 $ErrorActionPreference = 'Stop'
 if ($Version -notmatch '^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$') { throw 'Use a semantic version without a v prefix' }
@@ -20,36 +18,6 @@ if (-not $iscc) { throw 'Inno Setup 6 not found (ISCC.exe); install with: winget
 foreach ($f in "dist\respire-windows-$Arch.exe", 'dist\LICENSE.txt', 'dist\THIRD_PARTY_NOTICES.txt') {
     if (-not (Test-Path (Join-Path $repoRoot $f))) { throw "missing $f - run scripts/build.ps1 -Version $Version -Arch $Arch first" }
 }
-
-& (Join-Path $PSScriptRoot 'fetch-cli.ps1') -Arch $Arch -Channel $Channel
-if ($LASTEXITCODE -ne 0) { throw 'fetch-cli.ps1 failed' }
-$cliVersion = (Get-Content (Join-Path $repoRoot 'dist\cli\version.txt') -Raw).Trim()
-
-# Same channel for CLI and Runtime keeps the compat assertion meaningful.
-& (Join-Path $PSScriptRoot 'fetch-runtime.ps1') -Arch $Arch -Channel $Channel
-if ($LASTEXITCODE -ne 0) { throw 'fetch-runtime.ps1 failed' }
-$rtVersion = (Get-Content (Join-Path $repoRoot 'dist\runtime\version.txt') -Raw).Trim()
-$rtSha256 = (Get-Content (Join-Path $repoRoot 'dist\runtime\sha256.txt') -Raw).Trim()
-$rtMetadata = Get-Content (Join-Path $repoRoot 'dist\runtime\runtime-build.json') -Raw | ConvertFrom-Json
-$cliPath = Join-Path $repoRoot 'dist\cli\rsrs.exe'
-$cliHash = (Get-FileHash -LiteralPath $cliPath -Algorithm SHA256).Hash.ToLowerInvariant()
-$bootstrap = Join-Path $repoRoot 'dist\bootstrap'
-# Each architecture builds in its own CI job. Refuse a stale payload rather
-# than merging different component sets into one installation package.
-if (Test-Path -LiteralPath $bootstrap) { throw 'dist/bootstrap already exists; use a fresh build directory' }
-New-Item -ItemType Directory -Path $bootstrap | Out-Null
-Copy-Item -LiteralPath (Join-Path $repoRoot "dist\runtime\$rtVersion") -Destination (Join-Path $bootstrap 'runtime') -Recurse
-Copy-Item -LiteralPath $cliPath -Destination (Join-Path $bootstrap 'rsrs.exe')
-$target = @{ 'amd64' = 'x86_64-pc-windows-msvc'; 'arm64' = 'aarch64-pc-windows-msvc' }[$Arch]
-$manifest = [ordered]@{
-    schema_version = 1; target = $target; channel = $Channel
-    cli = [ordered]@{ version = $cliVersion; sha256 = $cliHash }
-    runtime = [ordered]@{
-        version = $rtVersion; sha256 = $rtSha256
-        min_cli = $rtMetadata.compat.min_cli; max_cli = $rtMetadata.compat.max_cli
-    }
-}
-[IO.File]::WriteAllText((Join-Path $bootstrap 'bootstrap.json'), (($manifest | ConvertTo-Json -Depth 4) + "`n"), (New-Object Text.UTF8Encoding($false)))
 
 Push-Location $repoRoot
 try {

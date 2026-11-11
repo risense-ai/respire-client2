@@ -13,12 +13,6 @@ fi
 export GOARCH="$arch" CGO_ENABLED=1
 tags=production
 [[ "$goos" != linux ]] || tags=production,gtk3
-# RESPIRE_BOOTSTRAP_CHANNEL (stable|dev) embeds the verified CLI/Runtime
-# payload for the full DMG; only the darwin/arm64 build may carry it.
-if [[ -n "${RESPIRE_BOOTSTRAP_CHANNEL:-}" && ( "$goos" != darwin || "$arch" != arm64 ) ]]; then
-    echo 'RESPIRE_BOOTSTRAP_CHANNEL is only valid for darwin/arm64 builds' >&2
-    exit 1
-fi
 if [[ "$goos" == darwin && "$arch" == amd64 && "$(uname -m)" != x86_64 ]]; then
     export CC="clang -arch x86_64"
     /usr/bin/arch -x86_64 /usr/bin/true 2>/dev/null || softwareupdate --install-rosetta --agree-to-license >/dev/null
@@ -56,16 +50,12 @@ if [[ "$goos" == darwin ]]; then
 <key>NSHighResolutionCapable</key><true/>
 </dict></plist>
 PLIST
-    if [[ -n "${RESPIRE_BOOTSTRAP_CHANNEL:-}" ]]; then
-        bash scripts/fetch-macos-components.sh --channel "$RESPIRE_BOOTSTRAP_CHANNEL" \
-            --target aarch64-apple-darwin --out dist/bootstrap
-        # A stale payload inside a rebuilt bundle must never survive: cp -R
-        # into an existing directory would nest instead of replace.
-        rm -rf "$bundle/Contents/Resources/bootstrap"
-        cp -R dist/bootstrap "$bundle/Contents/Resources/bootstrap"
+    # Refuse a reused bundle that would silently reintroduce bundled components.
+    if [[ -e "$bundle/Contents/Resources/bootstrap" ]]; then
+        echo 'Use a fresh build directory: bundled CLI/Runtime payload is no longer supported' >&2
+        exit 1
     fi
-    # Final signature: the ad-hoc identity must seal whatever the bundle now
-    # contains, payload included.
+    # Seal the desktop application after all resources have been staged.
     codesign --force --deep --sign - "$bundle"
     codesign --verify --deep --strict "$bundle"
     artifact="respire-darwin-$arch.zip"
