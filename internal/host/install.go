@@ -256,10 +256,34 @@ func (m *Manager) InstallRuntime(automatic bool, restart bool) error {
 		// version cannot share the incoming release's binary hash.
 		if verifyErr := verifyRuntime(m.runtimeDir(previous.Version), previous.SHA256); verifyErr == nil {
 			if previous.Version != meta.RuntimeVersion {
-				if startErr := m.Start(); startErr != nil {
-					return startErr
+				// Bind CLI compatibility to the retained Runtime's published metadata.
+				tag := "v" + previous.Version
+				var retainedRelease ReleaseInfo
+				if err := m.fetchJSON(ctx, "https://api.github.com/repos/risense-ai/"+runtimeRepo+"/releases/tags/"+tag, &retainedRelease); err != nil {
+					return err
 				}
-				return m.finishBootstrapPath(payload)
+				if retainedRelease.Tag != tag || retainedRelease.Draft {
+					return errors.New("installed Runtime release identity mismatch")
+				}
+				url, err := ReleaseAssetURL(retainedRelease, runtimeRepo, "runtime-build-"+meta.Target+".json")
+				if err != nil {
+					return err
+				}
+				var raw json.RawMessage
+				if err = m.fetchJSON(ctx, url, &raw); err != nil {
+					return err
+				}
+				retainedMeta, err := NormalizeRuntimeMetadata(raw)
+				if err != nil {
+					return err
+				}
+				if err = CheckRuntimeMetadata(retainedMeta, tag, meta.Target); err != nil {
+					return err
+				}
+				if retainedMeta.BinaryHash != previous.SHA256 {
+					return errors.New("installed Runtime metadata does not match its receipt")
+				}
+				meta = retainedMeta
 			}
 			reuseRuntime = true
 		} else if semver.Compare("v"+previous.Version, "v"+meta.RuntimeVersion) > 0 {
