@@ -95,22 +95,11 @@ jobs:
       - name: Build installer
         if: matrix.os == 'windows'
         shell: pwsh
-        env:
-          # The fetch scripts read this for authenticated GitHub API calls;
-          # runner gh is unauthenticated and shared egress IPs exhaust the
-          # anonymous rate limit quickly.
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           $version = '0.2.56-dev.${{ github.run_number }}'
           if ('${{ github.ref_type }}' -eq 'tag') { $version = '${{ github.ref_name }}'.TrimStart('v') }
-          # Channel follows the release convention: a plain v* tag is a stable
-          # release and must bundle the stable Runtime; everything else (main
-          # pushes, PRs, prerelease tags) rides the dev channel until a stable
-          # Runtime release exists.
-          $channel = 'dev'
-          if (('${{ github.ref_type }}' -eq 'tag') -and ('${{ github.ref_name }}' -notmatch '-')) { $channel = 'stable' }
           choco install innosetup -y --no-progress
-          ./scripts/build-installer.ps1 -Version $version -Arch '${{ matrix.arch }}' -Channel $channel
+          ./scripts/build-installer.ps1 -Version $version -Arch '${{ matrix.arch }}'
       - name: Install and uninstall Windows package
         if: matrix.os == 'windows'
         shell: pwsh
@@ -141,6 +130,7 @@ jobs:
           $install.WaitForExit()
           if ($install.ExitCode -ne 0) { throw 'Installer smoke failed' }
           try {
+            if (Test-Path -LiteralPath (Join-Path $appRoot 'bootstrap')) { throw 'Installer bundled CLI or Runtime components' }
             $version = '0.2.56-dev.${{ github.run_number }}'
             if ('${{ github.ref_type }}' -eq 'tag') { $version = '${{ github.ref_name }}'.TrimStart('v') }
             foreach ($check in @(@{ Name = 'version'; Args = @('--version') }, @{ Name = 'fonts'; Args = @('--headless', 'fonts') })) {
@@ -169,18 +159,11 @@ jobs:
         run: |
           version='0.2.56-dev.${{ github.run_number }}'
           if [[ '${{ github.ref_type }}' == tag ]]; then version='${{ github.ref_name }}'; version="${version#v}"; fi
-          # Only the darwin/arm64 job fetches the bootstrap payload; stable
-          # release tags lock to the stable channel, everything else verifies
-          # against dev. An empty channel keeps plain zip-only behavior.
-          channel=''
-          if [[ '${{ matrix.os }}-${{ matrix.arch }}' == darwin-arm64 ]]; then
-            if [[ '${{ github.ref_type }}' == tag && '${{ github.ref_name }}' != *-* ]]; then channel=stable; else channel=dev; fi
-          fi
-          RESPIRE_BOOTSTRAP_CHANNEL=$channel bash scripts/build.sh "$version" '${{ matrix.arch }}'
+          bash scripts/build.sh "$version" '${{ matrix.arch }}'
           ./dist/respire --version
           ./dist/respire --headless fonts > "$RUNNER_TEMP/respire-fonts.json"
           node -e 'const fs=require("fs");const r=JSON.parse(fs.readFileSync(process.argv[1],"utf8"));if(!r.ok||!Array.isArray(r.result)||!r.result.length)throw Error("No system fonts returned")' "$RUNNER_TEMP/respire-fonts.json"
-          if [[ -n "$channel" ]]; then bash scripts/build-dmg.sh; fi
+          if [[ '${{ matrix.os }}-${{ matrix.arch }}' == darwin-arm64 ]]; then bash scripts/build-dmg.sh; fi
       - name: Check application copied from DMG
         if: matrix.os == 'darwin' && matrix.arch == 'arm64'
         shell: bash

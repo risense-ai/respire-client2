@@ -4,15 +4,15 @@
 
 基于 Wails v3 与 Go 构建的 Windows、macOS、Linux 桌面客户端，用于替代 `risense-ai/respire-client` 中的桌面应用。CLI、TUI、托管 Dashboard 以及既有用户数据保持独立。
 
-从 [Releases](https://github.com/risense-ai/respire-client2/releases) 下载与操作系统和架构匹配的产物。请将解压后的应用保存在可写入的固定目录。Windows 为单个 EXE，需要 Microsoft Edge WebView2。Apple Silicon 优先选择 `respire-darwin-arm64.dmg`：将 `Respire.app` 拖入 Applications，首次启动即在本地离线安装随包的 CLI 与托管 Runtime，并为新开的 zsh 终端配置 `rsrs`。Intel Mac 使用 zip，其中不含可运行的 Runtime 包。Linux 为包含单个可执行文件的 tarball，需要 GTK 3、WebKitGTK 4.1 和 X11 库。最终用户无需安装 Node.js、Go、npm 或 Rust。无随包组件时，应用在可用时单独下载 CLI 及其原生库；本体不包含 Core 与模型权重。若不存在客户端管理的 CLI，客户端可识别并启动 `<root>/bin/rsrs[.exe]` 处的外部 CLI，包括 npm 安装的版本。
+从 [Releases](https://github.com/risense-ai/respire-client2/releases) 下载与操作系统和架构匹配的产物。请将解压后的应用保存在可写入的固定目录。Windows 为单个 EXE，需要 Microsoft Edge WebView2。Apple Silicon 用户可将 `respire-darwin-arm64.dmg` 中的 `Respire.app` 拖入 Applications。Linux 为包含单个可执行文件的 tarball，需要 GTK 3、WebKitGTK 4.1 和 X11 库。最终用户无需安装 Node.js、Go、npm 或 Rust。桌面包不内置 CLI、Runtime、Core 或模型权重。首次使用时，客户端按所选通道独立下载缺失组件，并校验元数据与 SHA-256，因此需要联网。若不存在客户端管理的 CLI，客户端可识别 `<root>/bin/rsrs[.exe]` 处的外部 CLI，包括 npm 安装的版本。
 
-Windows 除便携 EXE 外还提供每用户安装器 `respire-windows-<arch>-setup.exe`。安装器不请求提权，应用安装在 LocalAppData。CLI 与 Runtime 随包放在应用目录，首次启动通过原有托管安装流程完成身份、忙碌状态、哈希和收据校验，并按需加入用户 PATH。卸载保留 `~/.rsrs` 下的数据库、身份、CLI、Runtime 与收据。后续组件更新使用用户选择的在线通道。构建所需组件尚未发布时，构建会失败。
+Windows 除便携 EXE 外还提供每用户安装器 `respire-windows-<arch>-setup.exe`。安装器不请求提权，只将桌面应用安装在 LocalAppData，并可将用户 CLI 目录加入 PATH。卸载保留 `~/.rsrs` 下的数据库、身份、CLI、Runtime 与收据。桌面构建不再依赖 CLI 或 Runtime 已发布；独立安装组件时，仍执行原有身份、忙碌状态、兼容性、哈希和收据校验。
 
 ### macOS 说明（DMG 安装）
 
 - DMG 为 ad-hoc 签名且**未经公证**：首次打开可能触发 Gatekeeper 提示。在提示中选择「打开」（或右键 → 打开）即可；该操作不会关闭系统安全机制。除非你自己的策略允许，不要移除 quarantine 属性。
-- 首次启动将随包 CLI 复制到 `~/.rsrs/bin/rsrs`，将 Runtime 复制到 `~/.rsrs/client2/runtime/<版本>/`，全部经哈希校验；已装的更高版本会被保留，绝不降级。
-- 客户端会在 `~/.zprofile` 写入一个带明确标记的块，使新终端能找到 `rsrs`。若该文件不可写，客户端会展示需要手动添加的确切内容。
+- 缺失的 CLI 与 Runtime 分别下载到 `~/.rsrs/bin/rsrs` 和 `~/.rsrs/client2/runtime/<版本>/`，并保留已校验的更高版本。
+- 若需在终端使用 CLI，请将 `~/.rsrs/bin` 加入 PATH。桌面包不再写入 shell 配置块。
 - 删除应用不会删除 `~/.rsrs`（记忆、账户、CLI、Runtime），也不会移除 `~/.zprofile` 块。如需彻底清理：删除 `~/.rsrs`，并从 `~/.zprofile` 移除由 `# >>> respire-client2 >>>` / `# <<< respire-client2 <<<` 界定的块。
 
 架构、原生库前置条件，以及桌面构建与 CLI 可用性的差异见[平台支持](docs/platforms.md)。缺失的 CLI/Core 发布目标记录在 [respire-cli#163](https://github.com/risense-ai/respire-cli/issues/163)。
@@ -127,7 +127,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build.ps1 -Version 0
 
 `-Arch` 接受 `amd64` 或 `arm64`。资源生成器运行在构建机的架构上；应用按请求的架构构建。产物为 `dist/respire-windows-<arch>.exe`、`dist/SHA256SUMS`、`dist/LICENSE.txt` 与 `dist/THIRD_PARTY_NOTICES.txt`。
 
-编译 Windows 安装器：先跑 `build.ps1`，再执行（需要 [Inno Setup 6](https://jrsoftware.org/isinfo.php)；脚本按 respire-cli stable release 的 `cli-build-<triple>.json` 元数据获取并校验内置 `rsrs.exe`）：
+编译仅含桌面应用的 Windows 安装器：先跑 `build.ps1`，再执行（需要 [Inno Setup 6](https://jrsoftware.org/isinfo.php)）：
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-installer.ps1 -Version 0.2.0 -Arch amd64
@@ -184,7 +184,7 @@ client.log                桌面运行错误
 
 ```text
 respire-windows-<arch>.exe    # Windows: amd64, arm64
-respire-darwin-arm64.dmg      # macOS Apple Silicon 完整安装包（内置 CLI + Runtime）
+respire-darwin-arm64.dmg      # macOS Apple Silicon 桌面安装包
 respire-darwin-<arch>.zip     # macOS: amd64, arm64；单个 .app 包；应用内更新资产
 SHA256SUMS
 LICENSE.txt

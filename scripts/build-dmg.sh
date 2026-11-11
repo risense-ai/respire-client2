@@ -1,9 +1,6 @@
 #!/usr/bin/env bash
-# Build the Apple Silicon installer DMG from a payload-carrying Respire.app:
-#   dist/Respire.app + /Applications symlink -> dist/respire-darwin-arm64.dmg
-# The script refuses to run without the bootstrap payload (that would ship an
-# incomplete full installer), verifies the ad-hoc signature before and after
-# the image is mounted, and appends the DMG line to dist/SHA256SUMS.
+# Build the Apple Silicon desktop DMG, verify its signature and append its hash.
+# CLI and Runtime are downloaded independently at first use.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -13,9 +10,8 @@ volname="Respire"
 
 [[ "$(uname -s)" == Darwin ]] || { echo "DMG builds need macOS (hdiutil)" >&2; exit 1; }
 [[ -d "$app" ]] || { echo "$app is missing; run scripts/build.sh first" >&2; exit 1; }
-[[ -f "$app/Contents/Resources/bootstrap/bootstrap.json" ]] || {
-    echo "the bundle carries no bootstrap payload; a full DMG requires one" >&2
-    echo "(set RESPIRE_BOOTSTRAP_CHANNEL when running scripts/build.sh)" >&2
+[[ ! -e "$app/Contents/Resources/bootstrap" ]] || {
+    echo 'DMG must not bundle CLI or Runtime components' >&2
     exit 1
 }
 if file "$app/Contents/MacOS/respire" | grep -qv arm64; then
@@ -40,7 +36,7 @@ hdiutil attach -readonly -nobrowse -mountpoint "$mountpoint" "$dmg" >/dev/null
 [[ -d "$mountpoint/Respire.app" ]] || { echo "mounted volume is missing Respire.app" >&2; exit 1; }
 [[ -L "$mountpoint/Applications" ]] || { echo "mounted volume is missing the /Applications symlink" >&2; exit 1; }
 [[ "$(readlink "$mountpoint/Applications")" == /Applications ]] || { echo "Applications symlink must target /Applications" >&2; exit 1; }
-[[ -d "$mountpoint/Respire.app/Contents/Resources/bootstrap" ]] || { echo "DMG app lost its bootstrap payload" >&2; exit 1; }
+[[ ! -e "$mountpoint/Respire.app/Contents/Resources/bootstrap" ]] || { echo "DMG contains bundled components" >&2; exit 1; }
 codesign --verify --deep --strict "$mountpoint/Respire.app"
 hdiutil detach "$mountpoint" >/dev/null
 

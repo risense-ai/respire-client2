@@ -2,7 +2,7 @@
 ; Compiled by scripts/build-installer.ps1 via ISCC with defines:
 ;   /DAppVersion=1.2.3  /DArch=amd64|arm64  /DOutputBaseName=respire-windows-<arch>-setup
 ; Requires dist/respire-windows-<arch>.exe, dist/LICENSE.txt, dist/THIRD_PARTY_NOTICES.txt
-; (from scripts/build.ps1) and dist/bootstrap (from scripts/build-installer.ps1).
+; (from scripts/build.ps1). CLI and Runtime install independently at first use.
 
 #ifndef AppVersion
 #define AppVersion "0.0.0-dev"
@@ -65,9 +65,6 @@ zh.WebView2ManualNote=未能自动安装 Microsoft Edge WebView2 Runtime。请�
 Source: "..\dist\respire-windows-{#Arch}.exe"; DestDir: "{app}"; DestName: "Respire.exe"; Flags: ignoreversion
 Source: "..\dist\LICENSE.txt"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\dist\THIRD_PARTY_NOTICES.txt"; DestDir: "{app}"; Flags: ignoreversion
-; User data and receipts are published by the application's verified bootstrap
-; transaction on first launch, never by the installer.
-Source: "..\dist\bootstrap\*"; DestDir: "{app}\bootstrap"; Flags: recursesubdirs createallsubdirs ignoreversion
 
 [Tasks]
 Name: "addpath"; Description: "{cm:AddPathTask}"
