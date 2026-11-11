@@ -252,6 +252,12 @@ var probeCLIVersion = func(ctx context.Context, path string) (string, error) {
 // then a rename. An existing newer CLI is kept (never downgrade); an
 // unparseable existing file is reported instead of clobbered.
 func (m *Manager) installBootstrapCLI(ctx context.Context, p *bootstrapPayload) error {
+	return m.installFrontendCLI(ctx, filepath.Join(p.Dir, cliBinary()), p.Manifest.CLI.Version, p.Manifest.CLI.SHA256,
+		Compat{MinCLI: p.Manifest.Runtime.MinCLI, MaxCLI: p.Manifest.Runtime.MaxCLI})
+}
+
+// installFrontendCLI shares verified, atomic CLI publication across both sources.
+func (m *Manager) installFrontendCLI(ctx context.Context, source, version, expectedHash string, compat Compat) error {
 	binDir := filepath.Join(m.DataRoot, "bin")
 	if err := os.MkdirAll(binDir, 0700); err != nil {
 		return err
@@ -262,20 +268,20 @@ func (m *Manager) installBootstrapCLI(ctx context.Context, p *bootstrapPayload) 
 		if probeErr != nil {
 			return fmt.Errorf("无法识别已有的 %s，未覆盖；请先手动移除或修复该文件后重试: %w", dest, probeErr)
 		}
-		if semver.Compare("v"+existing, "v"+p.Manifest.CLI.Version) > 0 {
-			return nil // an installed newer CLI stays; downgrading is never automatic
+		if semver.Compare("v"+existing, "v"+version) > 0 {
+			return CheckCLICompat(existing, compat) // keep a newer CLI only if compatible
 		}
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
-	m.progress("安装内嵌 CLI", 0, 0)
+	m.progress("安装 CLI", 0, 0)
 	tmp, err := os.CreateTemp(binDir, ".rsrs-payload-*")
 	if err != nil {
 		return err
 	}
 	tmpPath := tmp.Name()
 	defer os.Remove(tmpPath)
-	src, err := os.Open(filepath.Join(p.Dir, cliBinary()))
+	src, err := os.Open(source)
 	if err != nil {
 		tmp.Close()
 		return err
@@ -300,18 +306,21 @@ func (m *Manager) installBootstrapCLI(ctx context.Context, p *bootstrapPayload) 
 	if err != nil {
 		return err
 	}
-	if hash != p.Manifest.CLI.SHA256 {
-		return errors.New("embedded CLI hash mismatch")
+	if hash != expectedHash {
+		return errors.New("CLI hash mismatch")
 	}
 	if err = verifyExecutable(tmpPath); err != nil {
-		return fmt.Errorf("embedded CLI architecture mismatch: %w", err)
+		return fmt.Errorf("CLI architecture mismatch: %w", err)
 	}
 	installed, err := probeCLIVersion(ctx, tmpPath)
 	if err != nil {
 		return err
 	}
-	if installed != p.Manifest.CLI.Version {
-		return fmt.Errorf("CLI 版本探测结果 %s 与内嵌版本 %s 不一致", installed, p.Manifest.CLI.Version)
+	if installed != version {
+		return fmt.Errorf("CLI 版本探测结果 %s 与发布版本 %s 不一致", installed, version)
+	}
+	if err = CheckCLICompat(installed, compat); err != nil {
+		return err
 	}
 	return os.Rename(tmpPath, dest)
 }

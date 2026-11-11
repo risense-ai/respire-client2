@@ -515,6 +515,7 @@ func buildTarGz(t *testing.T, dir string) []byte {
 		if rel == "." {
 			return nil
 		}
+		rel = filepath.ToSlash(rel)
 		info, err := d.Info()
 		if err != nil {
 			return err
@@ -666,48 +667,61 @@ func TestInstallRuntimeWithPayload(t *testing.T) {
 		archive := buildTarGz(t, tree)
 		archiveHash := sha256Hex(t, archive)
 		meta := RuntimeMetadata{
-			Schema: 2, RuntimeVersion: "1.0.30", Tag: "v1.0.30", Target: target,
+			Schema: 2, RuntimeVersion: "2.0.0-dev.9", Tag: "v2.0.0-dev.9", Target: target,
 			ArchiveFile: runtimeArchive(target), ArchiveHash: archiveHash,
 			Binary: "rsrs-runtime-" + target + binaryExtension(), BinaryHash: binaryHash,
-			Compat: Compat{MinCLI: "0.4.0", MaxCLI: "*"},
+			Compat: Compat{MinCLI: "2.0.0-dev.1", MaxCLI: "*"},
 		}
 		buildJSON, err := json.Marshal(meta)
 		if err != nil {
 			t.Fatal(err)
 		}
-		prefix := "https://github.com/risense-ai/respire-runtime/releases/download/v1.0.30/"
+		cliBytes, err := os.ReadFile(filepath.Join(tree, "rsrs-runtime-"+target))
+		if err != nil {
+			t.Fatal(err)
+		}
+		cliMeta := frontendMetadataFixture(target)
+		cliMeta["binary_sha256"] = sha256Hex(t, cliBytes)
+		cliMeta["binary_size"] = len(cliBytes)
+		cliJSON, err := json.Marshal(cliMeta)
+		if err != nil {
+			t.Fatal(err)
+		}
+		stubCLIProbe(t, cliProbeFixture{tmpVersion: "2.0.0-dev.1", destAbsent: true})
+		prefix := "https://github.com/risense-ai/respire-runtime/releases/download/" + meta.Tag + "/"
 		assets := []map[string]string{
 			{"name": "runtime-build-" + target + ".json", "browser_download_url": prefix + "runtime-build-" + target + ".json"},
 			{"name": meta.Binary, "browser_download_url": prefix + meta.Binary},
 			{"name": meta.ArchiveFile, "browser_download_url": prefix + meta.ArchiveFile},
 		}
-		list, err := json.Marshal([]map[string]any{{"tag_name": "v1.0.30", "draft": false, "prerelease": true, "assets": assets}})
+		list, err := json.Marshal([]map[string]any{{"tag_name": meta.Tag, "draft": false, "prerelease": true, "assets": assets}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		cliPrefix := "https://github.com/risense-ai/respire-cli/releases/download/v2.0.0-dev.1/"
+		cliAssets := []map[string]string{
+			{"name": "cli-build-" + target + ".json", "browser_download_url": cliPrefix + "cli-build-" + target + ".json"},
+			{"name": cliMeta["binary_file"].(string), "browser_download_url": cliPrefix + cliMeta["binary_file"].(string)},
+		}
+		cliList, err := json.Marshal([]map[string]any{{"tag_name": "v2.0.0-dev.1", "prerelease": true, "assets": cliAssets}})
 		if err != nil {
 			t.Fatal(err)
 		}
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			name := r.URL.Path
 			switch {
-			case strings.Contains(name, "/releases/download/"):
-				name = name[strings.LastIndex(name, "/")+1:]
-				switch {
-				case name == "runtime-build-"+target+".json":
-					_, _ = w.Write(buildJSON)
-				case name == meta.Binary:
-					b, _ := os.ReadFile(filepath.Join(tree, "rsrs-runtime-"+target))
-					_, _ = w.Write(b)
-				case name == meta.ArchiveFile:
-					_, _ = w.Write(archive)
-				default:
-					http.NotFound(w, r)
-				}
-			case strings.Contains(name, "/releases"):
+			case name == "/repos/risense-ai/respire-cli/releases" && r.URL.Query().Get("per_page") == "20":
+				_, _ = w.Write(cliList)
+			case name == "/repos/risense-ai/respire-runtime/releases" && r.URL.Query().Get("per_page") == "20":
 				_, _ = w.Write(list)
+			case strings.HasSuffix(name, "cli-build-"+target+".json"):
+				_, _ = w.Write(cliJSON)
+			case strings.HasSuffix(name, cliMeta["binary_file"].(string)):
+				_, _ = w.Write(cliBytes)
 			case strings.HasSuffix(name, "runtime-build-"+target+".json"):
 				_, _ = w.Write(buildJSON)
 			case strings.HasSuffix(name, meta.Binary):
-				b, _ := os.ReadFile(filepath.Join(tree, runtimeBinary()))
-				_, _ = w.Write(b)
+				_, _ = w.Write(cliBytes)
 			case strings.HasSuffix(name, meta.ArchiveFile):
 				_, _ = w.Write(archive)
 			default:
@@ -717,14 +731,65 @@ func TestInstallRuntimeWithPayload(t *testing.T) {
 		defer srv.Close()
 		m.HTTPClient = &http.Client{Transport: fakeGH{server: srv.URL}}
 		if err = m.InstallRuntime(false, false); err != nil {
-			t.Fatalf("online fallback install failed: %v", err)
+			t.Fatalf("online pair install failed: %v", err)
 		}
 		installed, err := m.Installed()
-		if err != nil || installed.Version != "1.0.30" || installed.SHA256 != binaryHash {
+		if err != nil || installed.Version != meta.RuntimeVersion || installed.SHA256 != binaryHash {
 			t.Fatalf("online install pointer wrong: %+v err=%v", installed, err)
 		}
-		if _, err = os.Stat(filepath.Join(m.DataRoot, "bin", cliBinary())); !errors.Is(err, os.ErrNotExist) {
-			t.Fatal("no CLI may be installed without a payload")
+		cli := filepath.Join(m.DataRoot, "bin", cliBinary())
+		if hash, err := fileHash(cli); err != nil || hash != cliMeta["binary_sha256"] {
+			t.Fatalf("online CLI bytes wrong: %s %v", hash, err)
+		}
+		entries, err := filepath.Glob(filepath.Join(m.Root, ".cli-download-*"))
+		if err != nil || len(entries) != 0 {
+			t.Fatalf("CLI download staging leftovers: %v %v", entries, err)
+		}
+		if err = os.Remove(cli); err != nil {
+			t.Fatal(err)
+		}
+		m.Endpoint = newFakeRuntimeServer(t, filepath.Join(m.runtimeDir(meta.RuntimeVersion), runtimeBinary()), "").URL
+		if err = m.InstallRuntime(false, false); err != nil {
+			t.Fatalf("online CLI repair with existing Runtime failed: %v", err)
+		}
+		if hash, err := fileHash(cli); err != nil || hash != cliMeta["binary_sha256"] {
+			t.Fatalf("online CLI was not restored: %s %v", hash, err)
+		}
+		for _, failure := range []string{"hash", "size", "compat"} {
+			cliMeta["binary_sha256"] = sha256Hex(t, cliBytes)
+			cliMeta["binary_size"] = len(cliBytes)
+			meta.Compat.MinCLI = "2.0.0-dev.1"
+			switch failure {
+			case "hash":
+				cliMeta["binary_sha256"] = strings.Repeat("0", 64)
+			case "size":
+				cliMeta["binary_size"] = len(cliBytes) + 1
+			case "compat":
+				meta.Compat.MinCLI = "2.0.0-dev.2"
+			}
+			cliJSON, err = json.Marshal(cliMeta)
+			if err != nil {
+				t.Fatal(err)
+			}
+			buildJSON, err = json.Marshal(meta)
+			if err != nil {
+				t.Fatal(err)
+			}
+			rejected := newInstallTestManager(t)
+			rejected.HTTPClient = m.HTTPClient
+			if err = rejected.InstallRuntime(false, false); err == nil {
+				t.Fatalf("invalid CLI %s must reject the pair", failure)
+			}
+			if _, readErr := rejected.Installed(); !errors.Is(readErr, os.ErrNotExist) {
+				t.Fatalf("invalid CLI %s published a Runtime selection: %v", failure, readErr)
+			}
+			if _, statErr := os.Stat(filepath.Join(rejected.DataRoot, "bin", cliBinary())); !errors.Is(statErr, os.ErrNotExist) {
+				t.Fatalf("invalid CLI %s was published: %v", failure, statErr)
+			}
+			entries, globErr := filepath.Glob(filepath.Join(rejected.Root, ".cli-download-*"))
+			if globErr != nil || len(entries) != 0 {
+				t.Fatalf("failed CLI %s left download staging: %v %v", failure, entries, globErr)
+			}
 		}
 	})
 }

@@ -194,6 +194,37 @@ func (m *Manager) stageDownloadRuntime(ctx context.Context, release ReleaseInfo,
 	}
 }
 
+// installOnlineCLI resolves the same channel without coupling CLI/Runtime versions.
+func (m *Manager) installOnlineCLI(ctx context.Context, compat Compat) error {
+	release, meta, err := m.LatestCLIBuild(ctx)
+	if err != nil {
+		return err
+	}
+	url, err := ReleaseAssetURL(release, cliRepo, meta.Binary)
+	if err != nil {
+		return err
+	}
+	stage, err := os.MkdirTemp(m.Root, ".cli-download-*")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(stage)
+	source := filepath.Join(stage, cliBinary())
+	if err = m.download(ctx, url, source, meta.BinaryHash, 128<<20); err != nil {
+		return err
+	}
+	if meta.Schema == 2 {
+		info, err := os.Stat(source)
+		if err != nil {
+			return err
+		}
+		if info.Size() != meta.BinarySize {
+			return errors.New("CLI release binary size mismatch")
+		}
+	}
+	return m.installFrontendCLI(ctx, source, meta.Version, meta.BinaryHash, compat)
+}
+
 func (m *Manager) InstallRuntime(automatic bool, restart bool) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
 	defer cancel()
@@ -219,14 +250,18 @@ func (m *Manager) InstallRuntime(automatic bool, restart bool) error {
 			return err
 		}
 	}
+	reuseRuntime := false
 	if prevErr == nil && semver.Compare("v"+previous.Version, "v"+meta.RuntimeVersion) >= 0 {
 		// Verify the selected version against its own receipt. A newer
 		// version cannot share the incoming release's binary hash.
 		if verifyErr := verifyRuntime(m.runtimeDir(previous.Version), previous.SHA256); verifyErr == nil {
-			if startErr := m.Start(); startErr != nil {
-				return startErr
+			if previous.Version != meta.RuntimeVersion {
+				if startErr := m.Start(); startErr != nil {
+					return startErr
+				}
+				return m.finishBootstrapPath(payload)
 			}
-			return m.finishBootstrapPath(payload)
+			reuseRuntime = true
 		} else if semver.Compare("v"+previous.Version, "v"+meta.RuntimeVersion) > 0 {
 			return fmt.Errorf("installed newer Runtime verification failed: %w", verifyErr)
 		}
@@ -241,13 +276,15 @@ func (m *Manager) InstallRuntime(automatic bool, restart bool) error {
 	if err != nil && !IsUnavailable(err) {
 		return err
 	}
-	if payload != nil {
-		err = m.publishRuntime(meta, stageBootstrapRuntime(payload.Dir))
-	} else {
-		err = m.publishRuntime(meta, m.stageDownloadRuntime(ctx, release, meta))
-	}
-	if err != nil {
-		return err
+	if !reuseRuntime {
+		if payload != nil {
+			err = m.publishRuntime(meta, stageBootstrapRuntime(payload.Dir))
+		} else {
+			err = m.publishRuntime(meta, m.stageDownloadRuntime(ctx, release, meta))
+		}
+		if err != nil {
+			return err
+		}
 	}
 	// Check activity after staging; work may have arrived during the copy.
 	h, body, err := m.Health(ctx)
@@ -284,6 +321,14 @@ func (m *Manager) InstallRuntime(automatic bool, restart bool) error {
 		if err := m.installBootstrapCLI(ctx, payload); err != nil {
 			return err
 		}
+	} else if err := m.installOnlineCLI(ctx, meta.Compat); err != nil {
+		return err
+	}
+	if reuseRuntime {
+		if err := m.Start(); err != nil {
+			return err
+		}
+		return m.finishBootstrapPath(payload)
 	}
 	// Without restart the new files publish under their own version dir and
 	// the running instance stays on the old one until the next start.
