@@ -154,7 +154,7 @@ func (m *Manager) publishRuntime(meta RuntimeMetadata, fill func(stage string) e
 	}
 	dest := m.runtimeDir(meta.RuntimeVersion)
 	if _, err := os.Stat(dest); err == nil {
-		if err := compactRuntime(dest, receipt); err != nil {
+		if err := verifyReleaseTree(dest, receipt); err != nil {
 			return err
 		}
 		return m.saveRuntimeReceipt(receipt)
@@ -186,9 +186,6 @@ func (m *Manager) publishRuntime(meta RuntimeMetadata, fill func(stage string) e
 		return err
 	}
 	if err = os.Rename(clean, dest); err != nil {
-		return err
-	}
-	if err = compactRuntime(dest, receipt); err != nil {
 		return err
 	}
 	return m.saveRuntimeReceipt(receipt)

@@ -480,6 +480,15 @@ func TestPublishRuntimeStagingAndPromotion(t *testing.T) {
 		if err = m.publishRuntime(meta, stageBootstrapRuntime(payload.Dir)); err != nil {
 			t.Fatal(err)
 		}
+		if err = copyTree(filepath.Join(payload.Dir, bootstrapRuntimeDir, "core-notices"), filepath.Join(dest, "core-notices")); err != nil {
+			t.Fatal(err)
+		}
+		if err = m.publishRuntime(meta, stageBootstrapRuntime(payload.Dir)); err != nil {
+			t.Fatal(err)
+		}
+		if _, err = os.Stat(filepath.Join(dest, "core-notices", "NOTICES.txt")); err != nil {
+			t.Fatal("reusing an installed version must preserve its notices")
+		}
 		stray := filepath.Join(dest, "stray-user-file")
 		if err = os.WriteFile(stray, []byte("user data"), 0600); err != nil {
 			t.Fatal(err)

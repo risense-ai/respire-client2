@@ -304,25 +304,8 @@ func (m *Manager) provenRuntimeMetadata(ctx context.Context, meta RuntimeMetadat
 }
 
 func (m *Manager) migrateRuntime() error {
-	if b, err := os.ReadFile(m.runtimeManifest()); err == nil {
-		var receipt sharedRuntimeReceipt
-		if err = json.Unmarshal(b, &receipt); err != nil {
-			return err
-		}
-		if !validVersion(receipt.Version) || !validHash(receipt.SHA256) {
-			return errors.New("Runtime 安装凭据无效")
-		}
-		if _, err := os.Lstat(filepath.Join(m.runtimeDir(receipt.Version), "core-notices")); errors.Is(err, os.ErrNotExist) {
-			return nil
-		} else if err != nil {
-			return err
-		}
-		lock, err := m.lockRuntime(context.Background())
-		if err != nil {
-			return err
-		}
-		defer lock.Close()
-		return compactRuntime(m.runtimeDir(receipt.Version), receipt)
+	if _, err := os.Stat(m.runtimeManifest()); err == nil {
+		return nil
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
@@ -426,11 +409,3 @@ func (m *Manager) lockRuntime(ctx context.Context) (*os.File, error) {
 }
 
 var errRuntimeLocked = errors.New("Runtime installation locked")
-
-// Notices are not loader inputs and are omitted from managed installations.
-func compactRuntime(dir string, receipt sharedRuntimeReceipt) error {
-	if err := verifyReleaseTree(dir, receipt); err != nil {
-		return err
-	}
-	return os.RemoveAll(filepath.Join(dir, "core-notices"))
-}

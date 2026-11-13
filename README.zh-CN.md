@@ -168,7 +168,7 @@ client.log                桌面运行错误
 
 CLI 与 Runtime 共用 `<root>/bin/`：CLI 位于 `bin/rsrs[.exe]`，Runtime 位于 `bin/runtime/<version>/`，完整发布凭据和当前版本位于 `bin/runtime.json`。Client2 与 CLI 各自独立安装和维护 Runtime，不通过对方执行安装；两边使用相同的原生文件锁 `bin/runtime/.install.lock` 和完整发布校验。首次启动会校验旧的根目录或 Client2 安装并复制到共享位置，旧文件保留用于恢复，账户数据不迁移。已有的外部 CLI 仍按原有规则校验架构、读取版本并保持安装归属。
 
-Runtime 版本目录保留可执行文件、必要的动态库和 `core-runtime.json`。安装时不保留 `core-notices`，已有共享安装中的该目录也会删除；可执行文件、动态库和清单仍须通过校验。
+新安装的 Runtime 版本目录保留可执行文件、必要的动态库和 `core-runtime.json`，不再写入 `core-notices`。已有安装不做清理；可执行文件、动态库和清单仍须通过校验。
 
 `RSRS_RPC_PORT` 覆盖 `15169`。RPC 保持 `127.0.0.1` 上的 HTTP；客户端不更改 Runtime 的绑定地址、认证策略或 Origin 检查。已安装的 CLI 宿主动作会收到指向其完整版本目录的 `RSRS_BIN_DIR`，避免 CLI 脱离配套库单独落地 EXE。
 

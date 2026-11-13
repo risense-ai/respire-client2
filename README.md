@@ -168,7 +168,7 @@ client.log                Desktop operational errors
 
 CLI and Runtime share `<root>/bin/`: `bin/rsrs[.exe]`, `bin/runtime/<version>/`, and `bin/runtime.json`. Client2 and CLI install and maintain Runtime independently; neither invokes the other installer. Both use the same native file lock at `bin/runtime/.install.lock`, complete schema-2 release proof, and atomic version selection. First host startup verifies and copies old root-level or Client2 installations into this shared layout while retaining original files for recovery. Account data is not relocated. External CLI architecture, version and installation ownership retain their existing checks.
 
-Managed Runtime versions retain the executable, required libraries and `core-runtime.json`. Installers omit `core-notices` and remove it from existing shared installations; executable, library and manifest verification remain required.
+New managed Runtime installations retain the executable, required libraries and `core-runtime.json`, and omit `core-notices`. Existing installations are not cleaned; executable, library and manifest verification remain required.
 
 `RSRS_RPC_PORT` overrides `15169`. RPC remains HTTP on `127.0.0.1`; the client never changes Runtime bind addresses, authentication policy or Origin checks. Installed CLI host actions receive `RSRS_BIN_DIR` pointing at their complete version directory so that the CLI does not materialize an EXE without its matching libraries.
 
