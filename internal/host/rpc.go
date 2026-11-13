@@ -36,6 +36,9 @@ func (m *Manager) localRequest(ctx context.Context, method, path string, body an
 		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
+	if method == http.MethodGet && path == "/api/health" {
+		req.Header.Set("X-Respire-Health", "runtime-v1")
+	}
 	res, err := m.localClient.Do(req)
 	if err != nil {
 		return nil, err
