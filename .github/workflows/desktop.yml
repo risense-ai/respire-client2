@@ -238,21 +238,50 @@ jobs:
           args=(release create "$CURRENT_TAG" dist/* --repo "$REPOSITORY" --verify-tag --title "$CURRENT_TAG" --notes-file .release-notes.md)
           if [[ "$CURRENT_TAG" == *-* ]]; then args+=(--prerelease); fi
           gh "${args[@]}"
-          if [[ "$CURRENT_TAG" == *-* ]]; then
-            # Existing clients discover DEV updates through the latest stable Release.
-            latest_tag=$(gh release view --repo "$REPOSITORY" --json tagName --jq .tagName)
-            mkdir update-index
-            gh release download "$latest_tag" --repo "$REPOSITORY" --pattern client-updates.json --dir update-index
-            python3 - <<'PY'
+  update-index:
+    if: startsWith(github.ref, 'refs/tags/v') && contains(github.ref_name, '-dev.')
+    needs: [release]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    concurrency:
+      group: desktop-dev-update-index
+      cancel-in-progress: false
+    steps:
+      - name: Update existing clients' DEV discovery manifest
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CURRENT_TAG: ${{ github.ref_name }}
+          REPOSITORY: ${{ github.repository }}
+        shell: bash
+        run: |
+          # Existing clients discover DEV updates through the latest stable Release.
+          latest_tag=$(gh release view --repo "$REPOSITORY" --json tagName --jq .tagName)
+          mkdir update-index dist
+          gh release download "$latest_tag" --repo "$REPOSITORY" --pattern client-updates.json --dir update-index
+          gh release download "$CURRENT_TAG" --repo "$REPOSITORY" --pattern client-updates.json --dir dist
+          python3 - <<'PY'
           import json
+          import re
           from pathlib import Path
+          def version_key(version):
+              # This job publishes the existing stable and -dev.N release format only.
+              match = re.fullmatch(r"(\d+)\.(\d+)\.(\d+)(?:-dev\.(\d+))?", version)
+              assert match, f"Unsupported update version: {version}"
+              major, minor, patch, dev = match.groups()
+              return (int(major), int(minor), int(patch), dev is None, int(dev or 0))
           path = Path("update-index/client-updates.json")
           manifest = json.loads(path.read_text(encoding="utf-8"))
           dev = json.loads(Path("dist/client-updates.json").read_text(encoding="utf-8"))
           assert manifest["schemaVersion"] == dev["schemaVersion"] == 1
           assert manifest["stable"]["version"] and dev["dev"]["version"]
-          manifest["dev"] = dev["dev"]
-          path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8", newline="\n")
+          if version_key(dev["dev"]["version"]) > version_key(manifest["dev"]["version"]):
+              manifest["dev"] = dev["dev"]
+              Path("update-index/next.json").write_text(
+                  json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8", newline="\n")
           PY
+          if [[ -f update-index/next.json ]]; then
+            mv update-index/next.json update-index/client-updates.json
             gh release upload "$latest_tag" update-index/client-updates.json --repo "$REPOSITORY" --clobber
           fi
