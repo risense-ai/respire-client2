@@ -1018,6 +1018,9 @@ func sha256Hex(t *testing.T, b []byte) string {
 func newFakeRuntimeServer(t *testing.T, exe, managedID string) *httptest.Server {
 	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/health" && r.Header.Get("X-Respire-Health") != "runtime-v1" {
+			t.Error("health must request the actual Runtime identity")
+		}
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = fmt.Fprintf(w, `{"server":"respire","v":1,"pid":4242,"exe":%q,"managed_id":%q}`, exe, managedID)
 	}))
