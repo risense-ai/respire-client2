@@ -14,7 +14,7 @@ import (
 
 func (m *Manager) Installed() (InstalledRuntime, error) {
 	var info InstalledRuntime
-	b, err := os.ReadFile(filepath.Join(m.Root, "runtime.json"))
+	b, err := os.ReadFile(m.runtimeManifest())
 	if err != nil {
 		return info, err
 	}
@@ -27,16 +27,21 @@ func (m *Manager) Installed() (InstalledRuntime, error) {
 	return info, nil
 }
 
-func (m *Manager) runtimeDir(v string) string { return filepath.Join(m.Root, "runtime", v) }
+func (m *Manager) runtimeDir(v string) string { return filepath.Join(m.DataRoot, "bin", "runtime", v) }
 
 func (m *Manager) Owns(exe string) bool {
-	rel, err := filepath.Rel(filepath.Join(m.Root, "runtime"), exe)
-	return err == nil && filepath.IsLocal(rel) && acceptsRuntimeBinary(filepath.Base(rel))
+	for _, root := range []string{filepath.Join(m.DataRoot, "bin", "runtime"), filepath.Join(m.DataRoot, "runtime"), filepath.Join(m.Root, "runtime")} {
+		rel, err := filepath.Rel(root, exe)
+		if err == nil && filepath.IsLocal(rel) && acceptsRuntimeBinary(filepath.Base(rel)) {
+			return true
+		}
+	}
+	return false
 }
 
 func (m *Manager) hostCommand(ctx context.Context, info InstalledRuntime, args ...string) error {
 	dir := m.runtimeDir(info.Version)
-	if err := verifyRuntime(dir, info.SHA256); err != nil {
+	if err := m.verifyInstalled(info); err != nil {
 		return err
 	}
 	return runRuntimeCommand(ctx, filepath.Join(dir, runtimeBinary()), args...)
@@ -67,10 +72,20 @@ func runRuntimeCommand(ctx context.Context, executable string, args ...string) e
 }
 
 func (m *Manager) Start() error {
+	if err := m.migrateRuntime(); err != nil {
+		return err
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-	_, _, err := m.Health(ctx)
+	h, _, err := m.Health(ctx)
 	cancel()
 	if err == nil {
+		info, installedErr := m.Installed()
+		if installedErr == nil && m.Owns(h.Exe) && !samePath(h.Exe, filepath.Join(m.runtimeDir(info.Version), runtimeBinary())) {
+			if err := m.Stop(true); err != nil {
+				return err
+			}
+			return m.Start()
+		}
 		return nil
 	}
 	if !IsUnavailable(err) {
@@ -153,7 +168,7 @@ func (m *Manager) restoreRuntime(previous, failed InstalledRuntime) error {
 	} else if !IsUnavailable(err) {
 		return fmt.Errorf("无法确认失败版本是否退出: %w", err)
 	}
-	if err = writeJSON(filepath.Join(m.Root, "runtime.json"), previous); err != nil {
+	if err = m.selectRuntime(previous); err != nil {
 		return fmt.Errorf("恢复版本选择: %w", err)
 	}
 	if err = m.Start(); err != nil {

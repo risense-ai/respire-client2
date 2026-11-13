@@ -63,7 +63,6 @@ func buildRuntimeTree(t *testing.T, dir, target string) (binaryHash string) {
 		"schema_version": 1,
 		"target":         target,
 		"files": []map[string]string{
-			{"path": "rsrs-runtime-" + target, "sha256": binaryHash},
 			{"path": "core-notices/NOTICES.txt", "sha256": noticesHash},
 		},
 	}
@@ -127,8 +126,50 @@ func buildPayload(t *testing.T, cliVersion string) string {
 	if err = os.WriteFile(filepath.Join(dir, bootstrapManifestFile), append(b, '\n'), 0600); err != nil {
 		t.Fatal(err)
 	}
+	meta := RuntimeMetadata{Schema: 2, RuntimeVersion: "1.0.21", Tag: "v1.0.21", Target: target,
+		ArchiveFile: runtimeArchive(target), ArchiveHash: strings.Repeat("0", 64), Binary: "rsrs-runtime-" + target + binaryExtension(), BinaryHash: runtimeHash,
+		Compat: Compat{MinCLI: "0.4.0", MaxCLI: "*"}}
+	metadata, err := fixtureReleaseJSON(t, filepath.Join(dir, bootstrapRuntimeDir), meta)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(filepath.Join(dir, "runtime-build-"+target+".json"), metadata, 0600); err != nil {
+		t.Fatal(err)
+	}
 	t.Setenv(bootstrapEnvOverride, dir)
 	return dir
+}
+
+func fixtureReleaseJSON(t *testing.T, tree string, meta RuntimeMetadata) ([]byte, error) {
+	t.Helper()
+	binary := filepath.Join(tree, "rsrs-runtime-"+meta.Target)
+	var files []map[string]any
+	for _, entry := range []struct{ name, path string }{
+		{meta.Binary, binary}, {"core-runtime.json", filepath.Join(tree, "core-runtime.json")},
+		{"core-notices/NOTICES.txt", filepath.Join(tree, "core-notices", "NOTICES.txt")},
+	} {
+		info, err := os.Stat(entry.path)
+		if err != nil {
+			return nil, err
+		}
+		hash, err := fileHash(entry.path)
+		if err != nil {
+			return nil, err
+		}
+		files = append(files, map[string]any{"path": entry.name, "size": info.Size(), "sha256": hash})
+	}
+	b, err := json.Marshal(meta)
+	if err != nil {
+		return nil, err
+	}
+	var fields map[string]any
+	if err = json.Unmarshal(b, &fields); err != nil {
+		return nil, err
+	}
+	fields["files"], fields["source_commit"] = files, strings.Repeat("0", 40)
+	fields["protocol_range"] = map[string]int{"minimum": 1, "maximum": 1}
+	fields["capabilities"] = map[string]string{"business_executor": "1", "mcp_server": "1"}
+	return json.Marshal(fields)
 }
 
 func TestBootstrapPayloadDiscovery(t *testing.T) {
@@ -426,25 +467,25 @@ func TestPublishRuntimeStagingAndPromotion(t *testing.T) {
 		if err = verifyRuntime(m.runtimeDir(meta.RuntimeVersion), meta.BinaryHash); err != nil {
 			t.Fatalf("published dir must verify: %v", err)
 		}
+		if _, err = os.Stat(filepath.Join(m.runtimeDir(meta.RuntimeVersion), "core-notices")); !errors.Is(err, os.ErrNotExist) {
+			t.Fatal("managed Runtime must omit notices")
+		}
 		if _, err = os.Stat(filepath.Join(m.Root, "runtime.json")); !errors.Is(err, os.ErrNotExist) {
 			t.Fatal("publishRuntime must not write the version pointer")
 		}
 	})
-	t.Run("existing version dir is reused, not merged", func(t *testing.T) {
+	t.Run("existing version dir rejects unauthenticated files without deleting them", func(t *testing.T) {
 		m := newInstallTestManager(t)
 		dest := m.runtimeDir(meta.RuntimeVersion)
-		if err = os.MkdirAll(dest, 0700); err != nil {
-			t.Fatal(err)
-		}
-		if err = copyTree(filepath.Join(payload.Dir, bootstrapRuntimeDir), dest); err != nil {
+		if err = m.publishRuntime(meta, stageBootstrapRuntime(payload.Dir)); err != nil {
 			t.Fatal(err)
 		}
 		stray := filepath.Join(dest, "stray-user-file")
 		if err = os.WriteFile(stray, []byte("user data"), 0600); err != nil {
 			t.Fatal(err)
 		}
-		if err = m.publishRuntime(meta, stageBootstrapRuntime(payload.Dir)); err != nil {
-			t.Fatalf("reuse verification failed: %v", err)
+		if err = m.publishRuntime(meta, stageBootstrapRuntime(payload.Dir)); err == nil {
+			t.Fatal("unauthenticated files must prevent reuse")
 		}
 		if _, err = os.Stat(stray); err != nil {
 			t.Fatal("existing version dir must never be merged or cleaned")
@@ -461,7 +502,7 @@ func TestPublishRuntimeStagingAndPromotion(t *testing.T) {
 		if _, err = os.Stat(m.runtimeDir(meta.RuntimeVersion)); !errors.Is(err, os.ErrNotExist) {
 			t.Fatal("interrupted install must not publish the version dir")
 		}
-		entries, _ := os.ReadDir(filepath.Join(m.Root, "runtime"))
+		entries, _ := os.ReadDir(filepath.Dir(m.runtimeDir(meta.RuntimeVersion)))
 		for _, e := range entries {
 			if strings.HasPrefix(e.Name(), ".stage-") {
 				t.Fatalf("staging leftovers after interruption: %s", e.Name())
@@ -486,6 +527,53 @@ func TestPublishRuntimeStagingAndPromotion(t *testing.T) {
 		if _, err = os.Stat(m.runtimeDir(meta.RuntimeVersion)); !errors.Is(err, os.ErrNotExist) {
 			t.Fatal("failed verification must not publish")
 		}
+	})
+	t.Run("legacy receipt migrates once and preserves its original tree", func(t *testing.T) {
+		m := newInstallTestManager(t)
+		legacy := filepath.Join(m.Root, "runtime", meta.RuntimeVersion)
+		if err := copyTree(filepath.Join(payload.Dir, bootstrapRuntimeDir), legacy); err != nil {
+			t.Fatal(err)
+		}
+		receipt, err := runtimeReceipt(meta)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err = writeJSON(filepath.Join(m.Root, "runtime.json"), receipt); err != nil {
+			t.Fatal(err)
+		}
+		if err = m.migrateRuntime(); err != nil {
+			t.Fatal(err)
+		}
+		if err = m.verifyInstalled(InstalledRuntime{Version: meta.RuntimeVersion, SHA256: meta.BinaryHash}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err = os.Stat(filepath.Join(legacy, runtimeBinary())); err != nil {
+			t.Fatal("migration removed the old installation")
+		}
+		if err = m.migrateRuntime(); err != nil {
+			t.Fatal(err)
+		}
+		ctx, cancel := context.WithCancel(context.Background())
+		lock, err := m.lockRuntime(ctx)
+		if err != nil {
+			cancel()
+			t.Fatal(err)
+		}
+		other, err := os.OpenFile(filepath.Join(filepath.Dir(m.runtimeDir(meta.RuntimeVersion)), ".install.lock"), os.O_RDWR, 0600)
+		if err != nil {
+			lock.Close()
+			cancel()
+			t.Fatal(err)
+		}
+		if err = tryRuntimeLock(other); err == nil {
+			other.Close()
+			lock.Close()
+			cancel()
+			t.Fatal("install lock must exclude another lock")
+		}
+		other.Close()
+		lock.Close()
+		cancel()
 	})
 }
 
@@ -604,7 +692,7 @@ func TestInstallRuntimeWithPayload(t *testing.T) {
 		if err = copyTree(filepath.Join(payload.Dir, bootstrapRuntimeDir), m.runtimeDir(previous.Version)); err != nil {
 			t.Fatal(err)
 		}
-		if err = writeJSON(filepath.Join(m.Root, "runtime.json"), previous); err != nil {
+		if err = writeJSON(m.runtimeManifest(), previous); err != nil {
 			t.Fatal(err)
 		}
 		stubCLIProbe(t, cliProbeFixture{tmpVersion: "1.2.3", destAbsent: true})
@@ -672,7 +760,7 @@ func TestInstallRuntimeWithPayload(t *testing.T) {
 			Binary: "rsrs-runtime-" + target + binaryExtension(), BinaryHash: binaryHash,
 			Compat: Compat{MinCLI: "2.0.0-dev.1", MaxCLI: "*"},
 		}
-		buildJSON, err := json.Marshal(meta)
+		buildJSON, err := fixtureReleaseJSON(t, tree, meta)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -710,7 +798,7 @@ func TestInstallRuntimeWithPayload(t *testing.T) {
 		retainedMeta := meta
 		retainedMeta.RuntimeVersion, retainedMeta.Tag = "2.0.0-dev.10", "v2.0.0-dev.10"
 		retainedMeta.Compat.MinCLI = "2.0.0-dev.2"
-		retainedJSON, err := json.Marshal(retainedMeta)
+		retainedJSON, err := fixtureReleaseJSON(t, tree, retainedMeta)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -777,7 +865,18 @@ func TestInstallRuntimeWithPayload(t *testing.T) {
 			t.Fatal(err)
 		}
 		retained := InstalledRuntime{Version: retainedMeta.RuntimeVersion, SHA256: binaryHash}
-		if err = writeJSON(filepath.Join(m.Root, "runtime.json"), retained); err != nil {
+		retainedProof, err := NormalizeRuntimeMetadata(retainedJSON)
+		if err != nil {
+			t.Fatal(err)
+		}
+		retainedReceipt, err := runtimeReceipt(retainedProof)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err = m.saveRuntimeReceipt(retainedReceipt); err != nil {
+			t.Fatal(err)
+		}
+		if err = writeJSON(m.runtimeManifest(), retainedReceipt); err != nil {
 			t.Fatal(err)
 		}
 		if err = os.Remove(cli); err != nil {
@@ -787,7 +886,7 @@ func TestInstallRuntimeWithPayload(t *testing.T) {
 		ownedEndpoint := newFakeRuntimeServer(t, retainedExe, "").URL
 		m.Endpoint = ownedEndpoint
 		retainedMeta.BinaryHash = strings.Repeat("0", 64)
-		retainedJSON, err = json.Marshal(retainedMeta)
+		retainedJSON, err = fixtureReleaseJSON(t, tree, retainedMeta)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -795,7 +894,7 @@ func TestInstallRuntimeWithPayload(t *testing.T) {
 			t.Fatalf("retained metadata must match its own receipt: %v", err)
 		}
 		retainedMeta.BinaryHash = binaryHash
-		retainedJSON, err = json.Marshal(retainedMeta)
+		retainedJSON, err = fixtureReleaseJSON(t, tree, retainedMeta)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -809,11 +908,11 @@ func TestInstallRuntimeWithPayload(t *testing.T) {
 		// Runtime's own compatibility window permits the repair below.
 		meta.Compat.MinCLI = "2.0.0-dev.2"
 		retainedMeta.Compat.MinCLI = "2.0.0-dev.1"
-		buildJSON, err = json.Marshal(meta)
+		buildJSON, err = fixtureReleaseJSON(t, tree, meta)
 		if err != nil {
 			t.Fatal(err)
 		}
-		retainedJSON, err = json.Marshal(retainedMeta)
+		retainedJSON, err = fixtureReleaseJSON(t, tree, retainedMeta)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -853,7 +952,7 @@ func TestInstallRuntimeWithPayload(t *testing.T) {
 		}
 		stubCLIProbe(t, cliProbeFixture{tmpVersion: "2.0.0-dev.1", destVer: "2.0.0-dev.3"})
 		retainedMeta.Compat.MaxCLI = "2.0.0-dev.2"
-		retainedJSON, err = json.Marshal(retainedMeta)
+		retainedJSON, err = fixtureReleaseJSON(t, tree, retainedMeta)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -876,7 +975,7 @@ func TestInstallRuntimeWithPayload(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			buildJSON, err = json.Marshal(meta)
+			buildJSON, err = fixtureReleaseJSON(t, tree, meta)
 			if err != nil {
 				t.Fatal(err)
 			}

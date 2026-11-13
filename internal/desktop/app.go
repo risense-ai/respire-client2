@@ -272,7 +272,7 @@ func (d *desktop) background() {
 		d.task("连接 Runtime", func() error {
 			err := d.m.Start()
 			if err != nil {
-				if _, readErr := d.m.Installed(); errors.Is(readErr, os.ErrNotExist) {
+				if _, readErr := d.m.Installed(); readErr == nil || errors.Is(readErr, os.ErrNotExist) {
 					ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 					_, _, healthErr := d.m.Health(ctx)
 					cancel()

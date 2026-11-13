@@ -122,7 +122,15 @@ func verifyRuntime(dir, binaryHash string) error {
 		if strings.ContainsAny(file.Path, "\\:") || !filepath.IsLocal(filepath.FromSlash(file.Path)) || !validHash(file.Hash) {
 			return errors.New("unsafe runtime manifest file")
 		}
-		hash, err := fileHash(filepath.Join(dir, filepath.FromSlash(file.Path)))
+		path := filepath.Join(dir, filepath.FromSlash(file.Path))
+		if strings.HasPrefix(file.Path, "core-notices/") {
+			if _, err := os.Lstat(path); errors.Is(err, os.ErrNotExist) {
+				continue
+			} else if err != nil {
+				return err
+			}
+		}
+		hash, err := fileHash(path)
 		if err != nil {
 			return err
 		}
@@ -140,13 +148,20 @@ func verifyRuntime(dir, binaryHash string) error {
 // existing installation untouched. An existing directory for the same version
 // is only verified and reused, never merged.
 func (m *Manager) publishRuntime(meta RuntimeMetadata, fill func(stage string) error) error {
+	receipt, err := runtimeReceipt(meta)
+	if err != nil {
+		return err
+	}
 	dest := m.runtimeDir(meta.RuntimeVersion)
 	if _, err := os.Stat(dest); err == nil {
-		return verifyRuntime(dest, meta.BinaryHash)
+		if err := compactRuntime(dest, receipt); err != nil {
+			return err
+		}
+		return m.saveRuntimeReceipt(receipt)
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
-	versions := filepath.Join(m.Root, "runtime")
+	versions := filepath.Dir(dest)
 	if err := os.MkdirAll(versions, 0700); err != nil {
 		return err
 	}
@@ -162,7 +177,21 @@ func (m *Manager) publishRuntime(meta RuntimeMetadata, fill func(stage string) e
 	if err = verifyRuntime(stage, meta.BinaryHash); err != nil {
 		return err
 	}
-	return os.Rename(stage, dest)
+	clean, err := os.MkdirTemp(versions, ".verified-*")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(clean)
+	if err = copyReleaseTree(stage, clean, receipt); err != nil {
+		return err
+	}
+	if err = os.Rename(clean, dest); err != nil {
+		return err
+	}
+	if err = compactRuntime(dest, receipt); err != nil {
+		return err
+	}
+	return m.saveRuntimeReceipt(receipt)
 }
 
 // stageDownloadRuntime materializes the online release into the staging
@@ -226,8 +255,16 @@ func (m *Manager) installOnlineCLI(ctx context.Context, compat Compat) error {
 }
 
 func (m *Manager) InstallRuntime(automatic bool, restart bool) error {
+	if err := m.migrateRuntime(); err != nil {
+		return err
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
 	defer cancel()
+	lock, err := m.lockRuntime(ctx)
+	if err != nil {
+		return err
+	}
+	defer lock.Close()
 	m.progress("检查 Runtime 发布", 0, 0)
 	previous, prevErr := m.Installed()
 	if prevErr != nil && !errors.Is(prevErr, os.ErrNotExist) {
@@ -241,6 +278,9 @@ func (m *Manager) InstallRuntime(automatic bool, restart bool) error {
 		// Installed clients use release discovery so the bundle cannot pin updates.
 		payload = &embedded
 		meta = embedded.runtimeMetadata()
+		if meta, err = m.provenRuntimeMetadata(ctx, meta); err != nil {
+			return err
+		}
 	} else {
 		// No valid payload (absent, foreign platform, or failed verification):
 		// keep the documented online path so non-DMG builds behave unchanged.
@@ -254,7 +294,7 @@ func (m *Manager) InstallRuntime(automatic bool, restart bool) error {
 	if prevErr == nil && semver.Compare("v"+previous.Version, "v"+meta.RuntimeVersion) >= 0 {
 		// Verify the selected version against its own receipt. A newer
 		// version cannot share the incoming release's binary hash.
-		if verifyErr := verifyRuntime(m.runtimeDir(previous.Version), previous.SHA256); verifyErr == nil {
+		if verifyErr := m.verifyInstalled(previous); verifyErr == nil {
 			if previous.Version != meta.RuntimeVersion {
 				// Bind CLI compatibility to the retained Runtime's published metadata.
 				tag := "v" + previous.Version
@@ -358,7 +398,7 @@ func (m *Manager) InstallRuntime(automatic bool, restart bool) error {
 	// the running instance stays on the old one until the next start.
 	if !restart {
 		next := InstalledRuntime{Version: meta.RuntimeVersion, SHA256: meta.BinaryHash}
-		if err = writeJSON(filepath.Join(m.Root, "runtime.json"), next); err != nil {
+		if err = m.selectRuntime(next); err != nil {
 			return err
 		}
 		return m.finishBootstrapPath(payload)
@@ -368,7 +408,7 @@ func (m *Manager) InstallRuntime(automatic bool, restart bool) error {
 		return err
 	}
 	next := InstalledRuntime{Version: meta.RuntimeVersion, SHA256: meta.BinaryHash}
-	if err = writeJSON(filepath.Join(m.Root, "runtime.json"), next); err != nil {
+	if err = m.selectRuntime(next); err != nil {
 		if prevErr == nil {
 			err = errors.Join(err, m.Start())
 		}
