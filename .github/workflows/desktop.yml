@@ -238,3 +238,21 @@ jobs:
           args=(release create "$CURRENT_TAG" dist/* --repo "$REPOSITORY" --verify-tag --title "$CURRENT_TAG" --notes-file .release-notes.md)
           if [[ "$CURRENT_TAG" == *-* ]]; then args+=(--prerelease); fi
           gh "${args[@]}"
+          if [[ "$CURRENT_TAG" == *-* ]]; then
+            # Existing clients discover DEV updates through the latest stable Release.
+            latest_tag=$(gh release view --repo "$REPOSITORY" --json tagName --jq .tagName)
+            mkdir update-index
+            gh release download "$latest_tag" --repo "$REPOSITORY" --pattern client-updates.json --dir update-index
+            python3 - <<'PY'
+          import json
+          from pathlib import Path
+          path = Path("update-index/client-updates.json")
+          manifest = json.loads(path.read_text(encoding="utf-8"))
+          dev = json.loads(Path("dist/client-updates.json").read_text(encoding="utf-8"))
+          assert manifest["schemaVersion"] == dev["schemaVersion"] == 1
+          assert manifest["stable"]["version"] and dev["dev"]["version"]
+          manifest["dev"] = dev["dev"]
+          path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8", newline="\n")
+          PY
+            gh release upload "$latest_tag" update-index/client-updates.json --repo "$REPOSITORY" --clobber
+          fi
