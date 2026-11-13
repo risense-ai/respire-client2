@@ -38,7 +38,7 @@ func (m *Manager) hostExecutable(ctx context.Context) (string, error) {
 		}
 	} else if err == nil {
 		dir := m.runtimeDir(info.Version)
-		if err = verifyRuntime(dir, info.SHA256); err != nil {
+		if err = m.verifyInstalled(info); err != nil {
 			return "", err
 		}
 		return filepath.Join(dir, runtimeBinary()), nil

@@ -11,7 +11,7 @@ Windows 除便携 EXE 外还提供每用户安装器 `respire-windows-<arch>-set
 ### macOS 说明（DMG 安装）
 
 - DMG 为 ad-hoc 签名且**未经公证**：首次打开可能触发 Gatekeeper 提示。在提示中选择「打开」（或右键 → 打开）即可；该操作不会关闭系统安全机制。除非你自己的策略允许，不要移除 quarantine 属性。
-- 缺失的 CLI 与 Runtime 分别下载到 `~/.rsrs/bin/rsrs` 和 `~/.rsrs/client2/runtime/<版本>/`，并保留已校验的更高版本。
+- 缺失的 CLI 与 Runtime 分别下载到 `~/.rsrs/bin/rsrs` 和 `~/.rsrs/bin/runtime/<版本>/`，并保留已校验的更高版本。
 - 若需在终端使用 CLI，请将 `~/.rsrs/bin` 加入 PATH。桌面包不再写入 shell 配置块。
 - 删除应用不会删除 `~/.rsrs`（记忆、账户、CLI、Runtime），也不会移除 `~/.zprofile` 块。如需彻底清理：删除 `~/.rsrs`，并从 `~/.zprofile` 移除由 `# >>> respire-client2 >>>` / `# <<< respire-client2 <<<` 界定的块。
 
@@ -162,17 +162,17 @@ Start-Process -FilePath (Join-Path $PWD 'dist\respire-windows-amd64.exe') -Windo
 ```text
 preferences.json          自动连接与自动更新偏好
 requests.json             仅写请求 ID/状态；不含参数、密钥或记忆正文
-runtime.json              当前托管版本与可执行文件 SHA-256
-runtime/<version>/        不可变 CLI、core-runtime.json、原生库与声明文件
 webview2/                 WebView2 浏览器配置
 client.log                桌面运行错误
 ```
 
-当 `<root>/client2/runtime.json` 不存在时，客户端也识别 `<root>/bin/rsrs[.exe]` 处的外部可执行文件。它会校验可执行文件架构并读取 `--version`；不会接管该外部 CLI 的归属或自动更新它。
+CLI 与 Runtime 共用 `<root>/bin/`：CLI 位于 `bin/rsrs[.exe]`，Runtime 位于 `bin/runtime/<version>/`，完整发布凭据和当前版本位于 `bin/runtime.json`。Client2 与 CLI 各自独立安装和维护 Runtime，不通过对方执行安装；两边使用相同的原生文件锁 `bin/runtime/.install.lock` 和完整发布校验。首次启动会校验旧的根目录或 Client2 安装并复制到共享位置，旧文件保留用于恢复，账户数据不迁移。已有的外部 CLI 仍按原有规则校验架构、读取版本并保持安装归属。
+
+Runtime 版本目录保留可执行文件、必要的动态库和 `core-runtime.json`。安装时不保留 `core-notices`，已有共享安装中的该目录也会删除；可执行文件、动态库和清单仍须通过校验。
 
 `RSRS_RPC_PORT` 覆盖 `15169`。RPC 保持 `127.0.0.1` 上的 HTTP；客户端不更改 Runtime 的绑定地址、认证策略或 Origin 检查。已安装的 CLI 宿主动作会收到指向其完整版本目录的 `RSRS_BIN_DIR`，避免 CLI 脱离配套库单独落地 EXE。
 
-已在运行的兼容 Runtime 会被直接附加而不会替换。自动更新只停止可执行文件位于本客户端托管目录内的 Runtime。由其他 CLI 启动的 Runtime 仍归该 CLI 所有；安装托管 Runtime 前请先显式停止它。其他宿主 CLI 仍可按其各自的版本策略接管共享的 Runtime 端点。本客户端不会修改那些 CLI，也不承诺独占 15169 端口。
+已在共享目录运行的兼容 Runtime 会被直接复用。更新使用共用的安装锁，并保留对系统监督器归属的检查。共享目录及已识别的旧目录之外的 Runtime 不会被替换。客户端不承诺独占 15169 端口。
 
 登录启动通过 Wails 注册当前应用：Windows 按用户登录项、macOS 登录项/LaunchAgent、Linux XDG autostart。移动或删除应用会使注册失效；移动后请关闭再重新开启该开关。窗口关闭按钮隐藏窗口。托盘的退出动作只退出桌面。Linux 托盘需要桌面环境支持 StatusNotifierItem；部分 GNOME 安装需要 AppIndicator 扩展。
 

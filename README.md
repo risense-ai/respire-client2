@@ -162,17 +162,17 @@ The installation root is `~/.rsrs`, or the existing `RSRS_DATA_DIR` override. Cl
 ```text
 preferences.json          Auto-connect and auto-update preferences
 requests.json             Write request IDs/status only; no arguments, keys or memory bodies
-runtime.json              Current managed version and executable SHA-256
-runtime/<version>/        Immutable CLI, core-runtime.json, native libraries and notices
 webview2/                 WebView2 browser profile
 client.log                Desktop operational errors
 ```
 
-When `<root>/client2/runtime.json` is absent, the client also recognizes an external executable at `<root>/bin/rsrs[.exe]`. It validates the executable architecture and reads `--version`; it does not claim ownership or auto-update that external CLI.
+CLI and Runtime share `<root>/bin/`: `bin/rsrs[.exe]`, `bin/runtime/<version>/`, and `bin/runtime.json`. Client2 and CLI install and maintain Runtime independently; neither invokes the other installer. Both use the same native file lock at `bin/runtime/.install.lock`, complete schema-2 release proof, and atomic version selection. First host startup verifies and copies old root-level or Client2 installations into this shared layout while retaining original files for recovery. Account data is not relocated. External CLI architecture, version and installation ownership retain their existing checks.
+
+Managed Runtime versions retain the executable, required libraries and `core-runtime.json`. Installers omit `core-notices` and remove it from existing shared installations; executable, library and manifest verification remain required.
 
 `RSRS_RPC_PORT` overrides `15169`. RPC remains HTTP on `127.0.0.1`; the client never changes Runtime bind addresses, authentication policy or Origin checks. Installed CLI host actions receive `RSRS_BIN_DIR` pointing at their complete version directory so that the CLI does not materialize an EXE without its matching libraries.
 
-An already running compatible Runtime is attached without replacement. Automatic updates only stop a Runtime whose executable is inside this client's managed directory. A Runtime started by another CLI remains under that CLI's ownership; explicitly stop it before installing a managed Runtime. Other host CLIs can still take over the shared Runtime endpoint according to their own version policy. This client does not modify those CLIs or promise exclusive ownership of port 15169.
+An already running compatible Runtime in the shared layout is reused. Updates use the shared installation lock and preserve supervisor ownership checks. A Runtime outside the shared or recognized legacy directories is not replaced. The client does not promise exclusive ownership of port 15169.
 
 Login startup registers the current application through Wails: Windows per-user login, macOS login item/LaunchAgent, or Linux XDG autostart. Moving or deleting the application invalidates the registration; disable and re-enable the switch after moving it. The window close button hides the window. The tray's exit action exits only the desktop. Linux trays require desktop support for StatusNotifierItem; some GNOME installations need an AppIndicator extension.
 

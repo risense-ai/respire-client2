@@ -46,6 +46,7 @@ type Compat struct {
 // alias shape (triple / sha256) mapped onto the same fields, so the online
 // installer and the DMG bootstrap staging consume one representation.
 type RuntimeMetadata struct {
+	ProofJSON      string `json:"-"`
 	Schema         int    `json:"schema_version"`
 	RuntimeVersion string `json:"runtime_version"`
 	Tag            string `json:"tag"`
@@ -135,7 +136,8 @@ func NormalizeRuntimeMetadata(b []byte) (RuntimeMetadata, error) {
 		return RuntimeMetadata{}, err
 	}
 	meta := RuntimeMetadata{
-		Schema: raw.Schema, RuntimeVersion: raw.RuntimeVersion, Tag: raw.Tag,
+		ProofJSON: string(b),
+		Schema:    raw.Schema, RuntimeVersion: raw.RuntimeVersion, Tag: raw.Tag,
 		Binary: raw.Binary, BinaryHash: raw.BinaryHash, Compat: raw.Compat,
 	}
 	switch raw.Schema {

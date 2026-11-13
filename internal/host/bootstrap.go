@@ -156,6 +156,11 @@ func parseBootstrapManifest(b []byte, manifest *bootstrapManifest) error {
 // the install path consumes; the payload carries no archive identity because
 // it is already expanded.
 func (p *bootstrapPayload) runtimeMetadata() RuntimeMetadata {
+	if b, err := os.ReadFile(filepath.Join(p.Dir, "runtime-build-"+p.Manifest.Target+".json")); err == nil {
+		if meta, err := NormalizeRuntimeMetadata(b); err == nil && meta.RuntimeVersion == p.Manifest.Runtime.Version && meta.BinaryHash == p.Manifest.Runtime.SHA256 {
+			return meta
+		}
+	}
 	return RuntimeMetadata{
 		RuntimeVersion: p.Manifest.Runtime.Version,
 		Tag:            "v" + p.Manifest.Runtime.Version,
