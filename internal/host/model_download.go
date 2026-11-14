@@ -65,12 +65,17 @@ func (m *Manager) modelDirFor(model string) (string, modelDefinition, error) {
 }
 
 // modelClient streams multi-hundred-MiB chunks: no overall deadline (the
-// request context governs), redirects stay HTTPS-only.
+// request context governs). It shares the manager's outbound transport, so
+// environment and system proxy settings apply to model downloads too.
 func (m *Manager) modelClient() *http.Client {
 	if m.modelHTTPClient != nil {
 		return m.modelHTTPClient
 	}
-	return &http.Client{Transport: &http.Transport{Proxy: nil}}
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	if m.proxy != nil {
+		transport.Proxy = m.proxy.proxyFunc(func() string { return m.Preferences().ProxyMode })
+	}
+	return &http.Client{Transport: transport}
 }
 
 func modelOrigins(mirror string) []string {

@@ -15,7 +15,7 @@ Windows 除便携 EXE 外还提供每用户安装器 `respire-windows-<arch>-set
 - 若需在终端使用 CLI，请将 `~/.rsrs/bin` 加入 PATH。桌面包不再写入 shell 配置块。
 - 删除应用不会删除 `~/.rsrs`（记忆、账户、CLI、Runtime），也不会移除 `~/.zprofile` 块。如需彻底清理：删除 `~/.rsrs`，并从 `~/.zprofile` 移除由 `# >>> respire-client2 >>>` / `# <<< respire-client2 <<<` 界定的块。
 
-架构、原生库前置条件，以及桌面构建与 CLI 可用性的差异见[平台支持](docs/platforms.md)。缺失的 CLI/Core 发布目标记录在 [respire-cli#163](https://github.com/risense-ai/respire-cli/issues/163)。
+架构、原生库前置条件、代理处理，以及桌面构建与 CLI 可用性的差异见[平台支持](docs/platforms.md)。缺失的 CLI/Core 发布目标记录在 [respire-cli#163](https://github.com/risense-ai/respire-cli/issues/163)。
 
 ## 界面截图
 

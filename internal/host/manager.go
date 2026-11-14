@@ -21,6 +21,9 @@ type Preferences struct {
 	Layout         string `json:"layout"`
 	Theme          string `json:"theme"`
 	Language       string `json:"language"`
+	// ProxyMode is "system" (environment variables, then the OS proxy) or
+	// "direct" (never proxy). Empty in older files and migrated to system.
+	ProxyMode string `json:"proxyMode"`
 	// Per-component update settings; AutoUpdate above is the legacy master
 	// switch kept only to migrate older preference files.
 	ClientUpdateInterval  string `json:"clientUpdateInterval"`
@@ -67,6 +70,7 @@ func defaultPreferences() Preferences {
 	// stable runtime is published.
 	return Preferences{
 		AutoRuntime: true, AutoUpdate: true, RuntimeChannel: "dev", ClientChannel: "stable", Layout: "sidebar", Theme: "system", Language: "",
+		ProxyMode:            ProxyModeSystem,
 		ClientUpdateInterval: "6h", RuntimeUpdateInterval: "6h", ClientAutoUpdate: true, RuntimeAutoUpdate: true,
 		ClientAutoRestart: true, RuntimeAutoRestart: true,
 		OnboardingVersion:   1,
@@ -123,6 +127,12 @@ func MigratePreferences(p Preferences, stored map[string]json.RawMessage) Prefer
 	if !updateIntervalValues[p.RuntimeUpdateInterval] {
 		p.RuntimeUpdateInterval = "6h"
 	}
+	// Preference files written before proxy support keep the previous
+	// behaviour available: an unset mode means "follow the environment and
+	// the system proxy".
+	if p.ProxyMode == "" {
+		p.ProxyMode = ProxyModeSystem
+	}
 	if p.SidebarWidth < 0 {
 		p.SidebarWidth = 0
 	}
@@ -141,6 +151,9 @@ func (p Preferences) validate() error {
 	}
 	if p.Layout != "sidebar" && p.Layout != "compact" {
 		return errors.New("布局必须是 sidebar 或 compact")
+	}
+	if !proxyModes[p.ProxyMode] {
+		return errors.New("代理模式必须是 system 或 direct")
 	}
 	for _, channel := range []string{p.RuntimeChannel, p.ClientChannel} {
 		if channel != "stable" && channel != "dev" {
@@ -194,6 +207,9 @@ type Manager struct {
 	taskCancel      context.CancelFunc
 	taskPause       bool
 	jobs            map[string]*Operation
+	// proxy resolves environment and system proxy settings for outbound
+	// requests. localClient deliberately bypasses it (loopback only).
+	proxy *proxyResolver
 }
 
 func New() (*Manager, error) {
@@ -218,18 +234,28 @@ func New() (*Manager, error) {
 		return nil, errors.New("RSRS_RPC_PORT must be a valid TCP port")
 	}
 	m := &Manager{Root: filepath.Join(dataRoot, "client2"), DataRoot: dataRoot, Endpoint: "http://127.0.0.1:" + port,
-		localClient:     &http.Client{Timeout: 30 * time.Second, Transport: &http.Transport{Proxy: nil}, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }},
-		prefs:           defaultPreferences(),
-		modelHTTPClient: &http.Client{Transport: &http.Transport{Proxy: nil}}, task: TaskState{Stage: "就绪"},
-		HTTPClient: &http.Client{Timeout: 10 * time.Minute, CheckRedirect: func(req *http.Request, via []*http.Request) error {
-			if len(via) >= 5 {
-				return errors.New("too many redirects")
-			}
-			if req.URL.Scheme != "https" {
-				return errors.New("download redirects must use HTTPS")
-			}
-			return nil
-		}}}
+		localClient: &http.Client{Timeout: 30 * time.Second, Transport: &http.Transport{Proxy: nil}, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }},
+		prefs:       defaultPreferences(), task: TaskState{Stage: "就绪"},
+		proxy: newProxyResolver()}
+	proxyFor := m.proxy.proxyFunc(func() string { return m.Preferences().ProxyMode })
+	// Both outbound clients share the resolver: updates, release metadata and
+	// model weights follow the same environment/system proxy. The defaults
+	// (dial and TLS timeouts, HTTP/2) are kept from http.DefaultTransport;
+	// downloads have no overall deadline (the request context governs) and
+	// HTTPS-only redirects.
+	outbound := http.DefaultTransport.(*http.Transport).Clone()
+	outbound.Proxy = proxyFor
+	m.HTTPClient = &http.Client{Timeout: 10 * time.Minute, Transport: outbound, CheckRedirect: func(req *http.Request, via []*http.Request) error {
+		if len(via) >= 5 {
+			return errors.New("too many redirects")
+		}
+		if req.URL.Scheme != "https" {
+			return errors.New("download redirects must use HTTPS")
+		}
+		return nil
+	}}
+	modelTransport := outbound.Clone()
+	m.modelHTTPClient = &http.Client{Transport: modelTransport}
 	if err := os.MkdirAll(m.Root, 0700); err != nil {
 		return nil, err
 	}

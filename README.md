@@ -15,7 +15,7 @@ Windows offers a per-user `respire-windows-<arch>-setup.exe` installer alongside
 - To use the downloaded CLI from a terminal, add `~/.rsrs/bin` to your PATH. A desktop-only package does not install a shell profile block.
 - Deleting the app does not delete `~/.rsrs` (memory, accounts, CLI, Runtime) or the `~/.zprofile` block. To remove everything manually, delete `~/.rsrs` and remove the block delimited by `# >>> respire-client2 >>>` / `# <<< respire-client2 <<<` from `~/.zprofile`.
 
-See [platform support](docs/platforms.md) for architectures, native-library prerequisites and the distinction between desktop builds and matching CLI availability. Missing CLI/Core release targets are tracked in [respire-cli#163](https://github.com/risense-ai/respire-cli/issues/163).
+See [platform support](docs/platforms.md) for architectures, native-library prerequisites, proxy handling and the distinction between desktop builds and matching CLI availability. Missing CLI/Core release targets are tracked in [respire-cli#163](https://github.com/risense-ai/respire-cli/issues/163).
 
 ## Current scope
 
