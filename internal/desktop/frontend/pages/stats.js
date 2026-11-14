@@ -1,5 +1,4 @@
 import { $, h, number, panel, metric, execute } from "../ui/core.js";
-import { heading } from "./overview.js";
 
 function rate(hits, recalls) {
   if (!recalls) return "今日还没有召回";
@@ -15,11 +14,7 @@ function localDay() {
 
 export function stats(root, ctx) {
   root.innerHTML =
-    heading(
-      "本地召回统计",
-      "只统计这台机器上的召回。成功命中是一次召回至少返回一条候选，不上传。",
-      `<button data-reload>刷新</button>`,
-    ) +
+    `<div class="page-heading"><div><h2>本地召回统计</h2><p>只统计这台机器上的召回。成功命中是一次召回至少返回一条候选，不上传。</p></div><div class="heading-actions"><button data-reload>刷新</button></div></div>` +
     `<div data-body><div class="panel empty">正在读取本机召回日志。</div></div>`;
   async function load() {
     const body = $("[data-body]", root);
@@ -61,14 +56,21 @@ export function stats(root, ctx) {
                 .join("")}</tbody></table></div>`
             : `<div class="panel-body"><p class="hint">还没有召回记录。正常使用后，这里会按本机日期累计。</p></div>`,
         );
-      const badge = document.querySelector("#nav-stats-count");
-      if (badge) badge.textContent = today.recalls ? rate(today.hits, today.recalls) : "";
     } catch (error) {
       if (!root.isConnected) return;
       body.innerHTML = `<div class="panel empty">${h(error.message || "读取失败")}</div>`;
     }
   }
   $("[data-reload]", root).onclick = () => load();
+  let connected = Boolean(ctx.desktop?.connected);
   load();
-  return { dispose() {} };
+  return {
+    refresh: load,
+    update() {
+      const next = Boolean(ctx.desktop?.connected);
+      if (next === connected) return;
+      connected = next;
+      load();
+    },
+  };
 }

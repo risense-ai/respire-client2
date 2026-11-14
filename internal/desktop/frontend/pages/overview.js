@@ -19,6 +19,8 @@ import {
   readProfileState,
 } from "./model-kit.js";
 
+import { stats } from "./stats.js";
+
 const phases = {
   idle: "空闲",
   running: "正在同步",
@@ -39,12 +41,16 @@ export function overview(root, ctx) {
   // Polls update status around these controls without replacing focused buttons.
   root.innerHTML =
     '<div data-overview-summary></div>' +
+    '<section class="section-gap" data-overview-stats></section>' +
+    '<div class="section-gap" data-overview-details></div>' +
     panel(
       "Runtime",
       '<div data-runtime-status></div><div class="panel-body"><div class="actions"><button data-host="start">启动 Runtime</button><button data-host="stop">停止 Runtime</button><button data-go="updates">安装与更新</button></div><div data-runtime-error></div></div>',
     ) +
     '<div data-overview-onboarding></div>';
   const summaryRoot = $("[data-overview-summary]", root);
+  const statsView = stats($("[data-overview-stats]", root), ctx);
+  const detailsRoot = $("[data-overview-details]", root);
   const runtimeStatus = $("[data-runtime-status]", root);
   const runtimeError = $("[data-runtime-error]", root);
   const startButton = $('[data-host="start"]', root);
@@ -67,6 +73,7 @@ export function overview(root, ctx) {
     if (root.isConnected) update();
   }
   function update() {
+    statsView.update();
     const state = ctx.desktop || {},
       s = ctx.status?.summary || {},
       health = state.health || {},
@@ -108,8 +115,8 @@ export function overview(root, ctx) {
         "本机数据、云端同步、模型与索引，集中查看。",
         `<button data-go="memories" class="primary">查看记忆</button>`,
       ) +
-      `<div class="metrics">${metric("本机记忆", number(s.local_alive), `总计 ${number(s.local_total)} 条，包含已删除记录`)}${metric("云端记忆", number(sync.remote_alive), s.remote_configured ? "已配置云端" : "尚未连接云端")}${metric("待同步", number(sync.pending), `${number(sync.conflicts)} 项冲突`)}${metric("索引状态", phase(index.state), index.error || "")}</div>` +
-      `<div class="grid">${panel(
+      `<div class="metrics">${metric("本机记忆", number(s.local_alive), `总计 ${number(s.local_total)} 条，包含已删除记录`)}${metric("云端记忆", number(sync.remote_alive), s.remote_configured ? "已配置云端" : "尚未连接云端")}${metric("待同步", number(sync.pending), `${number(sync.conflicts)} 项冲突`)}${metric("索引状态", phase(index.state), index.error || "")}</div>`;
+    detailsRoot.innerHTML = `<div class="grid">${panel(
         "同步",
         pairs([
           ["状态", phase(sync.phase)],
@@ -268,5 +275,11 @@ export function overview(root, ctx) {
   });
   update();
   loadProfileSelection();
-  return { update, refresh: update };
+  return {
+    update,
+    refresh() {
+      update();
+      return statsView.refresh();
+    },
+  };
 }
