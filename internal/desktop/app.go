@@ -271,6 +271,9 @@ func updateInterval(value string) time.Duration {
 func (d *desktop) background() {
 	if d.m.Preferences().AutoRuntime {
 		d.task("连接 Runtime", func() error {
+			if err := d.m.MigrateRuntime(); err != nil {
+				return err
+			}
 			prefs := d.m.Preferences()
 			if info, err := d.m.Installed(); err == nil && prefs.RuntimeAutoUpdate && semver.Compare("v"+info.Version, "v2.0.0-dev.16") < 0 {
 				return d.m.InstallRuntime(false, prefs.RuntimeAutoRestart)
