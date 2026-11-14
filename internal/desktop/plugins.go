@@ -15,6 +15,7 @@ type pluginCommand struct {
 	name string
 	args []string
 	dir  string
+	env  []string
 }
 
 type pluginOutput struct {
@@ -137,7 +138,7 @@ func (d *desktop) ensurePlugin(ctx context.Context, id string, mirror bool) (str
 		return "", false, fmt.Errorf("未知插件")
 	}
 	path := d.pluginPath(id)
-	if err := updatePluginSource(ctx, path, pluginRepo(id, mirror)); err != nil {
+	if err := d.updatePluginSource(ctx, path, pluginRepo(id, mirror)); err != nil {
 		return "", false, err
 	}
 	if !pluginAuto(id) {
@@ -149,6 +150,7 @@ func (d *desktop) ensurePlugin(ctx context.Context, id string, mirror bool) (str
 	}
 	var out pluginOutput
 	for _, command := range commands {
+		command.env = d.pluginEnv()
 		if err = runPluginCommand(ctx, command, &out); err != nil {
 			return "", false, err
 		}
@@ -209,6 +211,9 @@ func runPluginCommand(ctx context.Context, command pluginCommand, out *pluginOut
 		cmd = exec.CommandContext(ctx, exe, command.args...)
 	}
 	cmd.Dir = command.dir
+	if len(command.env) > 0 {
+		cmd.Env = command.env
+	}
 	if out != nil {
 		cmd.Stdout = out
 		cmd.Stderr = out
@@ -230,15 +235,24 @@ func pluginSourceExists(path string) bool {
 	return err == nil
 }
 
-func updatePluginSource(ctx context.Context, path, repo string) error {
+func (d *desktop) updatePluginSource(ctx context.Context, path, repo string) error {
+	env := d.pluginEnv()
 	if pluginSourceExists(path) {
-		if err := runPluginCommand(ctx, pluginCommand{name: "git", args: []string{"fetch", "--depth", "1", "origin", "main"}, dir: path}, nil); err != nil {
+		if err := runPluginCommand(ctx, pluginCommand{name: "git", args: []string{"fetch", "--depth", "1", "origin", "main"}, dir: path, env: env}, nil); err != nil {
 			return fmt.Errorf("更新插件源失败: %w", err)
 		}
-		if err := runPluginCommand(ctx, pluginCommand{name: "git", args: []string{"merge", "--ff-only", "FETCH_HEAD"}, dir: path}, nil); err != nil {
+		if err := runPluginCommand(ctx, pluginCommand{name: "git", args: []string{"merge", "--ff-only", "FETCH_HEAD"}, dir: path, env: env}, nil); err != nil {
 			return fmt.Errorf("更新插件源失败，请检查目录是否被本机修改: %w", err)
 		}
 		return nil
 	}
-	return runPluginCommand(ctx, pluginCommand{name: "git", args: []string{"clone", "--depth", "1", "--branch", "main", repo, path}}, nil)
+	return runPluginCommand(ctx, pluginCommand{name: "git", args: []string{"clone", "--depth", "1", "--branch", "main", repo, path}, env: env}, nil)
+}
+
+// pluginEnv gives helper processes (git clones, install scripts) the proxy
+// the client resolved from the environment or the operating system. Without
+// it, a GUI launch has no proxy variables and plugin downloads bypass the
+// proxy the user configured in System Settings.
+func (d *desktop) pluginEnv() []string {
+	return d.m.ProxyEnv(os.Environ())
 }

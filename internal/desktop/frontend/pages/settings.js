@@ -20,6 +20,7 @@ import {
 import { heading } from "./overview.js";
 import { typographyPanel } from "../ui/typography.js";
 import { storagePanel } from "./storage.js";
+import { proxyRows } from "../ui/proxy.js";
 import { currentLanguage } from "../ui/i18n.js";
 
 function setting(label, description, control) {
@@ -60,6 +61,14 @@ export function settings(root, ctx) {
           "没有可连接的 Runtime 时启动客户端管理的版本。自动安装与更新设置在更新页。",
           '<input data-pref="autoRuntime" type="checkbox" aria-label="自动连接 Runtime">',
         ),
+    ) +
+    panel(
+      "网络",
+      setting(
+        "代理",
+        "跟随系统：先读 HTTP_PROXY/HTTPS_PROXY，再读系统代理设置；模型下载、更新与插件安装同样生效。直连：全部忽略。",
+        '<select data-pref="proxyMode"><option value="system">跟随系统</option><option value="direct">直连</option></select>',
+      ) + `<div class="panel-body" data-proxy></div>`,
     ) +
     panel(
       "Runtime 工作方式",
@@ -106,6 +115,7 @@ export function settings(root, ctx) {
           [control.dataset.pref]:
             control.type === "checkbox" ? control.checked : control.value,
         });
+        if (control.dataset.pref === "proxyMode") await ctx.refresh();
         notify("设置已保存");
       });
     if (control.hasAttribute("data-autostart"))
@@ -227,6 +237,8 @@ export function settings(root, ctx) {
       ["当前版本", state.version || "—"],
       ["平台", state.platform || "—"],
     ]);
+    const proxy = state.proxy || {};
+    $("[data-proxy]", root).innerHTML = pairs(proxyRows(proxy));
   }
   typographyPanel(root);
   storagePanel(root, ctx);

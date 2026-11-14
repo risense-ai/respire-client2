@@ -55,3 +55,16 @@ Desktop and CLI releases are separate. As inspected on 2026-10-29:
 The [1.0.18 CLI release](https://github.com/risense-ai/respire-cli/releases/tag/v1.0.18) includes complete Windows arm64 and Linux arm64 packages in Stable. macOS amd64 still requires a matching CLI/Core release. Deferred x86/MIPS/LoongArch64 packages are tracked as later work in [CLI issue #163](https://github.com/risense-ai/respire-cli/issues/163), alongside the release contract and acceptance requirements.
 
 Until then, the desktop reports the missing target and can connect to an already running compatible local Runtime. It never downloads another architecture to hide the gap. RPC remains loopback-only; this client does not add remote-Runtime access.
+
+## Outbound network and proxies
+
+Every outbound request (update manifests, GitHub release metadata and assets, model weights, and the `git` helper used for plugin source checkout) resolves its proxy the same way:
+
+1. `HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY`, plus lowercase spellings, and `ALL_PROXY` as a fallback for a missing scheme. Any of these present means the environment wins, which keeps terminal and CI launches explicit.
+2. Otherwise the operating system proxy: `scutil --proxy` on macOS (System Settings → Network → Proxies, including its bypass list) and the per-user `Internet Settings` registry key on Windows (`ProxyEnable`, `ProxyServer`, `ProxyOverride`). Linux has no portable system-proxy API, so it stops at step 1; use the environment variables there.
+3. Loopback, `localhost` and `NO_PROXY` / `ProxyOverride` entries never use a proxy. A PAC (`ProxyAutoConfig`) setting is not evaluated: the client stays direct and says so in Settings → Network.
+
+The `proxyMode` preference switches between `system` (steps 1–2) and `direct` (no proxy at all). Settings → Network shows the active source, proxy addresses and bypass list. Proxy URLs are reported without embedded credentials. The `--headless proxy` action prints the same information for diagnostics.
+
+The Runtime and CLI child processes are launched with the inherited environment, so their own HTTP stack keeps reading the environment variables it already understands; the desktop does not rewrite their configuration.
+
