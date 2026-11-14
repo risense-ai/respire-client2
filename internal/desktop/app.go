@@ -18,6 +18,7 @@ import (
 	"github.com/wailsapp/wails/v3/pkg/events"
 	"github.com/wailsapp/wails/v3/pkg/services/notifications"
 	"github.com/wailsapp/wails/v3/pkg/updater"
+	"golang.org/x/mod/semver"
 	"respire-client2/internal/host"
 )
 
@@ -270,6 +271,10 @@ func updateInterval(value string) time.Duration {
 func (d *desktop) background() {
 	if d.m.Preferences().AutoRuntime {
 		d.task("连接 Runtime", func() error {
+			prefs := d.m.Preferences()
+			if info, err := d.m.Installed(); err == nil && prefs.RuntimeAutoUpdate && semver.Compare("v"+info.Version, "v2.0.0-dev.16") < 0 {
+				return d.m.InstallRuntime(false, prefs.RuntimeAutoRestart)
+			}
 			err := d.m.Start()
 			if err != nil {
 				if _, readErr := d.m.Installed(); readErr == nil || errors.Is(readErr, os.ErrNotExist) {
