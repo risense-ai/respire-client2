@@ -252,7 +252,7 @@ func (m *Manager) installOnlineCLI(ctx context.Context, compat Compat) error {
 }
 
 func (m *Manager) InstallRuntime(automatic bool, restart bool) error {
-	if err := m.migrateRuntime(); err != nil {
+	if err := m.MigrateRuntime(); err != nil {
 		return err
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)

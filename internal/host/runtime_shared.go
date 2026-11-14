@@ -303,7 +303,8 @@ func (m *Manager) provenRuntimeMetadata(ctx context.Context, meta RuntimeMetadat
 	return proven, err
 }
 
-func (m *Manager) migrateRuntime() error {
+// MigrateRuntime verifies legacy installations before shared startup version checks.
+func (m *Manager) MigrateRuntime() error {
 	if _, err := os.Stat(m.runtimeManifest()); err == nil {
 		return nil
 	} else if !errors.Is(err, os.ErrNotExist) {

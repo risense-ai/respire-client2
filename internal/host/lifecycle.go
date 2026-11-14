@@ -72,7 +72,7 @@ func runRuntimeCommand(ctx context.Context, executable string, args ...string) e
 }
 
 func (m *Manager) Start() error {
-	if err := m.migrateRuntime(); err != nil {
+	if err := m.MigrateRuntime(); err != nil {
 		return err
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)

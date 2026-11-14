@@ -550,7 +550,7 @@ func TestPublishRuntimeStagingAndPromotion(t *testing.T) {
 		if err = writeJSON(filepath.Join(m.Root, "runtime.json"), receipt); err != nil {
 			t.Fatal(err)
 		}
-		if err = m.migrateRuntime(); err != nil {
+		if err = m.MigrateRuntime(); err != nil {
 			t.Fatal(err)
 		}
 		if err = m.verifyInstalled(InstalledRuntime{Version: meta.RuntimeVersion, SHA256: meta.BinaryHash}); err != nil {
@@ -559,7 +559,7 @@ func TestPublishRuntimeStagingAndPromotion(t *testing.T) {
 		if _, err = os.Stat(filepath.Join(legacy, runtimeBinary())); err != nil {
 			t.Fatal("migration removed the old installation")
 		}
-		if err = m.migrateRuntime(); err != nil {
+		if err = m.MigrateRuntime(); err != nil {
 			t.Fatal(err)
 		}
 		ctx, cancel := context.WithCancel(context.Background())
