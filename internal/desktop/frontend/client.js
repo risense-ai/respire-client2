@@ -43,6 +43,7 @@ const definitions = {
   operations: ["操作记录", operations],
   diagnostics: ["诊断", diagnostics],
 };
+const settingsPages = ["settings", "updates", "operations", "diagnostics"];
 let current,
   view,
   refreshing = false;
@@ -129,9 +130,28 @@ function route() {
   root.className = "view-page";
   $("#view").replaceChildren(root);
   $("#breadcrumb").textContent = definitions[page][0];
+  const inSettings = settingsPages.includes(page);
+  if (inSettings) {
+    const navigation = document.createElement("div");
+    navigation.className = "tabs";
+    navigation.setAttribute("role", "navigation");
+    navigation.setAttribute("aria-label", "设置");
+    settingsPages.forEach((key) => {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.textContent = definitions[key][0];
+      button.classList.toggle("active", key === page);
+      if (key === page) button.setAttribute("aria-current", "page");
+      button.addEventListener("click", () => navigate(key));
+      navigation.append(button);
+    });
+    root.before(navigation);
+  }
   all("nav [data-page]").forEach((button) => {
-    button.classList.toggle("active", button.dataset.page === page);
-    if (button.dataset.page === page)
+    const active = button.dataset.page === page ||
+      (button.dataset.page === "settings" && inSettings);
+    button.classList.toggle("active", active);
+    if (active)
       button.setAttribute("aria-current", "page");
     else button.removeAttribute("aria-current");
   });
