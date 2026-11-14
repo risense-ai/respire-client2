@@ -24,7 +24,7 @@ jobs:
           EVENT: ${{ github.event_name }}
         run: |
           if [[ "$REF_TYPE" == 'tag' || "$EVENT" == 'workflow_dispatch' ]]; then
-            echo 'matrix={"include":[{"os":"windows","arch":"amd64","runner":"windows-latest"},{"os":"windows","arch":"arm64","runner":"windows-11-arm"},{"os":"darwin","arch":"amd64","runner":"macos-15"},{"os":"darwin","arch":"arm64","runner":"macos-15"},{"os":"linux","arch":"amd64","runner":"ubuntu-22.04"},{"os":"linux","arch":"arm64","runner":"ubuntu-22.04-arm"}]}' >> "$GITHUB_OUTPUT"
+            echo 'matrix={"include":[{"os":"windows","arch":"amd64","runner":"windows-latest"},{"os":"windows","arch":"arm64","runner":"windows-11-arm"},{"os":"darwin","arch":"amd64","runner":"macos-15-intel"},{"os":"darwin","arch":"arm64","runner":"macos-15"},{"os":"linux","arch":"amd64","runner":"ubuntu-22.04"},{"os":"linux","arch":"arm64","runner":"ubuntu-22.04-arm"}]}' >> "$GITHUB_OUTPUT"
           else
             echo 'matrix={"include":[{"os":"windows","arch":"amd64","runner":"windows-latest"},{"os":"linux","arch":"amd64","runner":"ubuntu-22.04"}]}' >> "$GITHUB_OUTPUT"
           fi
@@ -212,14 +212,14 @@ jobs:
         run: |
           set -euo pipefail
           mkdir dist
-          find artifacts -mindepth 2 -maxdepth 2 ! -path 'artifacts/respire-darwin-amd64/*' -name SHA256SUMS -exec cat {} + | sort > dist/SHA256SUMS
-          find artifacts -mindepth 2 -maxdepth 2 ! -path 'artifacts/respire-darwin-amd64/*' -name 'respire-*' -type f -exec cp {} dist/ \;
+          find artifacts -mindepth 2 -maxdepth 2 -name SHA256SUMS -exec cat {} + | sort > dist/SHA256SUMS
+          find artifacts -mindepth 2 -maxdepth 2 -name 'respire-*' -type f -exec cp {} dist/ \;
           cp artifacts/respire-windows-amd64/LICENSE.txt dist/
           cp artifacts/respire-windows-amd64/THIRD_PARTY_NOTICES.txt dist/
           cd dist
           sha256sum --check SHA256SUMS
-          # Five application update assets, two Windows installers and one DMG.
-          test "$(wc -l < SHA256SUMS)" -eq 8
+          # Six application update assets, two Windows installers and one DMG.
+          test "$(wc -l < SHA256SUMS)" -eq 9
       - name: Generate release notes
         shell: bash
         env:
@@ -227,7 +227,7 @@ jobs:
         run: bash scripts/release-notes.sh "$GITHUB_REF_NAME" .release-notes.md
       - name: Generate update manifest
         shell: bash
-        run: python3 scripts/update-manifest.py "$GITHUB_REF_NAME" dist .release-notes.md dist/client-updates.json 5
+        run: python3 scripts/update-manifest.py "$GITHUB_REF_NAME" dist .release-notes.md dist/client-updates.json 6
       - name: Publish tagged release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

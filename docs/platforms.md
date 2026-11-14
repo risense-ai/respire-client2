@@ -10,6 +10,8 @@ The first release targets x64 and ARM64 on Windows, macOS and Linux. Artifact ar
 | macOS | amd64, arm64 | macOS runner with Xcode | `.zip` containing one `Respire.app`; plus `respire-darwin-arm64.dmg`, the Apple Silicon desktop installer |
 | Linux | amd64, arm64 | Native Ubuntu 22.04 runners | `.tar.gz` containing one `respire` |
 
+The Intel macOS job uses `macos-15-intel` and runs the existing executable-version and headless-font checks. Its ZIP is included in release checksums and the six-platform update manifest. Apple Silicon runs the same version/font checks plus a DMG copy/version check, without visible-GUI acceptance. This restoration follows those existing macOS release checks; it does not add a GUI release gate or claim GUI acceptance. Verification of matching published CLI and Runtime installation remains a separate acceptance item.
+
 The workflow is the source of build status. A green build verifies compilation and packaging; it does not verify every desktop environment or CPU. Windows amd64 has local interactive verification. Non-Windows UI, tray, login integration and self-update require native acceptance before a production-support claim.
 
 ## Windows installer
