@@ -20,6 +20,8 @@ type HealthInfo struct {
 	DataDir          string `json:"data_dir"`
 	ManagedID        string `json:"managed_id"`
 	InstallationRoot string `json:"installation_root"`
+	StoreReady       bool   `json:"store_ready"`
+	CredentialState  string `json:"credential_state"`
 }
 
 func (m *Manager) localRequest(ctx context.Context, method, path string, body any) (json.RawMessage, error) {

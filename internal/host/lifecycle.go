@@ -86,7 +86,7 @@ func (m *Manager) Start() error {
 			}
 			return m.Start()
 		}
-		return nil
+		return m.unlockIfNeeded(h)
 	}
 	if !IsUnavailable(err) {
 		return fmt.Errorf("Runtime 状态无法确认，未启动另一个实例: %w", err)
@@ -102,43 +102,38 @@ func (m *Manager) Start() error {
 		if err = runRuntimeCommand(ctx, external.Path, "--json", "runtime", "start"); err != nil {
 			return err
 		}
-		return m.requireExternalActive(external)
+		return m.requireExternalActive()
 	}
 	if err != nil {
 		return fmt.Errorf("尚未安装 Runtime，请先下载: %w", err)
 	}
 	ctx, cancel = context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
-	probe, probeErr := m.hostOperation(ctx, []string{"runtime", "status"}, "", "", "")
 	args := []string{"--json", "runtime", "start"}
-	if probeErr != nil {
-		var legacy struct {
-			Summary struct {
-				Reason string `json:"reason"`
-			} `json:"summary"`
-		}
-		if json.Unmarshal(probe, &legacy) != nil || legacy.Summary.Reason != "invalid_input" {
-			return probeErr
-		}
-		args = []string{"--json", "status"}
-	}
 	if err = m.hostCommand(ctx, info, args...); err != nil {
 		return err
 	}
 	return m.requireActive(info)
 }
 
-func (m *Manager) requireExternalActive(external ExternalRuntime) error {
+func (m *Manager) requireExternalActive() error {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	h, _, err := m.Health(ctx)
 	if err != nil {
 		return err
 	}
-	if h.Version != external.Version || !samePath(h.Exe, external.Path) {
-		return errors.New("启动后的本机 Runtime 身份或版本不匹配")
+	// The CLI and Runtime have independent images and version trains.
+	if !samePath(h.InstallationRoot, m.DataRoot) {
+		return errors.New("启动后的 Runtime 不属于当前安装目录")
 	}
-	return nil
+	if err = verifyHostProcess(h); err != nil {
+		return err
+	}
+	if err = verifyExecutable(h.Exe); err != nil {
+		return err
+	}
+	return m.unlockIfNeeded(h)
 }
 
 func (m *Manager) requireActive(info InstalledRuntime) error {
@@ -151,7 +146,19 @@ func (m *Manager) requireActive(info InstalledRuntime) error {
 	if h.Version != info.Version || !samePath(h.Exe, filepath.Join(m.runtimeDir(info.Version), runtimeBinary())) {
 		return errors.New("启动后的 Runtime 身份或版本不匹配")
 	}
-	return nil
+	return m.unlockIfNeeded(h)
+}
+
+// The CLI owns native credentials. Client2 asks it to unlock this existing owner;
+// private keys never enter browser state, process arguments or Runtime files.
+func (m *Manager) unlockIfNeeded(health HealthInfo) error {
+	if health.StoreReady || health.CredentialState != "required" {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	_, err := m.hostOperation(ctx, []string{"runtime", "unlock"}, "", "runtime.unlock", "")
+	return err
 }
 
 func (m *Manager) restoreRuntime(previous, failed InstalledRuntime) error {
