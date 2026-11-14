@@ -22,10 +22,34 @@ type HealthInfo struct {
 	InstallationRoot string `json:"installation_root"`
 	StoreReady       bool   `json:"store_ready"`
 	CredentialState  string `json:"credential_state"`
+	AccountID        string `json:"account_id"`
+	InstanceID       string `json:"instance_id"`
+	Generation       uint64 `json:"generation"`
 }
 
 func (m *Manager) localRequest(ctx context.Context, method, path string, body any) (json.RawMessage, error) {
 	var input io.Reader
+	if method == http.MethodPost && path == "/api/rpc" {
+		request, ok := body.(map[string]any)
+		if !ok {
+			return nil, errors.New("Runtime RPC 请求格式无效")
+		}
+		health, _, err := m.Health(ctx)
+		if err != nil {
+			return nil, err
+		}
+		if health.AccountID == "" || health.InstanceID == "" || health.Generation == 0 {
+			return nil, errors.New("Runtime 未提供完整请求身份，请更新 Runtime")
+		}
+		request["scope"] = map[string]any{"account_id": health.AccountID, "instance_id": health.InstanceID, "generation": health.Generation}
+		switch request["method"] {
+		case "runtime.status", "assets.status", "model.catalog", "model.progress", "cli.progress":
+		case "runtime.result":
+		default:
+			request["operation_id"] = request["id"]
+			request["idempotency_key"] = request["id"]
+		}
+	}
 	if body != nil {
 		b, err := json.Marshal(body)
 		if err != nil {

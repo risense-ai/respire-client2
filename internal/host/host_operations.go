@@ -69,7 +69,7 @@ func (m *Manager) hostOperation(ctx context.Context, args []string, secret, meth
 	configureCommand(cmd)
 	for _, item := range os.Environ() {
 		key, _, _ := strings.Cut(item, "=")
-		if method == "runtime.unlock" && strings.EqualFold(key, "RSRS_RPC_PORT") {
+		if strings.HasPrefix(method, "runtime.") && strings.EqualFold(key, "RSRS_RPC_PORT") {
 			continue
 		}
 		if strings.EqualFold(key, "RSRS_BIN_DIR") || strings.EqualFold(key, "RSRS_CLIENT_ONLY") || strings.EqualFold(key, "RSRS_NO_AUTOSTART") || strings.EqualFold(key, "RSRS_DATA_DIR") || strings.EqualFold(key, "RSRS_CLIENT2_HOST") || strings.EqualFold(key, "RSRS_RUNTIME_BIN") || strings.EqualFold(key, "ONEMEMORY_RUNTIME_BIN") || strings.EqualFold(key, "RESPIRE_RUNTIME_BIN") {
@@ -78,7 +78,7 @@ func (m *Manager) hostOperation(ctx context.Context, args []string, secret, meth
 		cmd.Env = append(cmd.Env, item)
 	}
 	cmd.Env = append(cmd.Env, "RSRS_BIN_DIR="+filepath.Dir(executable), "RSRS_CLIENT_ONLY=0", "RSRS_NO_AUTOSTART=0", "RSRS_DATA_DIR="+m.DataRoot, "RSRS_CLIENT2_HOST=1")
-	if method == "runtime.unlock" {
+	if strings.HasPrefix(method, "runtime.") {
 		endpoint, parseErr := url.Parse(m.Endpoint)
 		if parseErr != nil || endpoint.Port() == "" {
 			return nil, errors.New("无法确认待解锁 Runtime 的端口")

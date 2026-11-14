@@ -6,9 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"strings"
 	"time"
 )
 
@@ -39,38 +37,6 @@ func (m *Manager) Owns(exe string) bool {
 	return false
 }
 
-func (m *Manager) hostCommand(ctx context.Context, info InstalledRuntime, args ...string) error {
-	dir := m.runtimeDir(info.Version)
-	if err := m.verifyInstalled(info); err != nil {
-		return err
-	}
-	return runRuntimeCommand(ctx, filepath.Join(dir, runtimeBinary()), args...)
-}
-
-func runtimeEnv(dir string) []string {
-	// These host actions own lifecycle; never inherit sandbox/client flags.
-	var env []string
-	for _, item := range os.Environ() {
-		key, _, _ := strings.Cut(item, "=")
-		if strings.EqualFold(key, "RSRS_BIN_DIR") || strings.EqualFold(key, "RSRS_CLIENT_ONLY") || strings.EqualFold(key, "RSRS_NO_AUTOSTART") {
-			continue
-		}
-		env = append(env, item)
-	}
-	return append(env, "RSRS_BIN_DIR="+dir, "RSRS_CLIENT_ONLY=0", "RSRS_NO_AUTOSTART=0")
-}
-
-func runRuntimeCommand(ctx context.Context, executable string, args ...string) error {
-	cmd := exec.CommandContext(ctx, executable, args...)
-	configureCommand(cmd)
-	cmd.Env = runtimeEnv(filepath.Dir(executable))
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("Runtime host action failed: %w (%s)", err, strings.TrimSpace(string(out)))
-	}
-	return nil
-}
-
 func (m *Manager) Start() error {
 	if err := m.MigrateRuntime(); err != nil {
 		return err
@@ -95,11 +61,12 @@ func (m *Manager) Start() error {
 	if errors.Is(err, os.ErrNotExist) {
 		ctx, cancel = context.WithTimeout(context.Background(), 90*time.Second)
 		defer cancel()
-		external, externalErr := m.External(ctx)
+		_, externalErr := m.External(ctx)
 		if externalErr != nil {
 			return fmt.Errorf("尚未安装 Runtime，请先下载: %w", externalErr)
 		}
-		if err = runRuntimeCommand(ctx, external.Path, "--json", "runtime", "start"); err != nil {
+		_, err = m.hostOperation(ctx, []string{"runtime", "start"}, "", "runtime.start", "")
+		if err != nil {
 			return err
 		}
 		return m.requireExternalActive()
@@ -109,8 +76,11 @@ func (m *Manager) Start() error {
 	}
 	ctx, cancel = context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
-	args := []string{"--json", "runtime", "start"}
-	if err = m.hostCommand(ctx, info, args...); err != nil {
+	if err = m.verifyInstalled(info); err != nil {
+		return err
+	}
+	_, err = m.hostOperation(ctx, []string{"runtime", "start"}, "", "runtime.start", "")
+	if err != nil {
 		return err
 	}
 	return m.requireActive(info)
@@ -197,8 +167,5 @@ func (m *Manager) Stop(ownedOnly bool) error {
 	if ownedOnly && !m.Owns(h.Exe) {
 		return errors.New("Runtime 由其他 CLI 管理，客户端未停止它")
 	}
-	if h.ManagedID != "" {
-		return m.stopManaged(ctx, h)
-	}
-	return m.stopProcess(ctx, h)
+	return m.stopManaged(ctx, h)
 }
