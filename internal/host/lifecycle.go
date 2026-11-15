@@ -48,12 +48,17 @@ func (m *Manager) Start() error {
 	h, _, err := m.Health(ctx)
 	cancel()
 	if err == nil {
-		info, installedErr := m.Installed()
-		if installedErr == nil && m.Owns(h.Exe) && !samePath(h.Exe, filepath.Join(m.runtimeDir(info.Version), runtimeBinary())) {
-			if err := m.Stop(true); err != nil {
-				return err
+		if m.Owns(h.Exe) {
+			info, installedErr := m.Installed()
+			if installedErr != nil {
+				return fmt.Errorf("读取 Runtime 安装信息失败: %w", installedErr)
 			}
-			return m.Start()
+			if !samePath(h.Exe, filepath.Join(m.runtimeDir(info.Version), runtimeBinary())) {
+				if err := m.Stop(true); err != nil {
+					return err
+				}
+				return m.Start()
+			}
 		}
 		return m.unlockIfNeeded(h)
 	}

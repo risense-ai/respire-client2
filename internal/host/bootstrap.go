@@ -53,6 +53,7 @@ type bootstrapManifest struct {
 type bootstrapPayload struct {
 	Dir      string
 	Manifest bootstrapManifest
+	Metadata RuntimeMetadata
 }
 
 // bootstrapDir locates the embedded payload: an env override for tests and
@@ -124,6 +125,9 @@ func readBootstrapPayload() (bootstrapPayload, error) {
 	if err = verifyRuntime(filepath.Join(dir, bootstrapRuntimeDir), payload.Manifest.Runtime.SHA256); err != nil {
 		return payload, fmt.Errorf("embedded Runtime verification failed: %w", err)
 	}
+	if payload.Metadata, err = payload.runtimeMetadata(); err != nil {
+		return payload, err
+	}
 	return payload, nil
 }
 
@@ -164,24 +168,24 @@ func parseBootstrapManifest(b []byte, manifest *bootstrapManifest) error {
 	return CheckCLICompat(manifest.CLI.Version, Compat{MinCLI: manifest.Runtime.MinCLI, MaxCLI: manifest.Runtime.MaxCLI})
 }
 
-// runtimeMetadata converts the manifest into the normalized Runtime metadata
-// the install path consumes; the payload carries no archive identity because
-// it is already expanded.
-func (p *bootstrapPayload) runtimeMetadata() RuntimeMetadata {
-	if b, err := os.ReadFile(filepath.Join(p.Dir, "runtime-build-"+p.Manifest.Target+".json")); err == nil {
-		if meta, err := NormalizeRuntimeMetadata(b); err == nil && meta.RuntimeVersion == p.Manifest.Runtime.Version && meta.BinaryHash == p.Manifest.Runtime.SHA256 {
-			return meta
-		}
+// runtimeMetadata validates the embedded release proof against the manifest.
+func (p *bootstrapPayload) runtimeMetadata() (RuntimeMetadata, error) {
+	b, err := os.ReadFile(filepath.Join(p.Dir, "runtime-build-"+p.Manifest.Target+".json"))
+	if err != nil {
+		return RuntimeMetadata{}, fmt.Errorf("embedded Runtime metadata: %w", err)
 	}
-	return RuntimeMetadata{
-		RuntimeVersion: p.Manifest.Runtime.Version,
-		Tag:            "v" + p.Manifest.Runtime.Version,
-		Target:         p.Manifest.Target,
-		ArchiveFile:    runtimeArchive(p.Manifest.Target),
-		Binary:         runtimeBinary(),
-		BinaryHash:     p.Manifest.Runtime.SHA256,
-		Compat:         Compat{MinCLI: p.Manifest.Runtime.MinCLI, MaxCLI: p.Manifest.Runtime.MaxCLI},
+	meta, err := NormalizeRuntimeMetadata(b)
+	if err != nil {
+		return RuntimeMetadata{}, fmt.Errorf("embedded Runtime metadata: %w", err)
 	}
+	if meta.RuntimeVersion != p.Manifest.Runtime.Version || !strings.EqualFold(meta.BinaryHash, p.Manifest.Runtime.SHA256) ||
+		meta.Compat.MinCLI != p.Manifest.Runtime.MinCLI || meta.Compat.MaxCLI != p.Manifest.Runtime.MaxCLI {
+		return RuntimeMetadata{}, errors.New("embedded Runtime metadata does not match bootstrap manifest")
+	}
+	if _, err = runtimeReceipt(meta); err != nil {
+		return RuntimeMetadata{}, fmt.Errorf("embedded Runtime metadata: %w", err)
+	}
+	return meta, nil
 }
 
 // BootstrapStatus is the read-only report behind the headless

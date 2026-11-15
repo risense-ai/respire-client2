@@ -281,10 +281,7 @@ func (m *Manager) InstallRuntime(automatic bool, restart bool) error {
 				return fmt.Errorf("嵌入 Runtime 通道 %q 与设置中的通道 %q 不一致", embedded.Manifest.Channel, channel)
 			}
 			payload = &embedded
-			meta = embedded.runtimeMetadata()
-			if meta, err = m.provenRuntimeMetadata(ctx, meta); err != nil {
-				return err
-			}
+			meta = embedded.Metadata
 		}
 	}
 	if payload == nil {
@@ -330,8 +327,8 @@ func (m *Manager) InstallRuntime(automatic bool, restart bool) error {
 				meta = retainedMeta
 			}
 			reuseRuntime = true
-		} else if semver.Compare("v"+previous.Version, "v"+meta.RuntimeVersion) > 0 {
-			return fmt.Errorf("installed newer Runtime verification failed: %w", verifyErr)
+		} else {
+			return fmt.Errorf("installed Runtime verification failed: %w", verifyErr)
 		}
 	}
 	h, _, err := m.Health(ctx)
@@ -393,8 +390,10 @@ func (m *Manager) InstallRuntime(automatic bool, restart bool) error {
 		return err
 	}
 	if reuseRuntime {
-		if err := m.Start(); err != nil {
-			return err
+		if restart {
+			if err := m.Start(); err != nil {
+				return err
+			}
 		}
 		return m.finishBootstrapPath(payload)
 	}
