@@ -10,6 +10,9 @@ import (
 	"time"
 )
 
+// ErrRuntimeNotInstalled means neither a selected Runtime nor an external CLI exists.
+var ErrRuntimeNotInstalled = errors.New("尚未安装 Runtime，请先下载")
+
 func (m *Manager) Installed() (InstalledRuntime, error) {
 	var info InstalledRuntime
 	b, err := os.ReadFile(m.runtimeManifest())
@@ -63,7 +66,13 @@ func (m *Manager) Start() error {
 		defer cancel()
 		_, externalErr := m.External(ctx)
 		if externalErr != nil {
-			return fmt.Errorf("尚未安装 Runtime，请先下载: %w", externalErr)
+			// Only a missing CLI path authorizes first-install; execution errors do not.
+			pathErr, missingPath := externalErr.(*os.PathError)
+			if missingPath && errors.Is(pathErr, os.ErrNotExist) &&
+				pathErr.Path == filepath.Join(filepath.Dir(m.Root), "bin", cliBinary()) {
+				return fmt.Errorf("%w: %w", ErrRuntimeNotInstalled, externalErr)
+			}
+			return fmt.Errorf("本机 CLI 无法启动 Runtime: %w", externalErr)
 		}
 		_, err = m.hostOperation(ctx, []string{"runtime", "start"}, "", "runtime.start", "")
 		if err != nil {
@@ -72,7 +81,7 @@ func (m *Manager) Start() error {
 		return m.requireExternalActive()
 	}
 	if err != nil {
-		return fmt.Errorf("尚未安装 Runtime，请先下载: %w", err)
+		return fmt.Errorf("读取 Runtime 安装信息失败: %w", err)
 	}
 	ctx, cancel = context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()

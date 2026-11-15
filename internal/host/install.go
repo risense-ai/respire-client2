@@ -270,18 +270,25 @@ func (m *Manager) InstallRuntime(automatic bool, restart bool) error {
 	var release ReleaseInfo
 	var meta RuntimeMetadata
 	var payload *bootstrapPayload
-	if embedded, payloadErr := readBootstrapPayload(); errors.Is(prevErr, os.ErrNotExist) && payloadErr == nil && embedded.Manifest.Channel == m.Preferences().RuntimeChannel {
-		// Only bootstrap an absent installation from a matching channel.
-		// Installed clients use release discovery so the bundle cannot pin updates.
-		payload = &embedded
-		meta = embedded.runtimeMetadata()
-		if meta, err = m.provenRuntimeMetadata(ctx, meta); err != nil {
-			return err
+	if errors.Is(prevErr, os.ErrNotExist) {
+		embedded, payloadErr := readBootstrapPayload()
+		if payloadErr != nil && !errors.Is(payloadErr, errBootstrapAbsent) {
+			return fmt.Errorf("bootstrap payload: %w", payloadErr)
 		}
-	} else {
-		// No valid payload (absent, foreign platform, or failed verification):
-		// keep the documented online path so non-DMG builds behave unchanged.
-		var err error
+		if payloadErr == nil {
+			channel := m.Preferences().RuntimeChannel
+			if embedded.Manifest.Channel != channel {
+				return fmt.Errorf("嵌入 Runtime 通道 %q 与设置中的通道 %q 不一致", embedded.Manifest.Channel, channel)
+			}
+			payload = &embedded
+			meta = embedded.runtimeMetadata()
+			if meta, err = m.provenRuntimeMetadata(ctx, meta); err != nil {
+				return err
+			}
+		}
+	}
+	if payload == nil {
+		// Installed clients and absent payloads use release discovery.
 		release, meta, err = m.LatestRuntime(ctx)
 		if err != nil {
 			return err

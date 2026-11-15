@@ -178,6 +178,9 @@ func TestBootstrapPayloadDiscovery(t *testing.T) {
 		if _, err := readBootstrapPayload(); !errors.Is(err, os.ErrNotExist) {
 			t.Fatalf("absent payload must report ErrNotExist, got %v", err)
 		}
+		if status := newInstallTestManager(t).BootstrapStatus(context.Background()); status.PayloadError != "" {
+			t.Fatalf("absent payload must not report an error: %+v", status)
+		}
 	})
 	t.Run("valid payload verifies in full", func(t *testing.T) {
 		dir := buildPayload(t, "0.4.1")
@@ -189,7 +192,7 @@ func TestBootstrapPayloadDiscovery(t *testing.T) {
 			t.Fatalf("payload identity drifted: %+v", payload.Manifest)
 		}
 	})
-	t.Run("foreign-platform payload is invisible", func(t *testing.T) {
+	t.Run("foreign-platform payload is rejected", func(t *testing.T) {
 		dir := buildPayload(t, "0.4.1")
 		b, err := os.ReadFile(filepath.Join(dir, bootstrapManifestFile))
 		if err != nil {
@@ -643,6 +646,245 @@ func buildTarGz(t *testing.T, dir string) []byte {
 	return buf.Bytes()
 }
 
+func TestRuntimeStartInstallationState(t *testing.T) {
+	t.Run("absent Runtime and CLI allow first install", func(t *testing.T) {
+		m := newInstallTestManager(t)
+		if err := m.Start(); !errors.Is(err, ErrRuntimeNotInstalled) {
+			t.Fatalf("missing installation must be classified explicitly: %v", err)
+		}
+	})
+	t.Run("invalid external CLI is not missing", func(t *testing.T) {
+		m := newInstallTestManager(t)
+		path := filepath.Join(m.DataRoot, "bin", cliBinary())
+		if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte("invalid executable"), 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err := m.Start(); err == nil || errors.Is(err, ErrRuntimeNotInstalled) {
+			t.Fatalf("invalid CLI must retain its failure: %v", err)
+		}
+	})
+	t.Run("failed external version command is not missing", func(t *testing.T) {
+		m := newInstallTestManager(t)
+		binary, err := os.Executable()
+		if err != nil {
+			t.Fatal(err)
+		}
+		data, err := os.ReadFile(binary)
+		if err != nil {
+			t.Fatal(err)
+		}
+		path := filepath.Join(m.DataRoot, "bin", cliBinary())
+		if err = os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+			t.Fatal(err)
+		}
+		// A real executable that rejects --version exercises the execution failure.
+		if err = os.WriteFile(path, data, 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err = m.Start(); err == nil || errors.Is(err, ErrRuntimeNotInstalled) {
+			t.Fatalf("CLI execution failure must not authorize install: %v", err)
+		}
+	})
+	t.Run("corrupt selection is not missing", func(t *testing.T) {
+		m := newInstallTestManager(t)
+		if err := os.MkdirAll(filepath.Dir(m.runtimeManifest()), 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err := writeJSON(m.runtimeManifest(), map[string]any{"version": "invalid"}); err != nil {
+			t.Fatal(err)
+		}
+		if err := m.Start(); err == nil || errors.Is(err, ErrRuntimeNotInstalled) {
+			t.Fatalf("invalid selection must retain its failure: %v", err)
+		}
+	})
+	t.Run("selected Runtime with missing files is not a fresh install", func(t *testing.T) {
+		m := newInstallTestManager(t)
+		if err := os.MkdirAll(filepath.Dir(m.runtimeManifest()), 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err := writeJSON(m.runtimeManifest(), InstalledRuntime{Version: "1.0.21", SHA256: strings.Repeat("a", 64)}); err != nil {
+			t.Fatal(err)
+		}
+		if err := m.Start(); !errors.Is(err, os.ErrNotExist) || errors.Is(err, ErrRuntimeNotInstalled) {
+			t.Fatalf("missing selected files must retain the installation failure: %v", err)
+		}
+	})
+	t.Run("running external Runtime remains usable", func(t *testing.T) {
+		m := newInstallTestManager(t)
+		m.Endpoint = newFakeRuntimeServer(t, "/external/rsrs-runtime", "").URL
+		if err := m.Start(); err != nil {
+			t.Fatalf("running external Runtime must not require installation: %v", err)
+		}
+	})
+	t.Run("unlock failure is not a fresh install", func(t *testing.T) {
+		m := newInstallTestManager(t)
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			_, _ = io.WriteString(w, `{"server":"respire","v":1,"pid":4242,"credential_state":"required"}`)
+		}))
+		defer srv.Close()
+		m.Endpoint = srv.URL
+		if err := m.Start(); err == nil || errors.Is(err, ErrRuntimeNotInstalled) {
+			t.Fatalf("unlock host failure must not authorize install: %v", err)
+		}
+	})
+}
+
+func TestInstallRuntimeRejectsInvalidBootstrapPayload(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		damage  func(string) error
+		want    string
+		missing bool
+	}{
+		{"missing manifest", func(dir string) error { return os.Remove(filepath.Join(dir, bootstrapManifestFile)) }, bootstrapManifestFile, true},
+		{"invalid manifest", func(dir string) error {
+			return os.WriteFile(filepath.Join(dir, bootstrapManifestFile), []byte("{"), 0600)
+		}, "unexpected EOF", false},
+		{"invalid target", func(dir string) error {
+			path := filepath.Join(dir, bootstrapManifestFile)
+			data, err := os.ReadFile(path)
+			if err != nil {
+				return err
+			}
+			target, err := runtimeTarget()
+			if err != nil {
+				return err
+			}
+			return os.WriteFile(path, bytes.Replace(data, []byte(target), []byte("invalid-target"), 1), 0600)
+		}, "embedded payload targets invalid-target, not", false},
+		{"foreign target with invalid channel", func(dir string) error {
+			path := filepath.Join(dir, bootstrapManifestFile)
+			data, err := os.ReadFile(path)
+			if err != nil {
+				return err
+			}
+			target, err := runtimeTarget()
+			if err != nil {
+				return err
+			}
+			foreign := "x86_64-unknown-linux-gnu"
+			if target == foreign {
+				foreign = "aarch64-apple-darwin"
+			}
+			data = bytes.Replace(data, []byte(target), []byte(foreign), 1)
+			data = bytes.Replace(data, []byte(`"channel":"dev"`), []byte(`"channel":"invalid"`), 1)
+			return os.WriteFile(path, data, 0600)
+		}, "embedded payload targets", false},
+		{"missing CLI", func(dir string) error { return os.Remove(filepath.Join(dir, cliBinary())) }, cliBinary(), true},
+		{"tampered CLI", func(dir string) error { return os.WriteFile(filepath.Join(dir, cliBinary()), []byte("tampered"), 0700) }, "embedded CLI hash mismatch", false},
+		{"missing Runtime", func(dir string) error { return os.Remove(filepath.Join(dir, bootstrapRuntimeDir, runtimeBinary())) }, "embedded Runtime verification failed", true},
+		{"tampered Runtime", func(dir string) error {
+			return os.WriteFile(filepath.Join(dir, bootstrapRuntimeDir, runtimeBinary()), []byte("tampered"), 0700)
+		}, "embedded Runtime verification failed", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := buildPayload(t, "1.2.3")
+			if err := tc.damage(dir); err != nil {
+				t.Fatal(err)
+			}
+			requests := make(chan struct{}, 1)
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				select {
+				case requests <- struct{}{}:
+				default:
+				}
+				http.Error(w, "unexpected release request", http.StatusServiceUnavailable)
+			}))
+			defer server.Close()
+			m := newInstallTestManager(t)
+			m.HTTPClient = &http.Client{Transport: fakeGH{server: server.URL}}
+			err := m.InstallRuntime(false, false)
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("invalid payload must expose %q: %v", tc.want, err)
+			}
+			if tc.missing && !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("missing payload component must retain its cause: %v", err)
+			}
+			if status := m.BootstrapStatus(context.Background()); !strings.Contains(status.PayloadError, tc.want) {
+				t.Fatalf("diagnostics must report the payload failure: %+v", status)
+			}
+			select {
+			case <-requests:
+				t.Fatal("invalid payload must not trigger online release discovery")
+			default:
+			}
+		})
+	}
+}
+
+func TestInstallRuntimePayloadChannelAndTarget(t *testing.T) {
+	for _, tc := range []struct {
+		name            string
+		payloadChannel  string
+		selectedChannel string
+		foreignTarget   bool
+	}{
+		{"foreign target", "dev", "dev", true},
+		{"stable payload with stable selected", "stable", "stable", false},
+		{"stable payload with dev selected", "stable", "dev", false},
+		{"dev payload with stable selected", "dev", "stable", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := buildPayload(t, "1.2.3")
+			path := filepath.Join(dir, bootstrapManifestFile)
+			data, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var manifest bootstrapManifest
+			if err = json.Unmarshal(data, &manifest); err != nil {
+				t.Fatal(err)
+			}
+			manifest.Channel = tc.payloadChannel
+			want := fmt.Sprintf("嵌入 Runtime 通道 %q 与设置中的通道 %q 不一致", tc.payloadChannel, tc.selectedChannel)
+			if tc.foreignTarget {
+				if manifest.Target == "x86_64-unknown-linux-gnu" {
+					manifest.Target = "aarch64-apple-darwin"
+				} else {
+					manifest.Target = "x86_64-unknown-linux-gnu"
+				}
+				want = "embedded payload targets"
+			}
+			data, err = json.Marshal(manifest)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err = os.WriteFile(path, data, 0600); err != nil {
+				t.Fatal(err)
+			}
+			requests := make(chan struct{}, 1)
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				select {
+				case requests <- struct{}{}:
+				default:
+				}
+				http.Error(w, "unexpected release request", http.StatusServiceUnavailable)
+			}))
+			defer server.Close()
+			m := newInstallTestManager(t)
+			m.prefs.RuntimeChannel = tc.selectedChannel
+			m.HTTPClient = &http.Client{Transport: fakeGH{server: server.URL}}
+			if !tc.foreignTarget && tc.payloadChannel == tc.selectedChannel {
+				t.Setenv("HOME", t.TempDir())
+				stubCLIProbe(t, cliProbeFixture{tmpVersion: "1.2.3", destAbsent: true})
+				if err = m.InstallRuntime(false, false); err != nil {
+					t.Fatalf("matching channel must use the payload: %v", err)
+				}
+			} else if err = m.InstallRuntime(false, false); err == nil || !strings.Contains(err.Error(), want) {
+				t.Fatalf("payload mismatch must expose %q: %v", want, err)
+			}
+			select {
+			case <-requests:
+				t.Fatal("payload selection must not trigger online release discovery")
+			default:
+			}
+		})
+	}
+}
+
 func TestInstallRuntimeWithPayload(t *testing.T) {
 	t.Run("offline first launch installs CLI, Runtime and PATH", func(t *testing.T) {
 		buildPayload(t, "1.2.3")
@@ -704,16 +946,29 @@ func TestInstallRuntimeWithPayload(t *testing.T) {
 		if err = writeJSON(m.runtimeManifest(), previous); err != nil {
 			t.Fatal(err)
 		}
+		if err = os.WriteFile(filepath.Join(payload.Dir, cliBinary()), []byte("tampered"), 0700); err != nil {
+			t.Fatal(err)
+		}
 		stubCLIProbe(t, cliProbeFixture{tmpVersion: "1.2.3", destAbsent: true})
-		// An existing installation checks online updates instead of reusing
-		// the bundled version. A failed check must preserve the receipt.
+		// An existing installation checks online updates even if the unused
+		// bundle is damaged. A failed check must preserve the receipt.
+		releaseChecks := make(chan struct{}, 1)
 		releaseServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			select {
+			case releaseChecks <- struct{}{}:
+			default:
+			}
 			http.Error(w, "offline fixture", http.StatusServiceUnavailable)
 		}))
 		defer releaseServer.Close()
 		m.HTTPClient = &http.Client{Transport: fakeGH{server: releaseServer.URL}}
 		if err = m.InstallRuntime(false, false); err == nil {
 			t.Fatal("offline release check cannot succeed")
+		}
+		select {
+		case <-releaseChecks:
+		default:
+			t.Fatal("existing installation must check online releases")
 		}
 		current, readErr := m.Installed()
 		if readErr != nil || current.Version != "1.9.9" {

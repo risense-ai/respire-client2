@@ -32,6 +32,8 @@ const (
 	bootstrapEnvOverride = "RSRS_BOOTSTRAP_DIR"
 )
 
+var errBootstrapAbsent = fmt.Errorf("bootstrap payload absent: %w", os.ErrNotExist)
+
 type bootstrapManifest struct {
 	Schema  int    `json:"schema_version"`
 	Target  string `json:"target"`
@@ -61,7 +63,7 @@ func bootstrapDir() (string, error) {
 		return override, nil
 	}
 	if runtime.GOOS != "darwin" && runtime.GOOS != "windows" {
-		return "", os.ErrNotExist
+		return "", errBootstrapAbsent
 	}
 	exe, err := os.Executable()
 	if err != nil {
@@ -71,10 +73,13 @@ func bootstrapDir() (string, error) {
 	if runtime.GOOS == "windows" {
 		dir = filepath.Join(filepath.Dir(exe), "bootstrap")
 	}
-	if _, err = os.Stat(filepath.Join(dir, bootstrapManifestFile)); err != nil {
+	if _, err = os.Stat(dir); err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return "", os.ErrNotExist
+			return "", errBootstrapAbsent
 		}
+		return "", err
+	}
+	if _, err = os.Stat(filepath.Join(dir, bootstrapManifestFile)); err != nil {
 		return "", err
 	}
 	return dir, nil
@@ -82,8 +87,8 @@ func bootstrapDir() (string, error) {
 
 // readBootstrapPayload discovers the embedded payload and verifies it in
 // full: manifest identity for this platform, CLI hash and architecture, and
-// the complete Runtime tree against the core-runtime manifest. Any failure
-// makes the payload invisible; InstallRuntime then falls back online.
+// the complete Runtime tree against the core-runtime manifest. Only an absent
+// payload can use online installation; verification errors surface.
 func readBootstrapPayload() (bootstrapPayload, error) {
 	var payload bootstrapPayload
 	dir, err := bootstrapDir()
@@ -92,6 +97,13 @@ func readBootstrapPayload() (bootstrapPayload, error) {
 	}
 	b, err := os.ReadFile(filepath.Join(dir, bootstrapManifestFile))
 	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			if _, dirErr := os.Stat(dir); errors.Is(dirErr, os.ErrNotExist) {
+				return payload, errBootstrapAbsent
+			} else if dirErr != nil {
+				return payload, dirErr
+			}
+		}
 		return payload, err
 	}
 	if err = parseBootstrapManifest(b, &payload.Manifest); err != nil {
@@ -213,7 +225,7 @@ func (m *Manager) BootstrapStatus(ctx context.Context) BootstrapStatus {
 			RuntimeVersion: payload.Manifest.Runtime.Version,
 			RuntimeSHA256:  payload.Manifest.Runtime.SHA256,
 		}
-	} else if !errors.Is(err, os.ErrNotExist) {
+	} else if !errors.Is(err, errBootstrapAbsent) {
 		status.PayloadError = err.Error()
 	}
 	if installed, err := m.Installed(); err == nil {
