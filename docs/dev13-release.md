@@ -68,24 +68,31 @@ ID, including failure replies. A mismatch stays unconfirmed without accepting
 the returned envelope. Result-query outer replies keep their existing protocol
 handling; cached original-response validation remains unchanged.
 
-These CLI entry points were checked against CLI PR #317 commit `f5e22a7` in
-`codex/cli-host-continue-20261116`. Published CLI delivery and native
-end-to-end acceptance remain release gates; this Client2 PR does not modify CLI
-or Runtime and does not claim those gates have passed.
+The CLI dependency is PR #317 head `79d2777`, merged as `d926f09`.
+Its committed key replies retain the original operation ID, source profile and
+committed outcome alongside the existing success fields. CLI DEV12 release run
+[43857691588](https://github.com/risense-ai/respire-cli/actions/runs/43857691588)
+is in progress at this documentation update. This Client2 PR does not modify CLI
+or Runtime and does not claim final published-stack acceptance has passed.
 
-## Validation and release gate
+## Validation and release sequence
 
 Use the existing Go tests and vet with the `production` tag, frontend syntax
 checks, `scripts/test-account-session-state.cjs` and
 `scripts/test-client-refresh.cjs`. Do not add repository tests for this task.
 PR CI runs the existing light checks; no tag or native release is requested.
 
-Before a later DEV13 release, freeze the actual published CLI and Runtime
-assets and their hashes, then run isolated native acceptance for host routing,
-engine child identities, failure/pending recovery, restart scope fencing and
-issued recovery-material acknowledgement. Use synthetic accounts and a
-dedicated data root and credential namespace. Source CI alone does not prove
-cloud login, native keyring, login autostart or end-to-end compatibility.
+The latest explicit user authorization supersedes the former manual
+pre-release native acceptance gate: publish after source CI passes, then run the
+full native integration matrix once, in parallel, after the final CLI, Runtime
+and Client2 Releases are public. Do not run the same full matrix before release.
+Freeze those final public assets and their hashes for that acceptance run.
+Cover host routing, engine child identities, failure/pending recovery, restart
+scope fencing and issued recovery-material acknowledgement. Use synthetic
+accounts and a dedicated data root and credential namespace. Full native
+integration acceptance remains unverified until that post-release run completes;
+source CI alone does not prove cloud login, native keyring, login autostart or
+end-to-end compatibility.
 
 Local Windows amd64 validation passed: existing `go test -tags production
 ./...`, `go vet -tags production ./...`, all 33 frontend JavaScript syntax
