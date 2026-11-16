@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 )
 
@@ -27,6 +28,23 @@ type HealthInfo struct {
 	Generation       uint64 `json:"generation"`
 }
 
+type runtimeScope struct {
+	AccountID  string `json:"account_id"`
+	InstanceID string `json:"instance_id"`
+	Generation uint64 `json:"generation"`
+}
+
+func (m *Manager) requestScope(ctx context.Context) (*runtimeScope, error) {
+	health, _, err := m.Health(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if health.AccountID == "" || health.InstanceID == "" || health.Generation == 0 {
+		return nil, errors.New("Runtime 未提供完整请求身份，请更新 Runtime")
+	}
+	return &runtimeScope{health.AccountID, health.InstanceID, health.Generation}, nil
+}
+
 func (m *Manager) localRequest(ctx context.Context, method, path string, body any) (json.RawMessage, error) {
 	var input io.Reader
 	if method == http.MethodPost && path == "/api/rpc" {
@@ -34,20 +52,24 @@ func (m *Manager) localRequest(ctx context.Context, method, path string, body an
 		if !ok {
 			return nil, errors.New("Runtime RPC 请求格式无效")
 		}
-		health, _, err := m.Health(ctx)
-		if err != nil {
-			return nil, err
+		if _, exists := request["scope"]; !exists {
+			scope, err := m.requestScope(ctx)
+			if err != nil {
+				return nil, err
+			}
+			request["scope"] = scope
 		}
-		if health.AccountID == "" || health.InstanceID == "" || health.Generation == 0 {
-			return nil, errors.New("Runtime 未提供完整请求身份，请更新 Runtime")
-		}
-		request["scope"] = map[string]any{"account_id": health.AccountID, "instance_id": health.InstanceID, "generation": health.Generation}
 		switch request["method"] {
 		case "runtime.status", "assets.status", "model.catalog", "model.progress", "cli.progress":
 		case "runtime.result":
 		default:
 			request["operation_id"] = request["id"]
 			request["idempotency_key"] = request["id"]
+			if id, ok := request["id"].(string); ok {
+				if parent, _, child := strings.Cut(id, "/"); child {
+					request["parent_operation_id"] = parent
+				}
+			}
 		}
 	}
 	if body != nil {

@@ -67,6 +67,8 @@ const dependencies = {
   invitationDialog() {},
   membersDialog() {},
   authenticationPanel() {},
+  executeAuthentication: (...args) => dependencies.execute(...args),
+  recoveryMaterialDialog() {},
 };
 let imports = 0;
 const moduleBody = src.replace(/^import\s[\s\S]*?from "[^"]+";\r?\n/gm, () => { imports++; return ''; });

@@ -142,27 +142,28 @@ func (d *desktop) businessRoute(w http.ResponseWriter, r *http.Request) bool {
 		result = "已停止下载"
 	case r.Method == "GET" && r.URL.Path == "/api/operation":
 		result, err = d.m.Operation(r.URL.Query().Get("id"))
-	case r.URL.Path == "/api/execute" || r.URL.Path == "/api/operation-recover" || r.URL.Path == "/api/operation-ack" || r.URL.Path == "/api/file-dialog" || r.URL.Path == "/api/open-dashboard" || r.URL.Path == "/api/open-main" || r.URL.Path == "/api/panel-size" || r.URL.Path == "/api/cli-language" || r.URL.Path == "/api/plugin-install" || r.URL.Path == "/api/inject-set" || r.URL.Path == "/api/inject-mode" || r.URL.Path == "/api/preferences-export" || r.URL.Path == "/api/preferences-import" || r.URL.Path == "/api/diagnostics-export" || r.URL.Path == "/api/open-model-dir":
+	case r.URL.Path == "/api/execute" || r.URL.Path == "/api/operation-recover" || r.URL.Path == "/api/operation-continue" || r.URL.Path == "/api/operation-ack" || r.URL.Path == "/api/file-dialog" || r.URL.Path == "/api/open-dashboard" || r.URL.Path == "/api/open-main" || r.URL.Path == "/api/panel-size" || r.URL.Path == "/api/cli-language" || r.URL.Path == "/api/plugin-install" || r.URL.Path == "/api/inject-set" || r.URL.Path == "/api/inject-mode" || r.URL.Path == "/api/preferences-export" || r.URL.Path == "/api/preferences-import" || r.URL.Path == "/api/diagnostics-export" || r.URL.Path == "/api/open-model-dir":
 		if r.Method != "POST" || r.Header.Get("X-Respire-Client") != "1" || r.Header.Get("Content-Type") != "application/json" {
 			w.WriteHeader(http.StatusForbidden)
 			err = errors.New("客户端请求被拒绝")
 			break
 		}
 		var input struct {
-			Name      string          `json:"name"`
-			ID        string          `json:"id"`
-			Args      json.RawMessage `json:"args"`
-			Confirmed bool            `json:"confirmed"`
-			Secret    string          `json:"secret"`
-			Kind      string          `json:"kind"`
-			Language  string          `json:"language"`
-			Target    string          `json:"target"`
-			Mirror    bool            `json:"mirror"`
-			Path      string          `json:"path"`
-			Height    float64         `json:"height"`
-			Enable    bool            `json:"enable"`
-			Mode      string          `json:"mode"`
-			Scope     string          `json:"scope"`
+			Name        string          `json:"name"`
+			ID          string          `json:"id"`
+			TransportID string          `json:"transportId"`
+			Args        json.RawMessage `json:"args"`
+			Confirmed   bool            `json:"confirmed"`
+			Secret      string          `json:"secret"`
+			Kind        string          `json:"kind"`
+			Language    string          `json:"language"`
+			Target      string          `json:"target"`
+			Mirror      bool            `json:"mirror"`
+			Path        string          `json:"path"`
+			Height      float64         `json:"height"`
+			Enable      bool            `json:"enable"`
+			Mode        string          `json:"mode"`
+			Scope       string          `json:"scope"`
 		}
 		decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20))
 		decoder.DisallowUnknownFields()
@@ -179,6 +180,12 @@ func (d *desktop) businessRoute(w http.ResponseWriter, r *http.Request) bool {
 			result, err = d.m.Submit(input.Name, input.ID, input.Args, input.Confirmed, input.Secret)
 		case "/api/operation-recover":
 			result, err = d.m.Recover(input.ID)
+		case "/api/operation-continue":
+			if !input.Confirmed {
+				err = errors.New("补充输入需要明确提交")
+			} else {
+				result, err = d.m.Continue(input.ID, input.TransportID, input.Args)
+			}
 		case "/api/operation-ack":
 			err = d.m.Acknowledge(input.ID)
 			result = "已处理回执"

@@ -72,6 +72,11 @@ export async function execute(
     error.requestId = id;
     throw error;
   }
+  return waitForOperation(job, onProgress);
+}
+
+export async function waitForOperation(job, onProgress) {
+  const { id, name } = job;
   pending.set(id, name);
   try {
     let rounds = 0;
@@ -87,6 +92,7 @@ export async function execute(
       );
       error.requestId = id;
       error.envelope = job.envelope;
+      error.operation = job;
       throw error;
     }
     return job.envelope;

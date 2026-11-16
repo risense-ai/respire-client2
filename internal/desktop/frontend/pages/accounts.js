@@ -17,7 +17,7 @@ import {
 } from "../ui/core.js";
 import { heading } from "./overview.js";
 import { invitationDialog, membersDialog } from "./space-members.js";
-import { authenticationPanel } from "./authentication.js";
+import { authenticationPanel, executeAuthentication, recoveryMaterialDialog } from "./authentication.js";
 
 // Routes replace the page, but an account action still belongs to the same app.
 const accountActionStates = new WeakMap();
@@ -227,8 +227,8 @@ export function accounts(root, ctx) {
         }
         if (kind === "login") {
           notify("请在浏览器完成账户授权。");
-          await execute("login");
-          notify("登录流程已完成");
+          const result = await executeAuthentication("login");
+          if (!recoveryMaterialDialog(result)) notify("登录流程已完成");
           await ctx.refresh();
           await load();
           return;

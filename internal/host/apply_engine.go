@@ -3,6 +3,7 @@ package host
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 )
@@ -37,8 +38,12 @@ func applyEngine(ctx context.Context, m *Manager, args []string, id string) (jso
 	if err := m.ensureRuntimeFeature(ctx, minVariantRuntimeVersion, "选择模型权重变体"); err != nil {
 		return nil, err
 	}
-	cliExec := func(words ...string) (json.RawMessage, error) {
-		return m.executeRPC(ctx, "cli.exec", append([]string{"--json"}, words...), id)
+	scope, err := m.requestScope(ctx)
+	if err != nil {
+		return nil, err
+	}
+	cliExec := func(step string, words ...string) (json.RawMessage, error) {
+		return m.executeRPCScoped(ctx, "cli.exec", append([]string{"--json"}, words...), id+"/"+step, scope)
 	}
 	// Entry pre-check: applying a weight file that is not installed can only
 	// end in a failed probe after a full model reload; refuse before touching
@@ -62,22 +67,26 @@ func applyEngine(ctx context.Context, m *Manager, args []string, id string) (jso
 	}
 	// Persisting the choice clears the runtime's loaded-model cache, so the
 	// probe below reloads with the selected engine and weight file.
-	if _, err := cliExec("model", "engine", "--model="+model, "--", engine); err != nil {
-		return nil, err
+	if receipt, err := cliExec("select", "model", "engine", "--model="+model, "--", engine); err != nil {
+		return receipt, err
 	}
-	probe, probeErr := cliExec("model", "probe")
+	probe, probeErr := cliExec("probe", "model", "probe")
 	if probeErr == nil {
 		return engineEnvelope(engine, model, false, "", probe), nil
 	}
+	var unknown *unconfirmedError
+	if errors.As(probeErr, &unknown) {
+		return probe, probeErr
+	}
 	// The selected engine failed real inference. Restore the previous
 	// selection, verify the restore with a probe and report both results.
-	if _, err := cliExec("model", "engine", "--model="+prevModel, "--", prevEngine); err != nil {
-		return nil, fmt.Errorf("切换到 %s · %s 失败（%v）；恢复原推理方式 %s · %s 也失败（%v），请重新应用原设置或执行 model reset-cpu",
+	if receipt, err := cliExec("restore", "model", "engine", "--model="+prevModel, "--", prevEngine); err != nil {
+		return receipt, fmt.Errorf("切换到 %s · %s 失败（%v）；恢复原推理方式 %s · %s 也失败（%w），请核对当前模型状态",
 			strings.ToUpper(engine), model, probeErr, strings.ToUpper(prevEngine), prevModel, err)
 	}
-	fbProbe, err := cliExec("model", "probe")
+	fbProbe, err := cliExec("restore-probe", "model", "probe")
 	if err != nil {
-		return nil, fmt.Errorf("切换到 %s · %s 失败（%v）；已恢复 %s · %s 但恢复后推理验证未通过: %v",
+		return fbProbe, fmt.Errorf("切换到 %s · %s 失败（%v）；已恢复 %s · %s 但恢复后推理验证未通过: %w",
 			strings.ToUpper(engine), model, probeErr, strings.ToUpper(prevEngine), prevModel, err)
 	}
 	return engineEnvelope(prevEngine, prevModel, true, probeErr.Error(), fbProbe), nil
