@@ -296,7 +296,7 @@ func (d *desktop) background() {
 				return err
 			}
 			prefs := d.m.Preferences()
-			if info, err := d.m.Installed(); err == nil && prefs.RuntimeAutoUpdate && semver.Compare("v"+info.Version, "v2.0.0-dev.21") < 0 {
+			if info, err := d.m.Installed(); err == nil && prefs.RuntimeAutoUpdate && semver.Compare("v"+info.Version, "v2.0.0-dev.22") < 0 {
 				return installRuntimeForStartup(d.m, prefs.RuntimeAutoRestart)
 			}
 			err := d.m.Start()

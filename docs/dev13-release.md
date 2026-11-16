@@ -3,7 +3,7 @@
 This change prepares `2.0.0-dev.13` from main `f6c7ab3`, after the published
 DEV12. It does not publish a release. The reviewed host entry points are from
 CLI PR #315 commit `640b856`, with its final head `766bea6` (merged as
-`0d01cf89`) checked for changes to these entry points; the Runtime baseline is `2.0.0-dev.21`, using
+`0d01cf89`) checked for changes to these entry points; the target Runtime baseline is `2.0.0-dev.22`, using
 `respire-protocol 2.0.0-dev.16` and wire version 1.
 
 ## Compatibility changes
@@ -25,7 +25,7 @@ CLI PR #315 commit `640b856`, with its final head `766bea6` (merged as
   CLI `runtime account-result` and `runtime key-result`. Key queries require
   the original selected profile. A child model receipt cannot establish that
   the entire multi-step engine application finished.
-- The automatic old-generation upgrade threshold is Runtime DEV21. Downloads
+- The automatic old-generation upgrade threshold is Runtime DEV22. Downloads
   still follow the selected component channel and verified release metadata;
   no Client2 component pin or equal-product-version requirement is introduced.
 
@@ -69,5 +69,8 @@ probe without a recovery write. These used synthetic loopback and CLI protocol
 fixtures, not a real account, credential store, database or inference engine.
 
 Runtime DEV22 publication and the next CLI pin/release are managed upstream.
+The first DEV22 build was cancelled for a macOS launch-claim test fixture path
+canonicalization fix; product logic and protocol are unchanged. CLI targets
+DEV12 independently of Client2 DEV13. DEV22 remains the required upgrade threshold.
 Their release timing does not block this PR, and this change does not modify
 either repository or claim a published new-stack acceptance result.

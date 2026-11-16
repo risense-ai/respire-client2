@@ -1,6 +1,6 @@
 # Required CLI authentication transport
 
-For the pure Runtime DEV21 generation, see [DEV13 preparation](dev13-release.md).
+For the pure Runtime DEV22 target, see [DEV13 preparation](dev13-release.md).
 The transport below remains version 1; CLI `640b856` does not provide a desktop
 continuation method for additional account/key input. Pending receipts are not
 successful completion, and only the original transaction may be queried.
