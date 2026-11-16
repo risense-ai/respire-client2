@@ -409,6 +409,12 @@ export function operations(root) {
       all("tbody tr", root).forEach((row, index) => {
         const job = jobs[index];
         if (job.state === "running") return;
+        if (job.materialPending && job.state === "done") {
+          const recover = document.createElement("button");
+          recover.textContent = "恢复并确认保存材料";
+          recover.dataset.recover = job.id;
+          row.lastElementChild.append(recover);
+        }
         if (job.input) {
           const resume = document.createElement("button");
           resume.textContent = "补充输入并继续";
@@ -455,7 +461,7 @@ export function operations(root) {
         const job = await api("operation-recover", {
           id: button.dataset.recover,
         });
-        if (job.state === "done") recoveryMaterialDialog(job.envelope);
+        if (job.state === "done") recoveryMaterialDialog(job.envelope, { requestId: job.materialPending ? job.id : undefined });
         notify(
           job.state === "done" ? "原请求已完成" : job.error || "结果仍未确认",
           job.state !== "done",
