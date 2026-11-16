@@ -169,8 +169,12 @@ export async function continueAuthentication(id) {
   let job = await api("operation-recover", { id });
   for (;;) {
     if (job.state === "done") return job.envelope;
-    if (job.state !== "unconfirmed" || !job.input || !job.transaction)
-      throw Error(job.error || "原事务尚未等待补充输入，请在操作记录中查询原请求。");
+    if (job.state !== "unconfirmed" || !job.input || !job.transaction) {
+      const error = Error(job.error || "原事务尚未等待补充输入，请在操作记录中查询原请求。");
+      error.requestId = id;
+      error.operation = job;
+      throw error;
+    }
     const args = await supplementalInput(job);
     if (args === null) {
       const error = Error("补充输入已取消，原事务仍保留在操作记录中；未重新认证。");

@@ -22,7 +22,7 @@ var settingsCommands = map[string]commandSpec{
 	"account_use":           {words: []string{"account", "use"}, host: true, write: true, args: []argument{pos("name")}},
 	"migration_list":        {words: []string{"migrate"}, host: true},
 	"migration_apply":       {words: []string{"migrate"}, host: true, write: true, args: []argument{requiredOpt("source", "--source"), requiredOpt("account", "--account")}},
-	"login":                 {words: []string{"login", "--oauth"}, host: true, write: true},
+	"login":                 {method: "auth.login.browser", host: true, write: true, args: []argument{opt("addr", "--addr")}},
 	"logout":                {words: []string{"logout"}, host: true, write: true},
 	"keygen":                {words: []string{"keygen"}, host: true, write: true},
 	"keys_export":           {words: []string{"keys-export"}, host: true, write: true, args: []argument{requiredOpt("out", "--out")}},

@@ -42,6 +42,14 @@ func (m *Manager) hostOperation(ctx context.Context, args []string, secret, meth
 	hostRPC := strings.HasPrefix(method, "auth.")
 	stdin := secret + "\n"
 	if hostRPC {
+		if method == "auth.login.browser" {
+			if secret != "" {
+				return nil, errors.New("浏览器授权不接受桌面凭据")
+			}
+			if err := m.requireHostMethod(ctx, method); err != nil {
+				return nil, err
+			}
+		}
 		params, inputErr := authParams(args, secret)
 		if inputErr != nil {
 			return nil, inputErr

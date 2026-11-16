@@ -16,6 +16,11 @@ Use CLI Stable `1.0.18` or a compatible published package advertising host RPC v
 
 Initial methods are `auth.register`, `auth.login` (including TOTP), `auth.recover` and `auth.reset`. The request is `{v:1,id,method,params}`; a reply contains `{v:1,id,ok,exit,envelope}`. Input is limited to 64 KiB and fields to 16 KiB. Unknown fields, malformed/trailing JSON and client-only invocation are rejected. CLI capabilities advertise transport version 1. The client reports an explicit upgrade error for older packages and never automatically replays authentication after an unknown outcome.
 
+Browser authorization uses the separately advertised `auth.login.browser`
+method. Its string-map params accept only optional `addr` (or `{}`). CLI owns
+OAuth and private custody while returning the structured original account
+receipt. Desktop OAuth tokens, authorization objects and credentials are rejected.
+
 Continuation methods use typed JSON params rather than the original four
 methods' string map. Login params are `{operation_id,source_profile,continuation,
 super_password?,totp?}`; key params are `{operation_id,source_profile,input}`.

@@ -55,12 +55,20 @@ the original job; resubmitting the original form reconciles that job instead of
 starting authentication again. Only a real completed receipt reports success;
 issued recovery material still requires explicit save acknowledgement.
 
+Browser authorization uses the capability-gated `auth.login.browser` stdio
+method with an empty string map or only `addr`. CLI owns OAuth and returns the
+original structured receipt, so subsequent input uses `auth.login.continue`;
+Client2 no longer starts browser login through the unstructured argv path.
+A queried terminal failure carries its operation back to the shared auth helper,
+which releases that completed binding for a later explicit submission. Unknown,
+cancelled and disconnected operations keep their original binding.
+
 Direct business Runtime replies must match both the captured scope and operation
 ID, including failure replies. A mismatch stays unconfirmed without accepting
 the returned envelope. Result-query outer replies keep their existing protocol
 handling; cached original-response validation remains unchanged.
 
-These CLI entry points were checked against CLI PR #317 commit `40a31f0` in
+These CLI entry points were checked against CLI PR #317 commit `f5e22a7` in
 `codex/cli-host-continue-20261116`. Published CLI delivery and native
 end-to-end acceptance remain release gates; this Client2 PR does not modify CLI
 or Runtime and does not claim those gates have passed.
@@ -100,6 +108,10 @@ An isolated browser using the production authentication module exercised cancel,
 TOTP, explicit no-merge (`false`), two independent transport IDs under the same
 job, actual committed-state handling and mandatory recovery-material save
 acknowledgement. These are fixture checks, not native account acceptance.
+Follow-up isolated checks verified browser admission through the stdio method,
+structured pending followed by original-account continuation, and failed-query
+cache release for an explicit corrected submission. Unknown/disconnected queries
+remained bound without replay. These do not prove a real OAuth authorization.
 The existing account test harness only gained bindings for the new shared auth
 helper; no repository test cases were added.
 
