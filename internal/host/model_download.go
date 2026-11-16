@@ -45,6 +45,8 @@ var modelFileSpecs = map[string]modelFileSpec{
 
 var modelMirrors = []string{"https://hf-mirror.com", "https://hf-mirror.net", "https://huggingface.co"}
 
+var errCorruptModelCleanup = errors.New("无法清理校验失败的模型下载文件")
+
 // ModelDir matches the CLI's m3_model_dir(): RSRS_DATA_DIR (already resolved
 // into DataRoot) or ~/.rsrs, plus models/bge-m3.
 func (m *Manager) ModelDir() string {
@@ -179,11 +181,13 @@ func (m *Manager) DownloadModel(ctx context.Context, model, variant, mirror stri
 		}
 		var lastErr error
 		for _, origin := range origins {
-			err := m.downloadModelFrom(ctx, modelFileURLOf(definition, origin, spec.rel), dest, spec)
-			if err == nil {
+			lastErr = m.downloadModelFrom(ctx, modelFileURLOf(definition, origin, spec.rel), dest, spec)
+			if lastErr == nil {
 				break
 			}
-			lastErr = err
+			if errors.Is(lastErr, errCorruptModelCleanup) {
+				return lastErr
+			}
 			if ctx.Err() != nil {
 				return ctx.Err()
 			}
@@ -255,10 +259,16 @@ func (m *Manager) downloadModelFrom(ctx context.Context, url, dest string, spec 
 		return err
 	}
 	if merged != spec.size || hex.EncodeToString(hasher.Sum(nil)) != spec.sha256 {
-		_ = os.Remove(tmp)
-		return fmt.Errorf("下载的 %s 大小或校验和不匹配", filepath.Base(dest))
+		verifyErr := fmt.Errorf("下载的 %s 大小或校验和不匹配", filepath.Base(dest))
+		cleanupErr := os.Remove(tmp)
+		for _, part := range parts {
+			cleanupErr = errors.Join(cleanupErr, os.Remove(part))
+		}
+		if cleanupErr != nil {
+			return errors.Join(verifyErr, fmt.Errorf("%w: %w", errCorruptModelCleanup, cleanupErr))
+		}
+		return verifyErr
 	}
-	_ = os.Remove(dest)
 	if err = os.Rename(tmp, dest); err != nil {
 		return err
 	}

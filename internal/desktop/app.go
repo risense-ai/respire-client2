@@ -3,6 +3,7 @@ package desktop
 import (
 	"context"
 	"embed"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -268,6 +269,26 @@ func updateInterval(value string) time.Duration {
 	}
 }
 
+func installRuntimeForStartup(m interface {
+	InstallRuntime(bool, bool) error
+	Health(context.Context) (host.HealthInfo, json.RawMessage, error)
+	Start() error
+}, restart bool) error {
+	if err := m.InstallRuntime(false, restart); err != nil {
+		return err
+	}
+	if restart {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	_, _, err := m.Health(ctx)
+	cancel()
+	if host.IsUnavailable(err) {
+		return m.Start()
+	}
+	return err
+}
+
 func (d *desktop) background() {
 	if d.m.Preferences().AutoRuntime {
 		d.task("连接 Runtime", func() error {
@@ -276,18 +297,11 @@ func (d *desktop) background() {
 			}
 			prefs := d.m.Preferences()
 			if info, err := d.m.Installed(); err == nil && prefs.RuntimeAutoUpdate && semver.Compare("v"+info.Version, "v2.0.0-dev.16") < 0 {
-				return d.m.InstallRuntime(false, prefs.RuntimeAutoRestart)
+				return installRuntimeForStartup(d.m, prefs.RuntimeAutoRestart)
 			}
 			err := d.m.Start()
-			if err != nil {
-				if _, readErr := d.m.Installed(); readErr == nil || errors.Is(readErr, os.ErrNotExist) {
-					ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-					_, _, healthErr := d.m.Health(ctx)
-					cancel()
-					if host.IsUnavailable(healthErr) {
-						return d.m.InstallRuntime(false, d.m.Preferences().RuntimeAutoRestart)
-					}
-				}
+			if errors.Is(err, host.ErrRuntimeNotInstalled) {
+				return installRuntimeForStartup(d.m, d.m.Preferences().RuntimeAutoRestart)
 			}
 			return err
 		})
@@ -333,10 +347,7 @@ func (d *desktop) background() {
 					// The restart switch decides whether the running instance
 					// is gracefully rotated onto the new version directory.
 					restart := d.m.Preferences().RuntimeAutoRestart
-					if err := d.m.InstallRuntime(true, restart); err != nil {
-						return d.m.InstallRuntime(false, restart)
-					}
-					return nil
+					return d.m.InstallRuntime(true, restart)
 				})
 			}
 		}

@@ -270,18 +270,22 @@ func (m *Manager) InstallRuntime(automatic bool, restart bool) error {
 	var release ReleaseInfo
 	var meta RuntimeMetadata
 	var payload *bootstrapPayload
-	if embedded, payloadErr := readBootstrapPayload(); errors.Is(prevErr, os.ErrNotExist) && payloadErr == nil && embedded.Manifest.Channel == m.Preferences().RuntimeChannel {
-		// Only bootstrap an absent installation from a matching channel.
-		// Installed clients use release discovery so the bundle cannot pin updates.
-		payload = &embedded
-		meta = embedded.runtimeMetadata()
-		if meta, err = m.provenRuntimeMetadata(ctx, meta); err != nil {
-			return err
+	if errors.Is(prevErr, os.ErrNotExist) {
+		embedded, payloadErr := readBootstrapPayload()
+		if payloadErr != nil && !errors.Is(payloadErr, errBootstrapAbsent) {
+			return fmt.Errorf("bootstrap payload: %w", payloadErr)
 		}
-	} else {
-		// No valid payload (absent, foreign platform, or failed verification):
-		// keep the documented online path so non-DMG builds behave unchanged.
-		var err error
+		if payloadErr == nil {
+			channel := m.Preferences().RuntimeChannel
+			if embedded.Manifest.Channel != channel {
+				return fmt.Errorf("嵌入 Runtime 通道 %q 与设置中的通道 %q 不一致", embedded.Manifest.Channel, channel)
+			}
+			payload = &embedded
+			meta = embedded.Metadata
+		}
+	}
+	if payload == nil {
+		// Installed clients and absent payloads use release discovery.
 		release, meta, err = m.LatestRuntime(ctx)
 		if err != nil {
 			return err
@@ -323,8 +327,8 @@ func (m *Manager) InstallRuntime(automatic bool, restart bool) error {
 				meta = retainedMeta
 			}
 			reuseRuntime = true
-		} else if semver.Compare("v"+previous.Version, "v"+meta.RuntimeVersion) > 0 {
-			return fmt.Errorf("installed newer Runtime verification failed: %w", verifyErr)
+		} else {
+			return fmt.Errorf("installed Runtime verification failed: %w", verifyErr)
 		}
 	}
 	h, _, err := m.Health(ctx)
@@ -386,8 +390,10 @@ func (m *Manager) InstallRuntime(automatic bool, restart bool) error {
 		return err
 	}
 	if reuseRuntime {
-		if err := m.Start(); err != nil {
-			return err
+		if restart {
+			if err := m.Start(); err != nil {
+				return err
+			}
 		}
 		return m.finishBootstrapPath(payload)
 	}

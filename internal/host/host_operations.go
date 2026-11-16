@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -30,33 +31,11 @@ func (b *cappedOutput) Write(p []byte) (int, error) {
 }
 
 func (m *Manager) hostExecutable(ctx context.Context) (string, error) {
-	info, err := m.Installed()
-	if errors.Is(err, os.ErrNotExist) {
-		external, externalErr := m.External(ctx)
-		if externalErr == nil {
-			return external.Path, nil
-		}
-	} else if err == nil {
-		dir := m.runtimeDir(info.Version)
-		if err = m.verifyInstalled(info); err != nil {
-			return "", err
-		}
-		return filepath.Join(dir, runtimeBinary()), nil
-	}
-	if err != nil && !errors.Is(err, os.ErrNotExist) {
-		return "", err
-	}
-	h, _, err := m.Health(ctx)
+	cli, err := m.External(ctx)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("宿主操作需要独立 CLI，请先安装或修复 CLI: %w", err)
 	}
-	if err = verifyHostProcess(h); err != nil {
-		return "", err
-	}
-	if err = verifyExecutable(h.Exe); err != nil {
-		return "", err
-	}
-	return h.Exe, nil
+	return cli.Path, nil
 }
 
 func (m *Manager) hostOperation(ctx context.Context, args []string, secret, method, id string) (json.RawMessage, error) {
@@ -90,12 +69,22 @@ func (m *Manager) hostOperation(ctx context.Context, args []string, secret, meth
 	configureCommand(cmd)
 	for _, item := range os.Environ() {
 		key, _, _ := strings.Cut(item, "=")
-		if strings.EqualFold(key, "RSRS_BIN_DIR") || strings.EqualFold(key, "RSRS_CLIENT_ONLY") || strings.EqualFold(key, "RSRS_NO_AUTOSTART") {
+		if strings.HasPrefix(method, "runtime.") && strings.EqualFold(key, "RSRS_RPC_PORT") {
+			continue
+		}
+		if strings.EqualFold(key, "RSRS_BIN_DIR") || strings.EqualFold(key, "RSRS_CLIENT_ONLY") || strings.EqualFold(key, "RSRS_NO_AUTOSTART") || strings.EqualFold(key, "RSRS_DATA_DIR") || strings.EqualFold(key, "RSRS_CLIENT2_HOST") || strings.EqualFold(key, "RSRS_RUNTIME_BIN") || strings.EqualFold(key, "ONEMEMORY_RUNTIME_BIN") || strings.EqualFold(key, "RESPIRE_RUNTIME_BIN") {
 			continue
 		}
 		cmd.Env = append(cmd.Env, item)
 	}
-	cmd.Env = append(cmd.Env, "RSRS_BIN_DIR="+filepath.Dir(executable), "RSRS_CLIENT_ONLY=0", "RSRS_NO_AUTOSTART=0")
+	cmd.Env = append(cmd.Env, "RSRS_BIN_DIR="+filepath.Dir(executable), "RSRS_CLIENT_ONLY=0", "RSRS_NO_AUTOSTART=0", "RSRS_DATA_DIR="+m.DataRoot, "RSRS_CLIENT2_HOST=1")
+	if strings.HasPrefix(method, "runtime.") {
+		endpoint, parseErr := url.Parse(m.Endpoint)
+		if parseErr != nil || endpoint.Port() == "" {
+			return nil, errors.New("无法确认待解锁 Runtime 的端口")
+		}
+		cmd.Env = append(cmd.Env, "RSRS_RPC_PORT="+endpoint.Port())
+	}
 	if secret != "" || hostRPC {
 		cmd.Stdin = strings.NewReader(stdin)
 	}

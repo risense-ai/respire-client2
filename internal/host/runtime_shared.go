@@ -281,26 +281,40 @@ func (m *Manager) provenRuntimeMetadata(ctx context.Context, meta RuntimeMetadat
 		return meta, err
 	}
 	name := "runtime-build-" + target + ".json"
-	var raw json.RawMessage
-	if payload, err := bootstrapDir(); err == nil {
-		if bytes, readErr := os.ReadFile(filepath.Join(payload, name)); readErr == nil {
-			raw = bytes
+	payload, err := bootstrapDir()
+	if err == nil {
+		_, err = os.Stat(filepath.Join(payload, bootstrapManifestFile))
+		if errors.Is(err, os.ErrNotExist) {
+			if _, dirErr := os.Stat(payload); errors.Is(dirErr, os.ErrNotExist) {
+				err = errBootstrapAbsent
+			} else if dirErr != nil {
+				err = dirErr
+			}
 		}
 	}
-	if len(raw) == 0 {
-		if err = m.fetchJSON(ctx, "https://github.com/risense-ai/respire-runtime/releases/download/v"+meta.RuntimeVersion+"/"+name, &raw); err != nil {
-			return meta, err
+	var raw json.RawMessage
+	source := "embedded Runtime metadata"
+	if errors.Is(err, errBootstrapAbsent) {
+		source = "online Runtime metadata"
+		if err = m.fetchJSONOnce(ctx, "https://github.com/risense-ai/respire-runtime/releases/download/v"+meta.RuntimeVersion+"/"+name, &raw); err != nil {
+			return meta, fmt.Errorf("%s: %w", source, err)
 		}
+	} else if err != nil {
+		return meta, fmt.Errorf("bootstrap payload: %w", err)
+	} else if raw, err = os.ReadFile(filepath.Join(payload, name)); err != nil {
+		return meta, fmt.Errorf("%s: %w", source, err)
 	}
 	proven, err := NormalizeRuntimeMetadata(raw)
 	if err != nil {
-		return meta, err
+		return meta, fmt.Errorf("%s: %w", source, err)
 	}
 	if proven.RuntimeVersion != meta.RuntimeVersion || proven.BinaryHash != meta.BinaryHash {
 		return meta, errors.New("Runtime 旧安装与可信发布不匹配")
 	}
-	_, err = runtimeReceipt(proven)
-	return proven, err
+	if _, err = runtimeReceipt(proven); err != nil {
+		return meta, fmt.Errorf("%s: %w", source, err)
+	}
+	return proven, nil
 }
 
 // MigrateRuntime verifies legacy installations before shared startup version checks.
@@ -342,6 +356,9 @@ func (m *Manager) MigrateRuntime() error {
 	defer cancel()
 	meta := RuntimeMetadata{RuntimeVersion: selected.Version, BinaryHash: selected.SHA256}
 	if selected.Release != nil {
+		if _, err := receiptFiles(selected); err != nil {
+			return err
+		}
 		meta.ProofJSON = selected.Release.JSON
 	}
 	meta, err := m.provenRuntimeMetadata(ctx, meta)
@@ -349,9 +366,6 @@ func (m *Manager) MigrateRuntime() error {
 		return err
 	}
 	if selected.Release != nil {
-		if _, err = receiptFiles(selected); err != nil {
-			return err
-		}
 		meta, err = NormalizeRuntimeMetadata([]byte(selected.Release.JSON))
 		if err != nil {
 			return err
