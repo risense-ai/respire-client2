@@ -19,6 +19,41 @@ type hostTransaction struct {
 
 var hostOperationID = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
 
+func (job Operation) materialPending() bool {
+	return job.Name == "auth_reset" && job.host && !job.MaterialSaved && job.Transaction != nil &&
+		job.Transaction.Kind == "key" && (job.State == "done" || job.State == "unconfirmed")
+}
+
+// This receipt is separate from transport submission and ordinary operation acknowledgement.
+func (m *Manager) AcknowledgeRecoveryMaterial(id string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	job := m.jobs[id]
+	if job == nil || job.Name != "auth_reset" || !job.host || job.Transaction == nil || job.Transaction.Kind != "key" || job.State != "done" {
+		return errors.New("只能确认原超级密码更换事务已签发的恢复材料")
+	}
+	if job.MaterialSaved {
+		return nil
+	}
+	var envelope struct {
+		Summary struct {
+			Outcome string `json:"outcome"`
+			Super   string `json:"super"`
+		} `json:"summary"`
+	}
+	returned := transactionFromEnvelope(job.Name, job.Envelope)
+	if json.Unmarshal(job.Envelope, &envelope) != nil || envelope.Summary.Outcome != "committed" ||
+		envelope.Summary.Super == "" || returned == nil || *returned != *job.Transaction || hostEnvelopeError(job.Envelope) != nil {
+		return errors.New("请先查询原事务并保存其签发的恢复材料")
+	}
+	job.MaterialSaved = true
+	if err := m.persistOperationsLocked(); err != nil {
+		job.MaterialSaved = false
+		return err
+	}
+	return nil
+}
+
 func transactionFromEnvelope(name string, raw json.RawMessage) *hostTransaction {
 	var envelope struct {
 		Summary hostTransaction `json:"summary"`

@@ -14,32 +14,35 @@ import (
 )
 
 type Operation struct {
-	ID           string            `json:"id"`
-	Name         string            `json:"name"`
-	State        string            `json:"state"`
-	Started      time.Time         `json:"started"`
-	Finished     *time.Time        `json:"finished,omitempty"`
-	Error        string            `json:"error,omitempty"`
-	Envelope     json.RawMessage   `json:"envelope,omitempty"`
-	Scope        *runtimeScope     `json:"scope,omitempty"`
-	RuntimeID    string            `json:"runtimeOperationId,omitempty"`
-	Transaction  *hostTransaction  `json:"transaction,omitempty"`
-	Input        *hostInputRequest `json:"input,omitempty"`
-	TransportID  string            `json:"transportId,omitempty"`
-	write, host  bool
-	inputBlocked bool
+	ID              string            `json:"id"`
+	Name            string            `json:"name"`
+	State           string            `json:"state"`
+	Started         time.Time         `json:"started"`
+	Finished        *time.Time        `json:"finished,omitempty"`
+	Error           string            `json:"error,omitempty"`
+	Envelope        json.RawMessage   `json:"envelope,omitempty"`
+	Scope           *runtimeScope     `json:"scope,omitempty"`
+	RuntimeID       string            `json:"runtimeOperationId,omitempty"`
+	Transaction     *hostTransaction  `json:"transaction,omitempty"`
+	Input           *hostInputRequest `json:"input,omitempty"`
+	TransportID     string            `json:"transportId,omitempty"`
+	MaterialSaved   bool              `json:"materialSaved,omitempty"`
+	MaterialPending bool              `json:"materialPending,omitempty"`
+	write, host     bool
+	inputBlocked    bool
 }
 
 type operationRecord struct {
-	ID          string           `json:"id"`
-	Name        string           `json:"name"`
-	Started     time.Time        `json:"started"`
-	State       string           `json:"state"`
-	Host        bool             `json:"host"`
-	Scope       *runtimeScope    `json:"scope,omitempty"`
-	RuntimeID   string           `json:"runtimeOperationId,omitempty"`
-	Transaction *hostTransaction `json:"transaction,omitempty"`
-	TransportID string           `json:"transportId,omitempty"`
+	ID            string           `json:"id"`
+	Name          string           `json:"name"`
+	Started       time.Time        `json:"started"`
+	State         string           `json:"state"`
+	Host          bool             `json:"host"`
+	Scope         *runtimeScope    `json:"scope,omitempty"`
+	RuntimeID     string           `json:"runtimeOperationId,omitempty"`
+	Transaction   *hostTransaction `json:"transaction,omitempty"`
+	TransportID   string           `json:"transportId,omitempty"`
+	MaterialSaved bool             `json:"materialSaved,omitempty"`
 }
 
 type rpcResponse struct {
@@ -76,7 +79,7 @@ func (m *Manager) loadOperations() error {
 		if state == "running" {
 			state = "unconfirmed"
 		}
-		m.jobs[r.ID] = &Operation{ID: r.ID, Name: r.Name, Started: r.Started, State: state, host: r.Host, write: true, Scope: r.Scope, RuntimeID: r.RuntimeID, Transaction: r.Transaction, TransportID: r.TransportID}
+		m.jobs[r.ID] = &Operation{ID: r.ID, Name: r.Name, Started: r.Started, State: state, host: r.Host, write: true, Scope: r.Scope, RuntimeID: r.RuntimeID, Transaction: r.Transaction, TransportID: r.TransportID, MaterialSaved: r.MaterialSaved}
 	}
 	return nil
 }
@@ -85,7 +88,7 @@ func (m *Manager) persistOperationsLocked() error {
 	var records []operationRecord
 	for _, j := range m.jobs {
 		if j.write {
-			records = append(records, operationRecord{ID: j.ID, Name: j.Name, Started: j.Started, State: j.State, Host: j.host, Scope: j.Scope, RuntimeID: j.RuntimeID, Transaction: j.Transaction, TransportID: j.TransportID})
+			records = append(records, operationRecord{ID: j.ID, Name: j.Name, Started: j.Started, State: j.State, Host: j.host, Scope: j.Scope, RuntimeID: j.RuntimeID, Transaction: j.Transaction, TransportID: j.TransportID, MaterialSaved: j.MaterialSaved})
 		}
 	}
 	sort.Slice(records, func(i, j int) bool { return records[i].Started.After(records[j].Started) })
@@ -99,6 +102,7 @@ func (m *Manager) Operations() []Operation {
 	for _, j := range m.jobs {
 		copy := *j
 		copy.Input = pendingHostInput(copy)
+		copy.MaterialPending = copy.materialPending()
 		copy.Envelope = nil
 		list = append(list, copy)
 	}
@@ -115,6 +119,7 @@ func (m *Manager) Operation(id string) (Operation, error) {
 	}
 	copy := *job
 	copy.Input = pendingHostInput(copy)
+	copy.MaterialPending = copy.materialPending()
 	return copy, nil
 }
 
@@ -196,7 +201,7 @@ func (m *Manager) Submit(name, id string, raw json.RawMessage, confirmed bool, s
 	for key, j := range m.jobs {
 		if j.State == "running" {
 			active++
-		} else if j.State != "unconfirmed" && (oldest == nil || j.Started.Before(oldest.Started)) {
+		} else if j.State != "unconfirmed" && !j.materialPending() && (oldest == nil || j.Started.Before(oldest.Started)) {
 			oldest = m.jobs[key]
 		}
 	}
@@ -415,7 +420,7 @@ func (m *Manager) Recover(id string) (Operation, error) {
 		return Operation{}, errors.New("操作记录不存在")
 	}
 	job := *original
-	if job.State != "unconfirmed" {
+	if job.State != "unconfirmed" && !job.materialPending() {
 		m.mu.Unlock()
 		return job, nil
 	}
@@ -463,5 +468,6 @@ func (m *Manager) Recover(id string) (Operation, error) {
 	}
 	copy := *j
 	copy.Input = pendingHostInput(copy)
+	copy.MaterialPending = copy.materialPending()
 	return copy, nil
 }

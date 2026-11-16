@@ -47,7 +47,7 @@ const RECOVERY_NOTE =
 // recoveryMaterialDialog shows issued material behind a mandatory
 // save-acknowledgement checkbox; the close buttons and Escape are removed so
 // the receipt cannot be dismissed without the acknowledgement.
-export function recoveryMaterialDialog(envelope, { note = RECOVERY_NOTE } = {}) {
+export function recoveryMaterialDialog(envelope, { note = RECOVERY_NOTE, requestId = envelope?.recoveryRequestId } = {}) {
   const issued = issuedRecoveryMaterial(envelope);
   if (!issued) return null;
   const element = dialog({
@@ -58,9 +58,11 @@ export function recoveryMaterialDialog(envelope, { note = RECOVERY_NOTE } = {}) 
         recoveryMaterialJson(issued),
       )}</textarea></label><label class="checkbox-label"><input type="checkbox" data-saved>我已将恢复材料保存到安全位置</label>`,
     submit: "我已保存恢复材料",
-    onSubmit: () => {
+    onSubmit: async () => {
       if (!$("[data-saved]", element).checked) return false;
+      if (requestId) await api("recovery-material-ack", { id: requestId, confirmed: true });
       notify("恢复材料已确认保存");
+      document.dispatchEvent(new CustomEvent("respire-operation"));
     },
   });
   element.querySelectorAll("[data-close]").forEach((button) => button.remove());
@@ -72,6 +74,21 @@ export function recoveryMaterialDialog(envelope, { note = RECOVERY_NOTE } = {}) 
     submit.disabled = !checkbox.checked;
   });
   return element;
+}
+
+export async function restorePendingRecoveryMaterials() {
+  const jobs = await api("operations");
+  for (const pending of jobs.filter((job) => job.materialPending)) {
+    const job = await api("operation-recover", { id: pending.id });
+    if (job.state !== "done") {
+      notify(job.error || "恢复材料尚未确认，请在操作记录中查询原事务。", true);
+      continue;
+    }
+    if (!job.materialPending) continue;
+    const element = recoveryMaterialDialog(job.envelope, { requestId: job.id });
+    if (!element) throw Error("原事务未返回恢复材料，请在操作记录中查询原事务。");
+    await new Promise((resolve) => element.addEventListener("close", resolve, { once: true }));
+  }
 }
 
 export function validateAuthentication(kind, values) {
@@ -168,7 +185,9 @@ function supplementalInput(job) {
 export async function continueAuthentication(id) {
   let job = await api("operation-recover", { id });
   for (;;) {
-    if (job.state === "done") return job.envelope;
+    if (job.state === "done") return job.materialPending
+      ? { ...job.envelope, recoveryRequestId: id }
+      : job.envelope;
     if (job.state !== "unconfirmed" || !job.input || !job.transaction) {
       const error = Error(job.error || "原事务尚未等待补充输入，请在操作记录中查询原请求。");
       error.requestId = id;
