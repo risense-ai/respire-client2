@@ -39,10 +39,6 @@ func (m *Manager) hostExecutable(ctx context.Context) (string, error) {
 }
 
 func (m *Manager) hostOperation(ctx context.Context, args []string, secret, method, id string) (json.RawMessage, error) {
-	executable, err := m.hostExecutable(ctx)
-	if err != nil {
-		return nil, err
-	}
 	hostRPC := strings.HasPrefix(method, "auth.")
 	stdin := secret + "\n"
 	if hostRPC {
@@ -65,6 +61,15 @@ func (m *Manager) hostOperation(ctx context.Context, args []string, secret, meth
 		}
 		args = append(args, "--key-stdin")
 	}
+	return m.runHostCommand(ctx, args, stdin, secret != "" || hostRPC, hostRPC, method, id)
+}
+
+// Shared process boundary: authentication payloads travel only on stdin.
+func (m *Manager) runHostCommand(ctx context.Context, args []string, stdin string, hasInput, hostRPC bool, method, id string) (json.RawMessage, error) {
+	executable, err := m.hostExecutable(ctx)
+	if err != nil {
+		return nil, err
+	}
 	cmd := exec.CommandContext(ctx, executable, append([]string{"--json"}, args...)...)
 	configureCommand(cmd)
 	for _, item := range os.Environ() {
@@ -85,7 +90,7 @@ func (m *Manager) hostOperation(ctx context.Context, args []string, secret, meth
 		}
 		cmd.Env = append(cmd.Env, "RSRS_RPC_PORT="+endpoint.Port())
 	}
-	if secret != "" || hostRPC {
+	if hasInput {
 		cmd.Stdin = strings.NewReader(stdin)
 	}
 	out, stderr := &cappedOutput{limit: 8 << 20}, &cappedOutput{limit: 64 << 10}
@@ -122,7 +127,13 @@ func (m *Manager) hostOperation(ctx context.Context, args []string, secret, meth
 				}
 				return nil, &unconfirmedError{id, errors.New("账户 RPC 回执协议或 ID 不匹配，请先核对当前身份")}
 			}
-			return reply.Envelope, hostEnvelopeError(reply.Envelope)
+			if receiptErr := hostEnvelopeError(reply.Envelope); receiptErr != nil {
+				return reply.Envelope, receiptErr
+			}
+			if !reply.OK || runErr != nil {
+				return reply.Envelope, &unconfirmedError{id, errors.New("宿主退出状态与完成回执不一致，请查询原事务")}
+			}
+			return reply.Envelope, nil
 		}
 		if err = hostEnvelopeError(raw); err != nil {
 			return raw, err

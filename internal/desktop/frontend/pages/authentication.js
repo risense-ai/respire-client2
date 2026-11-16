@@ -6,6 +6,9 @@ import {
   panel,
   dialog,
   execute,
+  api,
+  waitForOperation,
+  select,
   action,
   confirm,
   notify,
@@ -85,11 +88,110 @@ export async function runAuthentication(kind, values) {
   const credentials = { password: values.password };
   if (values.super) credentials.super = values.super;
   if (values.totp) credentials.totp = values.totp.trim();
-  return execute(
+  return executeAuthentication(
     "auth_" + kind,
     { addr: values.addr.trim(), user: values.user.trim() },
     { secret: JSON.stringify(credentials) },
   );
+}
+
+// Keep only request IDs in memory, so cancelling an input dialog never starts
+// another authentication when the original form is submitted again.
+const pendingAuthentication = new Map();
+export async function executeAuthentication(name, args = {}, options = {}) {
+  const key = JSON.stringify([name, args]);
+  const previous = pendingAuthentication.get(key);
+  try {
+    let result;
+    if (previous) {
+      result = await continueAuthentication(previous);
+    } else {
+      try {
+        result = await execute(name, args, options);
+      } catch (error) {
+        if (!error.requestId || error.operation?.state === "failed") throw error;
+        pendingAuthentication.set(key, error.requestId);
+        result = await continueAuthentication(error.requestId);
+      }
+    }
+    pendingAuthentication.delete(key);
+    return result;
+  } catch (error) {
+    if (error.operation?.state === "failed") pendingAuthentication.delete(key);
+    throw error;
+  }
+}
+
+const supplementaryLabels = {
+  totp: "两步验证代码（6 位数字）",
+  legacy_password: "旧版登录密码",
+  account_secret: "Account Secret",
+  source_secret: "来源记忆库恢复材料",
+  secret_key: "Secret Key",
+  new_super: "新超级密码",
+  super_password: "超级密码",
+  password: "原登录密码",
+};
+
+function supplementalInput(job) {
+  const request = job.input;
+  const allowed = request.method === "auth.login.continue"
+    ? ["totp", "legacy_password", "account_secret", "source_secret", "secret_key", "new_super", "super_password", "merge_local", "host_credentials"]
+    : request.method === "auth.key.continue"
+      ? ["password", "super_password", "account_secret", "totp"] : [];
+  const required = request.required_inputs;
+  if (!Array.isArray(required) || !required.length || new Set(required).size !== required.length || required.some((field) => !allowed.includes(field)))
+    throw Error("CLI 返回了不支持的补充输入要求，原事务保留；请更新客户端或核对 CLI。");
+  return new Promise((resolve) => {
+    let accepted = false;
+    const element = dialog({
+      title: "继续原账户操作",
+      body: `<p class="hint">补充输入只用于原操作，不会重新登录或创建另一项事务。</p><p>${h(request.user || "")}${request.addr ? " · " + h(request.addr) : ""}</p><p>原事务：<code>${h(job.transaction.operation_id)}</code></p>` + required.map((field) => {
+        if (field === "host_credentials") return '<p class="hint">CLI 将从自己的保管记录恢复所需材料。</p>';
+        if (field === "merge_local") return select(field, "是否合并原事务所指的本机记忆库", [["", "请选择"], ["true", "确认合并"], ["false", "不合并"]], "");
+        return input(field, supplementaryLabels[field], "", { type: "password", required: true });
+      }).join(""),
+      submit: "提交到原事务",
+      onSubmit: (values) => {
+        if (required.includes("merge_local")) {
+          if (!["true", "false"].includes(values.merge_local)) throw Error("请明确选择是否合并本机记忆库");
+          values.merge_local = values.merge_local === "true";
+        }
+        accepted = true;
+        resolve(values);
+      },
+    });
+    element.addEventListener("close", () => { if (!accepted) resolve(null); }, { once: true });
+  });
+}
+
+export async function continueAuthentication(id) {
+  let job = await api("operation-recover", { id });
+  for (;;) {
+    if (job.state === "done") return job.envelope;
+    if (job.state !== "unconfirmed" || !job.input || !job.transaction)
+      throw Error(job.error || "原事务尚未等待补充输入，请在操作记录中查询原请求。");
+    const args = await supplementalInput(job);
+    if (args === null) {
+      const error = Error("补充输入已取消，原事务仍保留在操作记录中；未重新认证。");
+      error.requestId = id;
+      throw error;
+    }
+    const transportId = "desktop-" + crypto.randomUUID();
+    let submitted;
+    try {
+      submitted = await api("operation-continue", { id, transportId, args, confirmed: true });
+    } catch (error) {
+      error.requestId = id;
+      throw error; // A lost response must be reconciled, never retransmitted.
+    }
+    try {
+      return await waitForOperation(submitted);
+    } catch (error) {
+      if (error.operation?.state !== "unconfirmed" || !error.operation.input) throw error;
+      job = error.operation;
+    }
+  }
 }
 
 export function authenticationPanel(root, ctx, refresh) {
@@ -177,7 +279,7 @@ export function authenticationPanel(root, ctx, refresh) {
             ))
           )
             return false;
-          const result = await execute(
+          const result = await executeAuthentication(
             "auth_reset",
             {},
             {
@@ -221,7 +323,7 @@ export function authenticationPanel(root, ctx, refresh) {
           ))
         )
           return false;
-        const result = await execute(
+        const result = await executeAuthentication(
           "auth_recover",
           {
             ...(addr.trim() ? { addr: addr.trim() } : {}),

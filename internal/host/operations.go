@@ -14,17 +14,20 @@ import (
 )
 
 type Operation struct {
-	ID          string           `json:"id"`
-	Name        string           `json:"name"`
-	State       string           `json:"state"`
-	Started     time.Time        `json:"started"`
-	Finished    *time.Time       `json:"finished,omitempty"`
-	Error       string           `json:"error,omitempty"`
-	Envelope    json.RawMessage  `json:"envelope,omitempty"`
-	Scope       *runtimeScope    `json:"scope,omitempty"`
-	RuntimeID   string           `json:"runtimeOperationId,omitempty"`
-	Transaction *hostTransaction `json:"transaction,omitempty"`
-	write, host bool
+	ID           string            `json:"id"`
+	Name         string            `json:"name"`
+	State        string            `json:"state"`
+	Started      time.Time         `json:"started"`
+	Finished     *time.Time        `json:"finished,omitempty"`
+	Error        string            `json:"error,omitempty"`
+	Envelope     json.RawMessage   `json:"envelope,omitempty"`
+	Scope        *runtimeScope     `json:"scope,omitempty"`
+	RuntimeID    string            `json:"runtimeOperationId,omitempty"`
+	Transaction  *hostTransaction  `json:"transaction,omitempty"`
+	Input        *hostInputRequest `json:"input,omitempty"`
+	TransportID  string            `json:"transportId,omitempty"`
+	write, host  bool
+	inputBlocked bool
 }
 
 type operationRecord struct {
@@ -36,6 +39,7 @@ type operationRecord struct {
 	Scope       *runtimeScope    `json:"scope,omitempty"`
 	RuntimeID   string           `json:"runtimeOperationId,omitempty"`
 	Transaction *hostTransaction `json:"transaction,omitempty"`
+	TransportID string           `json:"transportId,omitempty"`
 }
 
 type rpcResponse struct {
@@ -72,7 +76,7 @@ func (m *Manager) loadOperations() error {
 		if state == "running" {
 			state = "unconfirmed"
 		}
-		m.jobs[r.ID] = &Operation{ID: r.ID, Name: r.Name, Started: r.Started, State: state, host: r.Host, write: true, Scope: r.Scope, RuntimeID: r.RuntimeID, Transaction: r.Transaction}
+		m.jobs[r.ID] = &Operation{ID: r.ID, Name: r.Name, Started: r.Started, State: state, host: r.Host, write: true, Scope: r.Scope, RuntimeID: r.RuntimeID, Transaction: r.Transaction, TransportID: r.TransportID}
 	}
 	return nil
 }
@@ -81,7 +85,7 @@ func (m *Manager) persistOperationsLocked() error {
 	var records []operationRecord
 	for _, j := range m.jobs {
 		if j.write {
-			records = append(records, operationRecord{ID: j.ID, Name: j.Name, Started: j.Started, State: j.State, Host: j.host, Scope: j.Scope, RuntimeID: j.RuntimeID, Transaction: j.Transaction})
+			records = append(records, operationRecord{ID: j.ID, Name: j.Name, Started: j.Started, State: j.State, Host: j.host, Scope: j.Scope, RuntimeID: j.RuntimeID, Transaction: j.Transaction, TransportID: j.TransportID})
 		}
 	}
 	sort.Slice(records, func(i, j int) bool { return records[i].Started.After(records[j].Started) })
@@ -94,6 +98,7 @@ func (m *Manager) Operations() []Operation {
 	list := make([]Operation, 0, len(m.jobs))
 	for _, j := range m.jobs {
 		copy := *j
+		copy.Input = pendingHostInput(copy)
 		copy.Envelope = nil
 		list = append(list, copy)
 	}
@@ -108,7 +113,9 @@ func (m *Manager) Operation(id string) (Operation, error) {
 	if !ok {
 		return Operation{}, errors.New("操作记录不存在")
 	}
-	return *job, nil
+	copy := *job
+	copy.Input = pendingHostInput(copy)
+	return copy, nil
 }
 
 func (m *Manager) HasActiveOperations() bool {
@@ -336,6 +343,13 @@ func (m *Manager) executeRPCScoped(ctx context.Context, method string, args []st
 	if err != nil {
 		return m.inspectResult(ctx, id, scope, err)
 	}
+	switch method {
+	case "runtime.status", "assets.status", "model.catalog", "model.progress", "cli.progress", "runtime.result":
+	default:
+		if reply.Scope == nil || *reply.Scope != *scope || reply.OperationID != id {
+			return nil, &unconfirmedError{id, errors.New("Runtime 业务回复作用域或操作 ID 与原请求不匹配，请查询原请求")}
+		}
+	}
 	return reply.Envelope, responseError(reply)
 }
 
@@ -394,13 +408,21 @@ func (m *Manager) inspectResult(ctx context.Context, id string, scope *runtimeSc
 
 // Recover inspects a saved request; it never submits its command again.
 func (m *Manager) Recover(id string) (Operation, error) {
-	job, err := m.Operation(id)
-	if err != nil {
-		return job, err
+	m.mu.Lock()
+	original := m.jobs[id]
+	if original == nil {
+		m.mu.Unlock()
+		return Operation{}, errors.New("操作记录不存在")
 	}
+	job := *original
 	if job.State != "unconfirmed" {
+		m.mu.Unlock()
 		return job, nil
 	}
+	original.State = "running"
+	original.inputBlocked = true
+	m.mu.Unlock()
+	var err error
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	var envelope json.RawMessage
@@ -421,6 +443,7 @@ func (m *Manager) Recover(id string) (Operation, error) {
 	j := m.jobs[id]
 	if len(envelope) > 0 {
 		j.Envelope = envelope
+		j.inputBlocked = false
 	}
 	if err == nil {
 		j.State = "done"
@@ -430,7 +453,7 @@ func (m *Manager) Recover(id string) (Operation, error) {
 		var unknown *unconfirmedError
 		if errors.As(err, &unknown) {
 			unknown.id = id
-			j.Error = err.Error()
+			j.State, j.Error = "unconfirmed", err.Error()
 		} else {
 			j.State = "failed"
 		}
@@ -438,5 +461,7 @@ func (m *Manager) Recover(id string) (Operation, error) {
 	if err = m.persistOperationsLocked(); err != nil {
 		return *j, err
 	}
-	return *j, nil
+	copy := *j
+	copy.Input = pendingHostInput(copy)
+	return copy, nil
 }

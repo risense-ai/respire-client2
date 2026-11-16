@@ -29,20 +29,41 @@ CLI PR #315 commit `640b856`, with its final head `766bea6` (merged as
   still follow the selected component channel and verified release metadata;
   no Client2 component pin or equal-product-version requirement is introduced.
 
-## Remaining upstream limitations
+## Explicit account/key continuation
 
-CLI `640b856` accepts only `auth.register`, `auth.login`, `auth.recover` and
-`auth.reset` over the credential-safe stdin host RPC. It does not expose a
-desktop account/key continuation method. Client2 therefore preserves pending
-transactions, queries available original-result commands, and reports missing
-input support explicitly. It never resubmits an authentication or key write.
+CLI host stdio retains version 1 and advertises `auth.login.continue` and
+`auth.key.continue` in `summary.capabilities.host_rpc.methods`. Client2 queries
+and validates the original receipt before submitting only requested inputs.
+The original desktop job, host `operation_id` and `source_profile` remain
+unchanged; each submission uses an independent transport request ID.
 
-In particular, the CLI login path can require an interactive terminal for
-additional input. Its generic failure envelope does not always retain a
-structured operation ID and source profile. Client2 cannot safely reconstruct
-those from arbitrary error text or replace them with the desktop request ID;
-such operations require CLI-side reconciliation. This PR does not modify CLI
-or Runtime, and does not claim complete desktop continuation acceptance.
+Login continuation sends typed `{operation_id, source_profile, continuation,
+super_password?, totp?}`. The continuation object contains only DEV16
+supplemental fields. CLI restores the original authorization, account and
+migration intent from its custody. Key continuation sends typed
+`{operation_id, source_profile, input}` with only user-supplied DEV16 key inputs.
+Client2 never constructs private material, challenges, custody acknowledgements
+or replacement intent. A capability failure or uncertain transport result
+requires another original-result query before collecting inputs again.
+
+`runtime key-result --operation-id=... --source-profile=...` lets CLI validate
+the original profile while Runtime is paused. It replaces the former live-health
+precondition. Restarted clients first recover the original receipt and then show
+its requested inputs in Operations. Password/browser login, key recovery and
+super-password reset use the same continuation UI. Cancelling input preserves
+the original job; resubmitting the original form reconciles that job instead of
+starting authentication again. Only a real completed receipt reports success;
+issued recovery material still requires explicit save acknowledgement.
+
+Direct business Runtime replies must match both the captured scope and operation
+ID, including failure replies. A mismatch stays unconfirmed without accepting
+the returned envelope. Result-query outer replies keep their existing protocol
+handling; cached original-response validation remains unchanged.
+
+These CLI entry points were checked against CLI PR #317 commit `40a31f0` in
+`codex/cli-host-continue-20261116`. Published CLI delivery and native
+end-to-end acceptance remain release gates; this Client2 PR does not modify CLI
+or Runtime and does not claim those gates have passed.
 
 ## Validation and release gate
 
@@ -67,6 +88,20 @@ scope preservation across a desktop restart, pending host identity and
 secret-free journals, separate model child identities, and an unknown model
 probe without a recovery write. These used synthetic loopback and CLI protocol
 fixtures, not a real account, credential store, database or inference engine.
+
+The continuation increment also passed isolated assertions using a synthetic CLI
+executable and loopback replies: account/key query after restart without live
+Runtime health, original host identity with separate transport IDs, capability
+rejection, committed/awaiting-verification queries without replay, mismatched
+continuation receipts staying unknown, private/admission inputs rejected, and
+secret-free journals. Direct successful and failed business replies with wrong
+scope/opid were rejected; result-query outer replies were handled separately.
+An isolated browser using the production authentication module exercised cancel,
+TOTP, explicit no-merge (`false`), two independent transport IDs under the same
+job, actual committed-state handling and mandatory recovery-material save
+acknowledgement. These are fixture checks, not native account acceptance.
+The existing account test harness only gained bindings for the new shared auth
+helper; no repository test cases were added.
 
 Runtime DEV22 publication and the next CLI pin/release are managed upstream.
 The first DEV22 build was cancelled for a macOS launch-claim test fixture path

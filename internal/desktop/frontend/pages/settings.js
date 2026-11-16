@@ -21,7 +21,7 @@ import { heading } from "./overview.js";
 import { typographyPanel } from "../ui/typography.js";
 import { storagePanel } from "./storage.js";
 import { currentLanguage } from "../ui/i18n.js";
-import { recoveryMaterialDialog } from "./authentication.js";
+import { recoveryMaterialDialog, continueAuthentication } from "./authentication.js";
 
 function setting(label, description, control) {
   return `<div class="setting-row"><div><strong>${h(label)}</strong><p>${h(description)}</p></div>${control}</div>`;
@@ -395,7 +395,7 @@ export function operations(root) {
       "操作记录",
       "保留请求 ID 与执行状态。结果未确认时仅查询原请求，不重新提交写操作。",
     ) +
-    `<p class="hint section-gap">本次会话可查看写操作的完整回执；客户端重启后只保留请求 ID 和状态。</p><div data-jobs></div><div data-receipt class="section-gap"></div>`;
+    `<p class="hint section-gap">客户端保留原请求与宿主事务身份。重启后先查询原请求，再按 CLI 返回的要求补充输入；凭据和完整回执不写入操作日志。</p><div data-jobs></div><div data-receipt class="section-gap"></div>`;
   async function refresh() {
     try {
       const jobs = await api("operations");
@@ -409,6 +409,12 @@ export function operations(root) {
       all("tbody tr", root).forEach((row, index) => {
         const job = jobs[index];
         if (job.state === "running") return;
+        if (job.input) {
+          const resume = document.createElement("button");
+          resume.textContent = "补充输入并继续";
+          resume.dataset.continue = job.id;
+          row.lastElementChild.append(resume);
+        }
         const control = document.createElement("button");
         control.textContent = "查看回执";
         control.dataset.receipt = job.id;
@@ -431,6 +437,17 @@ export function operations(root) {
               "操作回执",
               '<p class="panel-body hint">完整回执已不在本次会话中。请刷新对应页面确认当前数据。</p>',
             );
+      });
+    const resume = event.target.closest("[data-continue]");
+    if (resume)
+      action(resume, async () => {
+        try {
+          const envelope = await continueAuthentication(resume.dataset.continue);
+          recoveryMaterialDialog(envelope);
+          notify("原事务已完成");
+        } finally {
+          await refresh();
+        }
       });
     const button = event.target.closest("[data-recover]");
     if (button)

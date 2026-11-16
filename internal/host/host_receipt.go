@@ -59,8 +59,10 @@ func hostEnvelopeError(raw json.RawMessage) error {
 		return err
 	}
 	switch envelope.Summary.Outcome {
+	case "rolled_back":
+		return errors.New("原宿主事务已回滚，未完成请求的操作")
 	case "pending", "awaiting_input", "awaiting_verification", "unknown":
-		return &unconfirmedError{cause: errors.New("宿主事务尚未完成，请查询原事务；CLI 当前 stdin 入口不提供补充输入续接，未重新提交")}
+		return &unconfirmedError{cause: errors.New("宿主事务尚未完成，请查询原事务；等待输入时可在操作记录中补充，未重新提交认证")}
 	}
 	var details struct {
 		ErrorType string `json:"error_type"`
@@ -89,11 +91,7 @@ func (m *Manager) recoverHost(ctx context.Context, job Operation) (json.RawMessa
 			args = append(args, "--register")
 		}
 	case "key":
-		health, _, err := m.Health(ctx)
-		if err != nil || !samePath(health.DataDir, transaction.SourceProfile) {
-			return nil, &unconfirmedError{job.ID, errors.New("无法确认当前 profile 与原密钥事务一致，未查询其他账户")}
-		}
-		args = []string{"runtime", "key-result", "--operation-id=" + transaction.OperationID}
+		args = []string{"runtime", "key-result", "--operation-id=" + transaction.OperationID, "--source-profile=" + transaction.SourceProfile}
 	default:
 		return nil, &unconfirmedError{job.ID, errors.New("CLI 未提供此宿主事务的查询入口")}
 	}
