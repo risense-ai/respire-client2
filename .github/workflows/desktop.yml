@@ -61,14 +61,14 @@ jobs:
         if: matrix.os == 'windows'
         shell: pwsh
         run: |
-          $version = '0.2.56-dev.${{ github.run_number }}'
+          $version = '2.0.0-dev.${{ github.run_number }}'
           if ('${{ github.ref_type }}' -eq 'tag') { $version = '${{ github.ref_name }}'.TrimStart('v') }
           ./scripts/build.ps1 -Version $version -Arch '${{ matrix.arch }}'
       - name: Build installer
         if: matrix.os == 'windows'
         shell: pwsh
         run: |
-          $version = '0.2.56-dev.${{ github.run_number }}'
+          $version = '2.0.0-dev.${{ github.run_number }}'
           if ('${{ github.ref_type }}' -eq 'tag') { $version = '${{ github.ref_name }}'.TrimStart('v') }
           choco install innosetup -y --no-progress
           ./scripts/build-installer.ps1 -Version $version -Arch '${{ matrix.arch }}'
@@ -76,7 +76,7 @@ jobs:
         if: matrix.os != 'windows'
         shell: bash
         run: |
-          version='0.2.56-dev.${{ github.run_number }}'
+          version='2.0.0-dev.${{ github.run_number }}'
           if [[ '${{ github.ref_type }}' == tag ]]; then version='${{ github.ref_name }}'; version="${version#v}"; fi
           bash scripts/build.sh "$version" '${{ matrix.arch }}'
           if [[ '${{ matrix.os }}-${{ matrix.arch }}' == darwin-arm64 ]]; then bash scripts/build-dmg.sh; fi
@@ -268,7 +268,7 @@ jobs:
           if ($install.ExitCode -ne 0) { throw 'Installer smoke failed' }
           try {
             if (Test-Path -LiteralPath (Join-Path $appRoot 'bootstrap')) { throw 'Installer bundled CLI or Runtime components' }
-            $version = '0.2.56-dev.${{ github.run_number }}'
+            $version = '2.0.0-dev.${{ github.run_number }}'
             if ('${{ github.ref_type }}' -eq 'tag') { $version = '${{ github.ref_name }}'.TrimStart('v') }
             foreach ($check in @(@{ Name = 'version'; Args = @('--version') }, @{ Name = 'fonts'; Args = @('--headless', 'fonts') })) {
               $output = Join-Path $smokeRoot ($check.Name + '.json')
@@ -301,7 +301,7 @@ jobs:
           hdiutil attach -readonly -nobrowse -mountpoint "$smoke_root/mount" dist/respire-darwin-arm64.dmg >/dev/null
           trap 'hdiutil detach "$smoke_root/mount" >/dev/null' EXIT
           ditto "$smoke_root/mount/Respire.app" "$smoke_root/Respire.app"
-          version='0.2.56-dev.${{ github.run_number }}'
+          version='2.0.0-dev.${{ github.run_number }}'
           if [[ '${{ github.ref_type }}' == tag ]]; then version='${{ github.ref_name }}'; version="${version#v}"; fi
           RSRS_DATA_DIR="$smoke_root/profile" "$smoke_root/Respire.app/Contents/MacOS/respire" --version > "$smoke_root/version.json"
           python3 - "$smoke_root/version.json" "$version" <<'PY'
