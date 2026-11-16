@@ -122,9 +122,9 @@ func (m *Manager) hostOperation(ctx context.Context, args []string, secret, meth
 				}
 				return nil, &unconfirmedError{id, errors.New("账户 RPC 回执协议或 ID 不匹配，请先核对当前身份")}
 			}
-			return reply.Envelope, envelopeError(reply.Envelope)
+			return reply.Envelope, hostEnvelopeError(reply.Envelope)
 		}
-		if err = envelopeError(raw); err != nil {
+		if err = hostEnvelopeError(raw); err != nil {
 			return raw, err
 		}
 		return raw, nil

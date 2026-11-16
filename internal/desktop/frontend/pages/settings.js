@@ -21,6 +21,7 @@ import { heading } from "./overview.js";
 import { typographyPanel } from "../ui/typography.js";
 import { storagePanel } from "./storage.js";
 import { currentLanguage } from "../ui/i18n.js";
+import { recoveryMaterialDialog } from "./authentication.js";
 
 function setting(label, description, control) {
   return `<div class="setting-row"><div><strong>${h(label)}</strong><p>${h(description)}</p></div>${control}</div>`;
@@ -407,7 +408,7 @@ export function operations(root) {
       );
       all("tbody tr", root).forEach((row, index) => {
         const job = jobs[index];
-        if (job.state !== "done" && job.state !== "failed") return;
+        if (job.state === "running") return;
         const control = document.createElement("button");
         control.textContent = "查看回执";
         control.dataset.receipt = job.id;
@@ -437,6 +438,7 @@ export function operations(root) {
         const job = await api("operation-recover", {
           id: button.dataset.recover,
         });
+        if (job.state === "done") recoveryMaterialDialog(job.envelope);
         notify(
           job.state === "done" ? "原请求已完成" : job.error || "结果仍未确认",
           job.state !== "done",

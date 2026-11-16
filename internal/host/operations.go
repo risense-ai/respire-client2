@@ -14,31 +14,39 @@ import (
 )
 
 type Operation struct {
-	ID          string          `json:"id"`
-	Name        string          `json:"name"`
-	State       string          `json:"state"`
-	Started     time.Time       `json:"started"`
-	Finished    *time.Time      `json:"finished,omitempty"`
-	Error       string          `json:"error,omitempty"`
-	Envelope    json.RawMessage `json:"envelope,omitempty"`
+	ID          string           `json:"id"`
+	Name        string           `json:"name"`
+	State       string           `json:"state"`
+	Started     time.Time        `json:"started"`
+	Finished    *time.Time       `json:"finished,omitempty"`
+	Error       string           `json:"error,omitempty"`
+	Envelope    json.RawMessage  `json:"envelope,omitempty"`
+	Scope       *runtimeScope    `json:"scope,omitempty"`
+	RuntimeID   string           `json:"runtimeOperationId,omitempty"`
+	Transaction *hostTransaction `json:"transaction,omitempty"`
 	write, host bool
 }
 
 type operationRecord struct {
-	ID      string    `json:"id"`
-	Name    string    `json:"name"`
-	Started time.Time `json:"started"`
-	State   string    `json:"state"`
-	Host    bool      `json:"host"`
+	ID          string           `json:"id"`
+	Name        string           `json:"name"`
+	Started     time.Time        `json:"started"`
+	State       string           `json:"state"`
+	Host        bool             `json:"host"`
+	Scope       *runtimeScope    `json:"scope,omitempty"`
+	RuntimeID   string           `json:"runtimeOperationId,omitempty"`
+	Transaction *hostTransaction `json:"transaction,omitempty"`
 }
 
 type rpcResponse struct {
-	V        int             `json:"v"`
-	ID       string          `json:"id"`
-	OK       bool            `json:"ok"`
-	Error    string          `json:"error"`
-	Code     string          `json:"code"`
-	Envelope json.RawMessage `json:"envelope"`
+	V           int             `json:"v"`
+	ID          string          `json:"id"`
+	OK          bool            `json:"ok"`
+	Error       string          `json:"error"`
+	Code        string          `json:"code"`
+	Envelope    json.RawMessage `json:"envelope"`
+	Scope       *runtimeScope   `json:"scope,omitempty"`
+	OperationID string          `json:"operation_id,omitempty"`
 }
 
 var operationID = regexp.MustCompile(`^desktop-[0-9a-f-]{36}$`)
@@ -64,7 +72,7 @@ func (m *Manager) loadOperations() error {
 		if state == "running" {
 			state = "unconfirmed"
 		}
-		m.jobs[r.ID] = &Operation{ID: r.ID, Name: r.Name, Started: r.Started, State: state, host: r.Host, write: true}
+		m.jobs[r.ID] = &Operation{ID: r.ID, Name: r.Name, Started: r.Started, State: state, host: r.Host, write: true, Scope: r.Scope, RuntimeID: r.RuntimeID, Transaction: r.Transaction}
 	}
 	return nil
 }
@@ -73,7 +81,7 @@ func (m *Manager) persistOperationsLocked() error {
 	var records []operationRecord
 	for _, j := range m.jobs {
 		if j.write {
-			records = append(records, operationRecord{j.ID, j.Name, j.Started, j.State, j.host})
+			records = append(records, operationRecord{ID: j.ID, Name: j.Name, Started: j.Started, State: j.State, Host: j.host, Scope: j.Scope, RuntimeID: j.RuntimeID, Transaction: j.Transaction})
 		}
 	}
 	sort.Slice(records, func(i, j int) bool { return records[i].Started.After(records[j].Started) })
@@ -232,6 +240,9 @@ func (m *Manager) runOperation(spec commandSpec, args []string, secret, id strin
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	job := m.jobs[id]
+	if spec.host {
+		job.Transaction = transactionFromEnvelope(job.Name, envelope)
+	}
 	finished := time.Now().UTC()
 	job.Finished = &finished
 	job.Envelope = envelope
@@ -273,6 +284,9 @@ func envelopeError(raw json.RawMessage) error {
 	if result.Status == "" {
 		return errors.New("Runtime 未返回有效状态")
 	}
+	if result.Status == "pending" {
+		return &unconfirmedError{cause: errors.New("操作仍在执行，请查询原请求，未自动重放")}
+	}
 	if result.Status == "fail" {
 		if len(result.Errors) > 0 {
 			return errors.New(result.Errors[0])
@@ -282,8 +296,8 @@ func envelopeError(raw json.RawMessage) error {
 	return nil
 }
 
-func (m *Manager) rpcResponse(ctx context.Context, method string, args []string, id string) (rpcResponse, error) {
-	raw, err := m.localRequest(ctx, "POST", "/api/rpc", map[string]any{"v": 1, "id": id, "method": method, "args": args})
+func (m *Manager) rpcResponse(ctx context.Context, method string, args []string, id string, scope *runtimeScope) (rpcResponse, error) {
+	raw, err := m.localRequest(ctx, "POST", "/api/rpc", map[string]any{"v": 1, "id": id, "method": method, "args": args, "scope": scope})
 	var reply rpcResponse
 	if err != nil {
 		return reply, err
@@ -298,26 +312,57 @@ func (m *Manager) rpcResponse(ctx context.Context, method string, args []string,
 }
 
 func (m *Manager) executeRPC(ctx context.Context, method string, args []string, id string) (json.RawMessage, error) {
-	if _, _, err := m.Health(ctx); err != nil {
+	scope, err := m.requestScope(ctx)
+	if err != nil {
 		return nil, err
 	}
-	reply, err := m.rpcResponse(ctx, method, args, id)
-	if err != nil {
-		return m.inspectResult(ctx, id, err)
-	}
-	if !reply.OK {
-		if reply.Error != "" {
-			return reply.Envelope, errors.New(reply.Error)
-		}
-	}
-	return reply.Envelope, envelopeError(reply.Envelope)
+	return m.executeRPCScoped(ctx, method, args, id, scope)
 }
 
-func (m *Manager) inspectResult(ctx context.Context, id string, original error) (json.RawMessage, error) {
+func (m *Manager) executeRPCScoped(ctx context.Context, method string, args []string, id string, scope *runtimeScope) (json.RawMessage, error) {
+	parent, _, _ := strings.Cut(id, "/")
+	m.mu.Lock()
+	if job := m.jobs[parent]; job != nil {
+		job.Scope, job.RuntimeID = scope, id
+		if job.write {
+			if err := m.persistOperationsLocked(); err != nil {
+				m.mu.Unlock()
+				return nil, err
+			}
+		}
+	}
+	m.mu.Unlock()
+	reply, err := m.rpcResponse(ctx, method, args, id, scope)
+	if err != nil {
+		return m.inspectResult(ctx, id, scope, err)
+	}
+	return reply.Envelope, responseError(reply)
+}
+
+func responseError(reply rpcResponse) error {
+	if !reply.OK && reply.Error != "" {
+		return errors.New(reply.Error)
+	}
+	if err := envelopeError(reply.Envelope); err != nil {
+		return err
+	}
+	if !reply.OK {
+		return errors.New("Runtime 拒绝请求")
+	}
+	return nil
+}
+
+func (m *Manager) inspectResult(ctx context.Context, id string, scope *runtimeScope, original error) (json.RawMessage, error) {
+	if scope == nil || scope.AccountID == "" || scope.InstanceID == "" || scope.Generation == 0 {
+		return nil, &unconfirmedError{id, errors.New("原请求未保留完整作用域，不能使用当前身份替代查询")}
+	}
 	for {
-		reply, err := m.rpcResponse(ctx, "runtime.result", []string{id}, "inspect-"+id)
+		reply, err := m.rpcResponse(ctx, "runtime.result", []string{id}, "inspect-"+id, scope)
 		if err != nil {
 			return nil, &unconfirmedError{id, errors.Join(original, err)}
+		}
+		if err = responseError(reply); err != nil {
+			return reply.Envelope, &unconfirmedError{id, err}
 		}
 		var envelope struct {
 			Summary struct {
@@ -329,17 +374,12 @@ func (m *Manager) inspectResult(ctx context.Context, id string, original error) 
 			return nil, &unconfirmedError{id, err}
 		}
 		switch envelope.Summary.State {
-		case "completed":
+		case "completed", "failed":
 			result := envelope.Summary.Response
-			if result == nil || result.ID != id {
+			if result == nil || result.V != 1 || result.ID != id || result.Scope == nil || *result.Scope != *scope || result.OperationID != id || (envelope.Summary.State == "completed") != result.OK {
 				return nil, &unconfirmedError{id, errors.New("Runtime 缓存回执无效")}
 			}
-			if !result.OK {
-				if result.Error != "" {
-					return result.Envelope, errors.New(result.Error)
-				}
-			}
-			return result.Envelope, envelopeError(result.Envelope)
+			return result.Envelope, responseError(*result)
 		case "pending":
 			select {
 			case <-ctx.Done():
@@ -361,23 +401,37 @@ func (m *Manager) Recover(id string) (Operation, error) {
 	if job.State != "unconfirmed" {
 		return job, nil
 	}
-	if job.host {
-		return job, errors.New("宿主操作不能通过 Runtime 查询，请刷新对应页面确认当前状态")
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	envelope, err := m.inspectResult(ctx, id, errors.New("客户端上次退出时操作尚未结束"))
+	var envelope json.RawMessage
+	if job.host {
+		envelope, err = m.recoverHost(ctx, job)
+	} else {
+		runtimeID := job.RuntimeID
+		if runtimeID == "" {
+			runtimeID = id
+		}
+		envelope, err = m.inspectResult(ctx, runtimeID, job.Scope, errors.New("客户端上次退出时操作尚未结束"))
+		if err == nil && job.Name == "model_engine_apply" {
+			err = &unconfirmedError{id, errors.New("原模型步骤已完成；整项应用还需核对模型当前状态，未自动继续或恢复其他步骤")}
+		}
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	j := m.jobs[id]
-	j.Envelope = envelope
+	if len(envelope) > 0 {
+		j.Envelope = envelope
+	}
 	if err == nil {
 		j.State = "done"
 		j.Error = ""
 	} else {
 		j.Error = err.Error()
 		var unknown *unconfirmedError
-		if !errors.As(err, &unknown) {
+		if errors.As(err, &unknown) {
+			unknown.id = id
+			j.Error = err.Error()
+		} else {
 			j.State = "failed"
 		}
 	}

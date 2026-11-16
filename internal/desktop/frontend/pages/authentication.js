@@ -27,7 +27,9 @@ export function issuedRecoveryMaterial(envelope) {
     detail.super_issued ||
     s.super ||
     s.super_key ||
-    s.super_issued;
+    s.super_issued ||
+    s.super_password ||
+    s.login?.super_issued;
   if (!issued) return null;
   return { material: issued, user: detail.user || s.user || "" };
 }

@@ -1,5 +1,10 @@
 # Required CLI authentication transport
 
+For the pure Runtime DEV21 generation, see [DEV13 preparation](dev13-release.md).
+The transport below remains version 1; CLI `640b856` does not provide a desktop
+continuation method for additional account/key input. Pending receipts are not
+successful completion, and only the original transaction may be queried.
+
 The legacy desktop passes passwords/recovery values through CLI process arguments. This client uses bounded standard-input host RPC for registration, password login, key recovery and super-password reset. Classification keys also use redirected standard input. Credentials do not need to appear in process arguments.
 
 ## Implemented transport and compatibility
