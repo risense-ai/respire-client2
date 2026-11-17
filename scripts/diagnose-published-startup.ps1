@@ -212,6 +212,12 @@ try {
     $report.host_start_completed = $true
     $report.phase = 'automatic_key_handoff'
     $health = Health
+    $publicStates = @('ready','locked','running','draining','stopping','stopped','error','maintenance_requested','resources_closing')
+    $report.health_state = if ($health.state -cin $publicStates) { $health.state } else { 'other' }
+    $report.control_state = if ($health.control.state -cin $publicStates) { $health.control.state } else { 'other' }
+    $report.stop_operation_present = -not [string]::IsNullOrEmpty($health.control.operation_id)
+    $report.installation_root_matches = [string]::Equals($health.installation_root, $dataDirectory, [StringComparison]::OrdinalIgnoreCase)
+    $report.account_root_matches = [string]::Equals($health.data_dir, $dataDirectory, [StringComparison]::OrdinalIgnoreCase)
     if ($health.pid -ne $startedHealth.pid -or $health.instance_id -cne $startedHealth.instance_id -or $health.generation -ne $startedHealth.generation) { throw 'Runtime identity changed during key handoff' }
     if ($health.v -ne 1 -or -not $health.account_id -or -not $health.instance_id -or $health.generation -le 0) { throw 'Runtime RPC scope missing' }
     $scope = @{account_id=$health.account_id; instance_id=$health.instance_id; generation=$health.generation}
@@ -232,6 +238,12 @@ try {
         'unknown_method','queue_full','request_timeout')
     $report.rpc_code = if ($read.code -cin $rpcCodes) { $read.code } elseif ($null -eq $read.code) { 'none' } else { 'other' }
     $report.rpc_envelope_present = $null -ne $read.envelope
+    $fixedRpcErrors = @('runtime maintenance rejected business execution', 'runtime maintenance pauses model/index preparation',
+        'runtime maintenance rejected queued business', 'runtime maintenance rejected queued execution')
+    $report.rpc_error = if ($read.error -cin $fixedRpcErrors) { $read.error } else { 'other' }
+    $report.maintenance_after_read = Test-Path -LiteralPath $markerPath
+    $afterRejection = Health
+    $report.control_state_after_read = if ($afterRejection.control.state -cin $publicStates) { $afterRejection.control.state } else { 'other' }
     if ($read.v -ne 1 -or $read.id -cne $requestId -or -not $read.ok -or $read.exit -ne 0 -or
         $read.operation_id -cne $requestId -or $read.idempotency_key -cne $requestId -or
         $read.scope.account_id -cne $scope.account_id -or $read.scope.instance_id -cne $scope.instance_id -or $read.scope.generation -ne $scope.generation -or
@@ -271,7 +283,11 @@ try {
     if (Test-Path -LiteralPath $logPath) {
         $report.client_log_present = $true
         $report.client_log_bytes = (Get-Item -LiteralPath $logPath).Length
-        $lines = @(Get-Content -LiteralPath $logPath | Where-Object { $_ -match '连接 Runtime:' })
+        $allLogLines = @(Get-Content -LiteralPath $logPath)
+        $publicLogLines = @($allLogLines | Where-Object { $_ -cmatch '^\d{4}/\d{2}/\d{2} \d{2}:\d{2}:\d{2} \[WebView2\] Environment created successfully$' })
+        $report.client_log_omitted_lines = $allLogLines.Count - $publicLogLines.Count
+        [IO.File]::WriteAllLines((Join-Path $root 'client.log'), [string[]]$publicLogLines, [Text.UTF8Encoding]::new($false))
+        $lines = @($allLogLines | Where-Object { $_ -match '连接 Runtime:' })
         $report.startup_error_count = $lines.Count
         $report.startup_errors = @($lines | ForEach-Object { Classify $_ })
     }

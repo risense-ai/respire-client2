@@ -108,5 +108,6 @@ jobs:
             ${{ runner.temp }}/startup-assets/input-proof.json
             ${{ runner.temp }}/startup-assets/model-inference.json
             ${{ runner.temp }}/published-startup-diagnostic/startup-diagnostic.json
+            ${{ runner.temp }}/published-startup-diagnostic/client.log
           if-no-files-found: error
           retention-days: 3
