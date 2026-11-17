@@ -132,5 +132,52 @@ async function test(name, fn) { await fn(); console.log(`PASS ${++count}: ${name
     release(); await pending; stateWait = null;
     assert.deepEqual(events, ['state', 'appearance', 'runtime-status', 'view.update', 'nav']);
   });
+  await test('core configuration notices require the original applied receipt', async () => {
+    const models = read('pages/models.js');
+    const start = models.indexOf('  function fusionApplicationNotice(');
+    const notice = new Function(models.slice(start, models.indexOf('\n  // Polling', start)) + '\nreturn fusionApplicationNotice;')();
+    for (const state of [undefined, null, {state:'unknown'}, {state:'applied'}, {state:'pending'}]) {
+      const value = notice(state);
+      assert.equal(value.warning, true);
+      assert.doesNotMatch(value.text, /已保存|核心已应用/);
+    }
+    assert.match(notice({state:'pending', reason:'runtime_not_running'}).text, /核心待应用/);
+    assert.equal(notice({state:'applied', applies:'next_query', revision:2,
+      scope:{account_id:'synthetic', instance_id:'original', generation:1}, effective:{recall_fusion:{}}}).warning, false);
+  });
+  await test('core configuration Unknown queries the original desktop request without another setter', async () => {
+    const models = read('pages/models.js');
+    const start = models.indexOf('  // Keep an uncertain operation');
+    const listeners = {}, calls = [], notices = [];
+    const fusion = {runtime:{effective:{}}, requestId:null};
+    let pending, queriedState = 'unconfirmed';
+    const bindings = {root:{}, fusion, summary:envelope => envelope.summary,
+      $:selector => ({addEventListener:(_, callback) => {listeners[selector] = callback;}}),
+      action:(_, fn) => {pending = Promise.resolve().then(fn);},
+      fusionDraft:() => ({fusion:'legacy'}), renderFusion() {},
+      notify:(...args) => notices.push(args),
+      async execute(name) {
+        calls.push(name);
+        const error = Error('unknown'); error.requestId = 'desktop-original';
+        error.operation = {state:'unconfirmed'}; throw error;
+      },
+      async api(name, args) {
+        calls.push([name, args]);
+        return {state:queriedState, envelope:{summary:{core_application:{state:'applied'}}}};
+      },
+      fusionApplicationNotice:() => ({text:'original receipt', warning:false}),
+    };
+    new Function(...Object.keys(bindings), models.slice(start, models.indexOf('  // Restoring defaults', start)))(...Object.values(bindings));
+    const submit = {preventDefault() {}, target:{}};
+    listeners['[data-fusion-form]'](submit); await pending;
+    assert.equal(fusion.requestId, 'desktop-original');
+    listeners['[data-fusion-form]'](submit); await assert.rejects(pending, /查询原请求/);
+    listeners['[data-fusion-query]']({currentTarget:{}}); await pending;
+    assert.equal(fusion.requestId, 'desktop-original');
+    queriedState = 'done';
+    listeners['[data-fusion-query]']({currentTarget:{}}); await pending;
+    assert.equal(fusion.requestId, null);
+    assert.deepEqual(calls, ['agent_set', ['operation-recover', {id:'desktop-original'}], ['operation-recover', {id:'desktop-original'}]]);
+  });
   console.log(`${count} focused refresh tests passed; browser/native UIA not exercised.`);
 })().catch(error => { console.error(error); process.exitCode = 1; });

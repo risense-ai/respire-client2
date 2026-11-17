@@ -51,7 +51,7 @@ func TestMain(m *testing.M) {
 			os.Exit(1)
 		}
 	} else {
-		if len(os.Args) != 6 || os.Args[1] != "--json" || os.Args[2] != "runtime" || os.Args[3] != "key-result" {
+		if len(os.Args) != 6 || os.Args[1] != "--json" || os.Args[2] != "runtime" || (os.Args[3] != "key-result" && os.Args[3] != "core-config-result") {
 			os.Exit(1)
 		}
 		if _, err := os.Stdout.Write(raw); err != nil {
@@ -208,6 +208,90 @@ func TestResetMaterialSaveFailureRetainsPendingReceipt(t *testing.T) {
 }
 
 func TestResetMaterialRecoveryPreservesFailuresAndIdentity(t *testing.T) {
+	for _, outcome := range []string{"unknown", "applied", "rejected", "foreign_scope"} {
+		t.Run("core_config_"+outcome, func(t *testing.T) {
+			m, id, reply, calls := recoveryMaterialFixture(t)
+			identity := hostTransaction{OperationID: "20000000-0000-4000-8000-000000000002",
+				SourceProfile: m.DataRoot, Kind: "core_config", Scope: runtimeScope{"synthetic", "original-instance", 7}}
+			m.jobs[id] = &Operation{ID: id, Name: "agent_set", State: "unconfirmed", host: true, write: true, Transaction: &identity}
+			if err := m.persistOperationsLocked(); err != nil {
+				t.Fatal(err)
+			}
+			m.jobs = map[string]*Operation{}
+			if err := m.loadOperations(); err != nil {
+				t.Fatal(err)
+			}
+			returned := identity
+			state, status, errorType := outcome, "ok", ""
+			if outcome == "unknown" {
+				status, errorType = "fail", "outcome_unknown"
+			}
+			if outcome == "foreign_scope" {
+				returned.Scope.Generation++
+				state = "applied"
+			}
+			if outcome == "rejected" {
+				status = "fail"
+			}
+			details, err := json.Marshal(returned)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var metadata map[string]any
+			if err := json.Unmarshal(details, &metadata); err != nil {
+				t.Fatal(err)
+			}
+			metadata["error_type"] = errorType
+			raw, err := json.Marshal(map[string]any{"status": status, "details": metadata,
+				"summary": map[string]any{"core_application": map[string]any{"state": state}}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(reply, raw, 0600); err != nil {
+				t.Fatal(err)
+			}
+			job, err := m.Recover(id)
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := "done"
+			if outcome == "unknown" || outcome == "foreign_scope" {
+				want = "unconfirmed"
+			}
+			if outcome == "rejected" {
+				want = "failed"
+			}
+			if job.State != want || *job.Transaction != identity || job.MaterialSaved {
+				t.Fatal("core query changed state or original identity")
+			}
+			log, err := os.ReadFile(calls)
+			if err != nil {
+				t.Fatal(err)
+			}
+			lines := strings.Split(strings.TrimSpace(string(log)), "\n")
+			if len(lines) != 1 {
+				t.Fatal("core query replayed a command")
+			}
+			var args []string
+			if err := json.Unmarshal([]byte(lines[0]), &args); err != nil {
+				t.Fatal(err)
+			}
+			if len(args) != 5 || args[2] != "core-config-result" || args[4] != "--source-profile="+identity.SourceProfile {
+				t.Fatal("query did not use original result command")
+			}
+			var context struct {
+				Scope       runtimeScope `json:"scope"`
+				OperationID string       `json:"operation_id"`
+				Key         string       `json:"idempotency_key"`
+			}
+			if err := json.Unmarshal([]byte(strings.TrimPrefix(args[3], "--context=")), &context); err != nil {
+				t.Fatal(err)
+			}
+			if context.Scope != identity.Scope || context.OperationID != identity.OperationID || context.Key != identity.OperationID {
+				t.Fatal("query changed original scope or operation")
+			}
+		})
+	}
 	for _, outcome := range []string{"unknown", "rolled_back", "foreign", "missing_material"} {
 		t.Run(outcome, func(t *testing.T) {
 			m, id, reply, _ := recoveryMaterialFixture(t)

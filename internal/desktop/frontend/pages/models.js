@@ -153,7 +153,7 @@ export function models(root, ctx) {
     pageKey = "",
     switchTicks = 0,
     lastProbe = null,
-    fusion = { runtime: null, draft: null, checked: false, loadFailed: false };
+    fusion = { runtime: null, draft: null, checked: false, loadFailed: false, requestId: null };
   root.innerHTML =
     heading("模型与索引", "选择运行模式，一键启用 AI 功能") +
     `<div data-live></div>` +
@@ -200,7 +200,7 @@ export function models(root, ctx) {
           input(key, label, value, { type: "number", step: "any" }),
       ).join(
         "",
-      )}</div><p class="hint">语义份额 = 1 − 先验总份额 − 词法份额；时间、热度与树位置在先验份额内按各自门值参与，时间查询会追加先验份额并受剩余份额限制。份额与门值取 0–1，注意力温度大于 0 且不大于 10。</p></details><div class="actions"><button type="submit">保存</button><button type="button" data-fusion-reset>恢复默认</button><span class="hint" data-fusion-state></span></div></form></div>`,
+      )}</div><p class="hint">语义份额 = 1 − 先验总份额 − 词法份额；时间、热度与树位置在先验份额内按各自门值参与，时间查询会追加先验份额并受剩余份额限制。份额与门值取 0–1，注意力温度大于 0 且不大于 10。</p></details><div class="actions"><button type="submit">保存</button><button type="button" data-fusion-reset>恢复默认</button><button type="button" data-fusion-query hidden>查询原请求</button><span class="hint" data-fusion-state></span></div></form></div>`,
     ) +
     panel(
       "高质量召回服务",
@@ -575,6 +575,7 @@ export function models(root, ctx) {
     const runtime = fusion.runtime;
     const editor = $("[data-fusion-form]", root);
     const state = $("[data-fusion-state]", root);
+    $("[data-fusion-query]", root).hidden = !fusion.requestId;
     if (!runtime?.effective) {
       editor.hidden = true;
       $("[data-fusion-effective]", root).textContent = fusion.loadFailed
@@ -606,7 +607,8 @@ export function models(root, ctx) {
         )
         .join("；")}。保存不会清除 Runtime 环境变量。`;
     $("[data-fusion-effective]", root).textContent = text;
-    state.textContent = "";
+    state.textContent = fusion.requestId ? "核心配置结果未确认；请查询原请求，不要重新保存。" : "";
+    $("[type=submit]", editor).disabled = Boolean(fusion.requestId);
     const draft = fusion.draft || {};
     $("[name=fusion]", editor).value = draft.fusion || "legacy";
     for (const [key] of FUSION_NUMERIC) {
@@ -654,7 +656,7 @@ export function models(root, ctx) {
     if (application?.state === "pending" && application.reason === "runtime_not_running") {
       return { text: "五轴融合配置已保存；Runtime 未运行，核心待应用。", warning: true };
     }
-    return { text: "五轴融合配置已保存；Runtime 生效状态未确认，请刷新设置。", warning: true };
+    return { text: "五轴融合配置结果未确认；请查询原请求，不要重新保存。", warning: true };
   }
   // Polling refreshes status cells in place; rebuilding the whole table would
   // replace buttons mid-click every 3 seconds.
@@ -745,6 +747,9 @@ export function models(root, ctx) {
       const savedModel = localStorage.getItem("respire-model");
       if (savedModel && MODEL_OPTIONS.some(([id]) => id === savedModel))
         modelID = savedModel;
+      const jobs = await api("operations");
+      fusion.requestId = jobs.find((job) => job.name === "agent_set" &&
+        job.state === "unconfirmed" && (!job.transaction || job.transaction.kind === "core_config"))?.id || null;
       const values = await Promise.allSettled([
         execute("agent_config"),
         execute("model_engine"),
@@ -1151,18 +1156,29 @@ export function models(root, ctx) {
       await load();
     });
   });
-  // Save the whole recall_fusion object in one agent_set, then read it back:
-  // a mismatch means the stored config changed under us, a failed readback
-  // means the write outcome is unconfirmed — never auto-retry the write.
+  // Keep an uncertain operation's identity; readback cannot replace its receipt.
   $("[data-fusion-form]", root).addEventListener("submit", (event) => {
     event.preventDefault();
     action($("[type=submit]", event.target), async () => {
       if (!fusion.runtime?.effective)
         throw new Error("请先升级支持五轴融合设置的 CLI");
+      if (fusion.requestId)
+        throw new Error("核心配置结果未确认；请查询原请求，不要重新保存。");
       const draft = fusionDraft();
-      const saved = summary(await execute("agent_set", {
-        setting: "recall_fusion=" + JSON.stringify(draft),
-      }));
+      let saved;
+      try {
+        saved = summary(await execute("agent_set", {
+          setting: "recall_fusion=" + JSON.stringify(draft),
+        }));
+      } catch (error) {
+        if (error.requestId && error.operation?.state !== "failed") {
+          fusion.requestId = error.requestId;
+          renderFusion();
+          notify("核心配置结果未确认；请在操作记录中查询原请求，不要重新保存。", true);
+          return;
+        }
+        throw error;
+      }
       let readBack;
       try {
         readBack = summary(await execute("agent_config")).recall_fusion_runtime;
@@ -1178,6 +1194,22 @@ export function models(root, ctx) {
         throw new Error("保存后的回读与草稿不一致，配置可能已变化，请刷新设置");
       const notice = fusionApplicationNotice(saved.core_application);
       notify(notice.text, notice.warning);
+    });
+  });
+  $("[data-fusion-query]", root).addEventListener("click", (event) => {
+    action(event.currentTarget, async () => {
+      if (!fusion.requestId) return;
+      const job = await api("operation-recover", { id: fusion.requestId });
+      if (job.state === "done" || job.state === "failed") {
+        fusion.requestId = null;
+        const notice = job.state === "done"
+          ? fusionApplicationNotice(summary(job.envelope).core_application)
+          : { text: job.error || "原配置操作已明确失败。", warning: true };
+        notify(notice.text, notice.warning);
+      } else {
+        notify("核心配置结果仍未确认；保留原请求，不会重新应用。", true);
+      }
+      renderFusion();
     });
   });
   // Restoring defaults only rewrites the draft; nothing persists until 保存.
