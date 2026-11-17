@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import base64
+import hashlib
 import json
 import pathlib
 import sys
@@ -17,7 +18,19 @@ folder = pathlib.Path(dist)
 checksums = {}
 for line in (folder / "SHA256SUMS").read_text().splitlines():
     digest, name = line.split(None, 1)
-    checksums[name.removeprefix("*").strip()] = digest.lower()
+    name = name.removeprefix("*").strip()
+    if name in checksums or pathlib.Path(name).name != name:
+        raise SystemExit("duplicate or unsafe checksum filename")
+    if hashlib.sha256((folder / name).read_bytes()).hexdigest() != digest.lower():
+        raise SystemExit(f"checksum differs: {name}")
+    checksums[name] = digest.lower()
+
+targets = {f"respire-{system}-{arch}.{suffix}"
+           for system, suffix in [("windows", "exe"), ("darwin", "zip"), ("linux", "tar.gz")]
+           for arch in ["amd64", "arm64"]}
+if expected != 6 or set(checksums) != targets | {
+        "respire-windows-amd64-setup.exe", "respire-windows-arm64-setup.exe", "respire-darwin-arm64.dmg"}:
+    raise SystemExit("expected exactly six desktop targets, two installers and one DMG")
 
 artifacts = []
 for name, digest in sorted(checksums.items()):
