@@ -62,6 +62,10 @@ $categories = [ordered]@{
     credential_backend='credential backend|keyring|Credential Manager|credential.*unavailable'
     identity_changed='identity.*(changed|mismatch)|owner.*(changed|unverifiable)|recorded owner without verifiable health'
     receipt_invalid='未返回完整回执|未返回有效 JSON|回执协议|startup.*uncertain'
+    runtime_unavailable='runtime_not_running|Runtime is not running|runtime is not running|Runtime 未运行|no running runtime'
+    rpc_scope='scope|generation|instance_id'
+    command_input='invalid_input|unrecognized|unexpected argument'
+    memory_missing='not_found|not found|不存在'
     timeout='timed out|deadline|超时'
 }
 function Classify([string]$Text) {
@@ -94,6 +98,15 @@ function Invoke-Child([string]$Stage, [string]$Executable, [string[]]$Arguments)
     if ($process.ExitCode -ne 0) {
         $report.child_exit = $process.ExitCode
         $report.failure_category = Classify ($output + $errorOutput)
+        try {
+            $failure = $output | ConvertFrom-Json
+            if ($failure.summary.reason -cin @('runtime_error','invalid_input','not_found','rpc_error','client_only')) {
+                $report.child_reason = $failure.summary.reason
+            }
+            if ($failure.details.error_type -cin @('runtime','input','rpc','validation')) {
+                $report.child_error_type = $failure.details.error_type
+            }
+        } catch { $report.child_json = $false }
         throw 'Child operation failed; raw output withheld'
     }
     return ($output | ConvertFrom-Json)
@@ -146,9 +159,25 @@ try {
     if (-not $runtimeActor -or $runtimeActor.ProcessId -eq $previousId) { throw 'Automatic startup did not yield a new actor' }
     $report.automatic_start = $true
     $report.runtime_pid = $runtimeActor.ProcessId
-    $read = Invoke-Child 'automatic_key_handoff' $cliPath @('--client-only','--json','show',$memoryId)
-    if ($read.status -cne 'ok' -or $read.details.entry.content -cne $text) { throw 'Automatic key handoff did not reopen the original memory' }
+    # Use the original native GUI fixture's scoped read-only RPC oracle.
+    $report.phase = 'automatic_key_handoff'
+    $health = Health
+    if ($health.v -ne 1 -or -not $health.account_id -or -not $health.instance_id -or $health.generation -le 0) { throw 'Runtime RPC scope missing' }
+    $scope = @{account_id=$health.account_id; instance_id=$health.instance_id; generation=$health.generation}
+    $requestId = 'published-startup-' + [Guid]::NewGuid().ToString('N')
+    $request = @{v=1; id=$requestId; operation_id=$requestId; idempotency_key=$requestId; scope=$scope; method='cli.exec'; args=@('--json','show',$memoryId)}
+    $read = Invoke-RestMethod -Uri "http://127.0.0.1:$port/api/rpc" -Method Post -ContentType 'application/json' -Body ($request | ConvertTo-Json -Depth 5 -Compress) -TimeoutSec 30 -NoProxy
+    if ($read.v -ne 1 -or $read.id -cne $requestId -or -not $read.ok -or $read.exit -ne 0 -or
+        $read.operation_id -cne $requestId -or $read.idempotency_key -cne $requestId -or
+        $read.scope.account_id -cne $scope.account_id -or $read.scope.instance_id -cne $scope.instance_id -or $read.scope.generation -ne $scope.generation -or
+        $read.envelope.command -cne 'show' -or $read.envelope.status -cne 'ok' -or @($read.envelope.errors).Count -ne 0 -or
+        $read.envelope.details.entry.id -cne $memoryId -or $read.envelope.details.entry.content -cne $text) { throw 'Automatic key handoff did not reopen the original memory' }
+    $afterRead = Health
+    if ($afterRead.pid -ne $health.pid -or $afterRead.instance_id -cne $health.instance_id -or $afterRead.generation -ne $health.generation) { throw 'Runtime identity changed during readback' }
     $report.automatic_key_handoff = $true
+    $legacyRead = Invoke-Child 'legacy_cli_readback' $cliPath @('--client-only','--json','show',$memoryId)
+    if ($legacyRead.status -cne 'ok' -or $legacyRead.details.entry.content -cne $text) { throw 'Legacy CLI readback differs' }
+    $report.legacy_cli_readback = $true
     $report.status = 'diagnostic-passed'
 } catch {
     $report.failure_phase = $report.phase
