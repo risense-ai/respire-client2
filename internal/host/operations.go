@@ -232,8 +232,14 @@ func (m *Manager) Submit(name, id string, raw json.RawMessage, confirmed bool, s
 }
 
 func (m *Manager) runOperation(spec commandSpec, args []string, secret, id string) {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
+	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	// Account operations wait for human authorization without a wall-clock deadline.
+	if !strings.HasPrefix(spec.method, "auth.") {
+		timedCtx, timedCancel := context.WithTimeout(ctx, 30*time.Minute)
+		defer timedCancel()
+		ctx = timedCtx
+	}
 	var envelope json.RawMessage
 	var err error
 	switch {
