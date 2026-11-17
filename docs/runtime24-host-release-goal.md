@@ -25,8 +25,10 @@ recall、remember 及 RPC/MCP。CLI 与 Client2 负责组件和模型下载、�
 1. 等待 Runtime24 的合并契约、公开 Release 与真实元数据，核对版本、来源和 SHA256 后升级基线。
    发布前仅准备版本补丁，不猜产物哈希。桌面包继续不内置 CLI、Runtime、Core 或模型。
 2. 使用包含 CLI 插件宿主寿命修复的新候选验证 ExistingKeys 第二次启动。已有
-   [启动诊断](../.github/workflows/published-startup-diagnostic.yml)固定公开 Client2 dev15 和 Runtime23，
-   用于单独验证该修复；它不替代新基线或完整 GUI 验收。新 CLI 的 run、attempt 和完整 commit 必须显式输入。
+   [启动诊断](../.github/workflows/published-startup-diagnostic.yml)显式选择公开 Client2 tag 与完整 commit、
+   Runtime 版本及新 CLI 的 run、attempt 和完整 commit。Runtime 默认 dev24，dev23 仅用于历史复现，
+   不能代替新基线的最终验收。它验证真实产物的第二次启动，但不替代完整 GUI 验收；
+   Release 尚未公开或来源／摘要不符时直接失败，不回退旧版本。
 3. 按实际核心回执适配配置界面，保留宿主保存和核心应用之间的区别。接口字段以合并契约为准。
 4. PR 阶段只运行受影响的现有检查及必要定向复验。最终候选／公开 Release 阶段并行完成必要原生验收，
    发布已验证的同一批字节，并核对公开版本、来源和摘要。CLI 与 Client2 独立版本，CLI 优先发布。

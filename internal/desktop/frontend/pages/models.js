@@ -190,7 +190,7 @@ export function models(root, ctx) {
     ) +
     panel(
       "五轴注意力融合",
-      `<div class="panel-body stack" data-fusion><p class="hint">对通过准入检查的向量候选融合语义、词法、时间、热度与树位置信号；算法在 Runtime 内执行，这里只保存设置并在下一次召回时生效。自动选择由 Runtime 按候选库大小决定，不承诺召回质量提升。</p><p class="hint" data-fusion-effective>正在读取配置…</p><form data-fusion-form class="stack" hidden>${select(
+      `<div class="panel-body stack" data-fusion><p class="hint">对通过准入检查的向量候选融合语义、词法、时间、热度与树位置信号；算法在 Runtime 内执行，这里保存配置，并根据核心回执确认是否应用。自动选择由 Runtime 按候选库大小决定，不承诺召回质量提升。</p><p class="hint" data-fusion-effective>正在读取配置…</p><form data-fusion-form class="stack" hidden>${select(
         "fusion",
         "融合模式",
         FUSION_MODES,
@@ -567,9 +567,8 @@ export function models(root, ctx) {
       await ctx.refresh();
     }
   }
-  // Fusion panel: the first line is what the Runtime will use next query
-  // (defaults + saved settings + env overrides); the editor below shows the
-  // saved draft. No receipt capability → editor stays hidden.
+  // Host configuration is not proof of the resident Runtime's loaded settings.
+  // Keep editing saved values available while marking unverified state explicitly.
   function renderFusion() {
     const area = $("[data-fusion]", root);
     if (!area) return;
@@ -588,11 +587,14 @@ export function models(root, ctx) {
     editor.hidden = false;
     const overrides = Array.isArray(runtime.overrides) ? runtime.overrides : [];
     const configured = runtime.configured || {};
-    let text = `当前生效模式：${fusionModeName(runtime.effective.fusion)} · 修改在下一次召回时生效。`;
+    const verified = runtime.runtime_verified === true;
+    let text = verified
+      ? `当前生效模式：${fusionModeName(runtime.effective.fusion)}。`
+      : "Runtime 生效状态未确认。";
     text += Object.keys(configured).length
       ? "编辑区显示已保存设置。"
-      : "未保存自定义设置，当前按默认值运行。";
-    if (overrides.length)
+      : "未保存自定义设置，编辑区显示默认值。";
+    if (verified && overrides.length)
       text += ` 环境覆盖 ${overrides.length} 项：${overrides
         .map(
           (key) =>
@@ -640,6 +642,19 @@ export function models(root, ctx) {
     if (fusion.runtime?.effective)
       fusion.draft = { ...fusion.runtime.defaults, ...fusion.runtime.configured };
     renderFusion();
+  }
+  function fusionApplicationNotice(application) {
+    if (application?.state === "applied" && application.applies === "next_query" &&
+        Number.isSafeInteger(application.revision) && application.revision > 0 &&
+        application.scope?.account_id && application.scope?.instance_id &&
+        Number.isSafeInteger(application.scope?.generation) && application.scope.generation > 0 &&
+        application.effective?.recall_fusion) {
+      return { text: "五轴融合配置已保存，核心已应用；下一次召回使用已确认的运行配置。", warning: false };
+    }
+    if (application?.state === "pending" && application.reason === "runtime_not_running") {
+      return { text: "五轴融合配置已保存；Runtime 未运行，核心待应用。", warning: true };
+    }
+    return { text: "五轴融合配置已保存；Runtime 生效状态未确认，请刷新设置。", warning: true };
   }
   // Polling refreshes status cells in place; rebuilding the whole table would
   // replace buttons mid-click every 3 seconds.
@@ -1145,9 +1160,9 @@ export function models(root, ctx) {
       if (!fusion.runtime?.effective)
         throw new Error("请先升级支持五轴融合设置的 CLI");
       const draft = fusionDraft();
-      await execute("agent_set", {
+      const saved = summary(await execute("agent_set", {
         setting: "recall_fusion=" + JSON.stringify(draft),
-      });
+      }));
       let readBack;
       try {
         readBack = summary(await execute("agent_config")).recall_fusion_runtime;
@@ -1161,15 +1176,8 @@ export function models(root, ctx) {
         Object.keys(draft).some((key) => readBack.configured[key] !== draft[key])
       )
         throw new Error("保存后的回读与草稿不一致，配置可能已变化，请刷新设置");
-      const overrides = readBack.overrides || [];
-      notify(
-        overrides.length
-          ? `已保存；但这些字段由 Runtime 环境覆盖：${overrides
-              .map(fusionLabel)
-              .join("、")}，保存值不会生效。`
-          : "五轴融合设置已保存，下一次召回生效。",
-        overrides.length > 0,
-      );
+      const notice = fusionApplicationNotice(saved.core_application);
+      notify(notice.text, notice.warning);
     });
   });
   // Restoring defaults only rewrites the draft; nothing persists until 保存.

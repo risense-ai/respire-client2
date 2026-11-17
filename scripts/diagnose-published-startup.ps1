@@ -3,6 +3,7 @@ param(
     [Parameter(Mandatory)][string]$Client,
     [Parameter(Mandatory)][string]$RuntimeArchive,
     [Parameter(Mandatory)][string]$ModelDirectory,
+    [ValidateSet('2.0.0-dev.23','2.0.0-dev.24')][string]$RuntimeVersion = '2.0.0-dev.24',
     [Parameter(Mandatory)][string]$OutputDirectory
 )
 $ErrorActionPreference = 'Stop'
@@ -50,7 +51,7 @@ $childEnvironment['RSRS_CORE_TEST_MODE'] = '1'
 $childEnvironment['RSRS_NO_AUTOSYNC'] = '1'
 $childEnvironment['RSRS_UPDATE_CHECK'] = '0'
 $report = [ordered]@{schema=1; scope='published Client2 existing-key startup diagnostic; not full GUI acceptance'; status='failed'; phase='prepare';
-    runtime_version='2.0.0-dev.23'; cli_sha256=(Get-FileHash $cliPath -Algorithm SHA256).Hash.ToLowerInvariant();
+    runtime_version=$RuntimeVersion; cli_sha256=(Get-FileHash $cliPath -Algorithm SHA256).Hash.ToLowerInvariant();
     client_sha256=(Get-FileHash $clientPath -Algorithm SHA256).Hash.ToLowerInvariant();
     initial_start=$false; normal_stop=$false; automatic_start=$false; automatic_key_handoff=$false; cleanup=$false}
 $categories = [ordered]@{
@@ -119,7 +120,7 @@ function Health {
     return Invoke-RestMethod -Uri "http://127.0.0.1:$port/api/health" -Headers @{'X-Respire-Health'='runtime-v1'} -TimeoutSec 3 -NoProxy
 }
 function Assert-Actor($Health) {
-    $expected = Join-Path $binaryDirectory 'runtime/2.0.0-dev.23/rsrs-runtime.exe'
+    $expected = Join-Path $binaryDirectory "runtime/$RuntimeVersion/rsrs-runtime.exe"
     $actor = Get-CimInstance Win32_Process -Filter "ProcessId=$($Health.pid)"
     $report.actor_found = $null -ne $actor
     $report.actor_path_match = [string]::Equals($actor.ExecutablePath, $expected, [StringComparison]::OrdinalIgnoreCase)
@@ -129,7 +130,7 @@ function Assert-Actor($Health) {
 $desktop = $null
 $runtimeActor = $null
 try {
-    $installed = Invoke-Child 'install' $cliPath @('--json','runtime','install','--file',$RuntimeArchive,'--version','2.0.0-dev.23')
+    $installed = Invoke-Child 'install' $cliPath @('--json','runtime','install','--file',$RuntimeArchive,'--version',$RuntimeVersion)
     if ($installed.status -cne 'ok') { throw 'Runtime install did not succeed' }
     $preferences = '{"autoRuntime":false,"autoUpdate":false,"clientAutoUpdate":false,"runtimeAutoUpdate":false,"runtimeAutoRestart":false,"onboardingVersion":1,"onboardingCompleted":true,"onboardingStep":"done","onboardingSyncChoice":"offline"}'
     $preferencesPath = Join-Path $dataDirectory 'client2/preferences.json'
@@ -301,7 +302,7 @@ try {
             }
         }
         if ($desktop -and -not $desktop.HasExited) { $desktop.Kill($true); $desktop.WaitForExit() }
-        $expectedRuntime = Join-Path $binaryDirectory 'runtime/2.0.0-dev.23/rsrs-runtime.exe'
+        $expectedRuntime = Join-Path $binaryDirectory "runtime/$RuntimeVersion/rsrs-runtime.exe"
         $remaining = @(Get-CimInstance Win32_Process -Filter "name='rsrs-runtime.exe'" | Where-Object {
             [string]::Equals($_.ExecutablePath, $expectedRuntime, [StringComparison]::OrdinalIgnoreCase)
         })
