@@ -181,6 +181,38 @@ try {
         if ($desktop.WaitForExit(500)) { throw 'Desktop exited before key handoff' }
     } while ($deadline.Elapsed.TotalSeconds -lt 60)
     if ($health.store_ready -ne $true -or $health.credential_state -cne 'available') { throw 'Automatic key handoff timed out' }
+    # Health/credential readiness precedes the host's maintenance completion.
+    # Observe that controller; never delete its marker or retry rejected business.
+    $report.phase = 'host_start_completion'
+    $markerPath = Join-Path $dataDirectory 'runtime/autostart/maintenance.json'
+    $report.host_start_observed = $false
+    $report.maintenance_observed = $false
+    do {
+        $controllers = @(Get-CimInstance Win32_Process -Filter "ParentProcessId=$($desktop.Id)" | Where-Object {
+            [string]::Equals($_.ExecutablePath, $cliPath, [StringComparison]::OrdinalIgnoreCase) -and
+            $_.CommandLine -match '(?:^|\s)runtime\s+start(?:\s|$)'
+        })
+        $markerPresent = Test-Path -LiteralPath $markerPath
+        if ($controllers.Count) { $report.host_start_observed = $true }
+        if ($markerPresent) {
+            $report.maintenance_observed = $true
+            try { $marker = [IO.File]::ReadAllText($markerPath) | ConvertFrom-Json }
+            catch [IO.FileNotFoundException] { $markerPresent = $false; $report.marker_removed_during_observation = $true }
+            if ($markerPresent) {
+                $report.maintenance_phase = if ($marker.phase -cin @('prepared','paused','starting','verified')) { $marker.phase } else { 'other' }
+                $owner = @($controllers | Where-Object ProcessId -EQ $marker.owner_pid)
+                $report.maintenance_owner_is_startup_cli = $owner.Count -eq 1
+                if ($owner.Count -ne 1) { throw 'Maintenance marker does not belong to a live startup CLI' }
+            }
+        }
+        if (-not $controllers.Count -and -not $markerPresent) { break }
+        if ($desktop.WaitForExit(500)) { throw 'Desktop exited before host startup completion' }
+    } while ($deadline.Elapsed.TotalSeconds -lt 60)
+    if ($controllers.Count -or $markerPresent) { throw 'Host startup maintenance did not complete' }
+    $report.host_start_completed = $true
+    $report.phase = 'automatic_key_handoff'
+    $health = Health
+    if ($health.pid -ne $startedHealth.pid -or $health.instance_id -cne $startedHealth.instance_id -or $health.generation -ne $startedHealth.generation) { throw 'Runtime identity changed during key handoff' }
     if ($health.v -ne 1 -or -not $health.account_id -or -not $health.instance_id -or $health.generation -le 0) { throw 'Runtime RPC scope missing' }
     $scope = @{account_id=$health.account_id; instance_id=$health.instance_id; generation=$health.generation}
     $requestId = 'published-startup-' + [Guid]::NewGuid().ToString('N')
@@ -223,6 +255,9 @@ try {
         'Runtime key state is not a pending handoff'='unexpected_credential_state'
         'Desktop exited before key handoff'='desktop_exited_before_handoff'
         'Automatic key handoff timed out'='automatic_key_handoff_timeout'
+        'Maintenance marker does not belong to a live startup CLI'='startup_maintenance_owner_unproven'
+        'Desktop exited before host startup completion'='desktop_exited_before_host_completion'
+        'Host startup maintenance did not complete'='host_start_maintenance_timeout'
         'Runtime RPC scope missing'='rpc_scope_missing'
         'Automatic key handoff did not reopen the original memory'='original_memory_rpc_mismatch'
         'Runtime identity changed during readback'='runtime_changed_during_readback'
