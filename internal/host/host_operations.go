@@ -39,7 +39,7 @@ func (m *Manager) hostExecutable(ctx context.Context) (string, error) {
 }
 
 func (m *Manager) hostOperation(ctx context.Context, args []string, secret, method, id string) (json.RawMessage, error) {
-	hostRPC := strings.HasPrefix(method, "auth.")
+	hostRPC := strings.HasPrefix(method, "auth.") || strings.HasPrefix(method, "core_config.")
 	stdin := secret + "\n"
 	if hostRPC {
 		if method == "auth.login.browser" {
@@ -50,9 +50,31 @@ func (m *Manager) hostOperation(ctx context.Context, args []string, secret, meth
 				return nil, err
 			}
 		}
-		params, inputErr := authParams(args, secret)
-		if inputErr != nil {
-			return nil, inputErr
+		var params map[string]string
+		if strings.HasPrefix(method, "core_config.") {
+			if secret != "" {
+				return nil, errors.New("核心配置不接受凭据")
+			}
+			params = map[string]string{}
+			switch method {
+			case "core_config.set":
+				if len(args) != 2 || args[0] != "agent-config" || !strings.HasPrefix(args[1], "--set=") {
+					return nil, errors.New("核心配置参数无效")
+				}
+				params["setting"] = strings.TrimPrefix(args[1], "--set=")
+			case "core_config.result":
+				if len(args) != 0 {
+					return nil, errors.New("核心配置查询不能携带新参数")
+				}
+			default:
+				return nil, errors.New("未知核心配置操作")
+			}
+		} else {
+			var inputErr error
+			params, inputErr = authParams(args, secret)
+			if inputErr != nil {
+				return nil, inputErr
+			}
 		}
 		payload, encodeErr := json.Marshal(map[string]any{"v": 1, "id": id, "method": method, "params": params})
 		if encodeErr != nil {

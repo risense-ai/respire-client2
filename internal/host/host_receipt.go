@@ -7,14 +7,23 @@ import (
 	"errors"
 	"path/filepath"
 	"regexp"
+	"strings"
 )
 
 // Persist only the public identity needed by the CLI's original-result commands.
 type hostTransaction struct {
-	OperationID   string `json:"operation_id"`
-	SourceProfile string `json:"source_profile"`
-	Kind          string `json:"kind"`
-	Register      bool   `json:"register,omitempty"`
+	OperationID   string       `json:"operation_id"`
+	SourceProfile string       `json:"source_profile"`
+	Kind          string       `json:"kind"`
+	Register      bool         `json:"register,omitempty"`
+	Scope         runtimeScope `json:"scope,omitzero"`
+	RequestBound  bool         `json:"request_bound,omitempty"`
+}
+
+func (transaction *hostTransaction) acceptsCoreResult(reply *hostTransaction) bool {
+	return reply != nil && reply.Kind == "core_config" && reply.OperationID == transaction.OperationID &&
+		(transaction.SourceProfile == "" || reply.SourceProfile == transaction.SourceProfile) &&
+		(transaction.Scope == (runtimeScope{}) || reply.Scope == transaction.Scope)
 }
 
 var hostOperationID = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
@@ -72,6 +81,11 @@ func transactionFromEnvelope(name string, raw json.RawMessage) *hostTransaction 
 		return nil
 	}
 	switch name {
+	case "agent_set":
+		if transaction.Kind != "core_config" {
+			return nil
+		}
+		transaction.Register = false
 	case "auth_register", "auth_login", "login":
 		transaction.Kind, transaction.Register = "account", name == "auth_register"
 	case "auth_recover", "auth_reset":
@@ -115,11 +129,31 @@ func hostEnvelopeError(raw json.RawMessage) error {
 
 func (m *Manager) recoverHost(ctx context.Context, job Operation) (json.RawMessage, error) {
 	transaction := job.Transaction
+	if transaction != nil && transaction.RequestBound && transaction.Kind == "core_config" {
+		if transaction.OperationID != strings.TrimPrefix(job.ID, "desktop-") || !hostOperationID.MatchString(transaction.OperationID) {
+			return nil, &unconfirmedError{job.ID, errors.New("核心配置预绑定身份不匹配")}
+		}
+		raw, err := m.hostOperation(ctx, nil, "", "core_config.result", job.ID)
+		if !transaction.acceptsCoreResult(transactionFromEnvelope(job.Name, raw)) {
+			return raw, &unconfirmedError{job.ID, errors.New("核心配置查询尚未返回原事务身份")}
+		}
+		return raw, err
+	}
 	if transaction == nil || !hostOperationID.MatchString(transaction.OperationID) || !filepath.IsAbs(transaction.SourceProfile) {
 		return nil, &unconfirmedError{job.ID, errors.New("CLI 未返回可查询的结构化事务身份，请核对当前账户；不能以桌面请求 ID 代替宿主事务 ID")}
 	}
 	var args []string
 	switch transaction.Kind {
+	case "core_config":
+		if transaction.Scope.AccountID == "" || transaction.Scope.InstanceID == "" || transaction.Scope.Generation == 0 {
+			return nil, &unconfirmedError{job.ID, errors.New("原核心配置事务缺少 Runtime scope，不能重新应用")}
+		}
+		context, encodeErr := json.Marshal(map[string]any{"scope": transaction.Scope,
+			"operation_id": transaction.OperationID, "idempotency_key": transaction.OperationID})
+		if encodeErr != nil {
+			return nil, encodeErr
+		}
+		args = []string{"runtime", "core-config-result", "--context=" + string(context), "--source-profile=" + transaction.SourceProfile}
 	case "account":
 		args = []string{"runtime", "account-result", "--operation-id=" + transaction.OperationID, "--source-profile=" + transaction.SourceProfile}
 		if transaction.Register {
