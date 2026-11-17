@@ -1,6 +1,6 @@
 # Required CLI authentication transport
 
-For the pure Runtime DEV22 target, see [DEV13 preparation](dev13-release.md).
+For the pure Runtime DEV23 target, see [DEV13 preparation](dev13-release.md).
 The transport remains version 1. CLI host continuation support must advertise
 `auth.login.continue` and `auth.key.continue` under
 `summary.capabilities.host_rpc.methods`. Pending receipts are not successful
