@@ -44,7 +44,10 @@ func TestMain(m *testing.M) {
 			ID     string `json:"id"`
 			Method string `json:"method"`
 		}
-		if json.NewDecoder(os.Stdin).Decode(&request) != nil || request.Method != "auth.reset" {
+		if json.NewDecoder(os.Stdin).Decode(&request) != nil || (request.Method != "auth.reset" && request.Method != "core_config.set" && request.Method != "core_config.result") {
+			os.Exit(1)
+		}
+		if request.Method == "core_config.set" && os.Getenv("RESPIRE_TEST_CORE_DROP_REPLY") == "1" {
 			os.Exit(1)
 		}
 		if json.NewEncoder(os.Stdout).Encode(map[string]any{"v": 1, "id": request.ID, "ok": true, "envelope": json.RawMessage(raw)}) != nil {
@@ -208,6 +211,77 @@ func TestResetMaterialSaveFailureRetainsPendingReceipt(t *testing.T) {
 }
 
 func TestResetMaterialRecoveryPreservesFailuresAndIdentity(t *testing.T) {
+	t.Run("core_config_entire_reply_lost", func(t *testing.T) {
+		m, id, reply, calls := recoveryMaterialFixture(t)
+		t.Setenv("RESPIRE_TEST_CORE_DROP_REPLY", "1")
+		full := hostTransaction{OperationID: strings.TrimPrefix(id, "desktop-"), Kind: "core_config",
+			SourceProfile: filepath.Join(m.DataRoot, "profiles", "actual"), Scope: runtimeScope{"synthetic", "original", 1}}
+		raw, err := json.Marshal(map[string]any{"status": "ok", "details": full,
+			"summary": map[string]any{"core_application": map[string]any{"state": "applied"}}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(reply, raw, 0600); err != nil {
+			t.Fatal(err)
+		}
+		job, err := m.Submit("agent_set", id, json.RawMessage(`{"setting":"recall_fusion={\"fusion\":\"legacy\"}"}`), true, "")
+		if err != nil || job.Transaction == nil || !job.Transaction.RequestBound || job.Transaction.SourceProfile != "" || job.Transaction.Scope != (runtimeScope{}) {
+			t.Fatal("request identity was not persisted before launch", err)
+		}
+		deadline := time.Now().Add(10 * time.Second)
+		for {
+			job, err = m.Operation(id)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if job.State != "running" {
+				break
+			}
+			if time.Now().After(deadline) {
+				t.Fatal("host reply-loss test timed out")
+			}
+			time.Sleep(time.Millisecond)
+		}
+		if job.State != "unconfirmed" || job.Transaction == nil || !job.Transaction.RequestBound || job.Transaction.SourceProfile != "" {
+			t.Fatal("missing reply erased prebound identity", job.State, job.Error, job.Transaction)
+		}
+		restarted := &Manager{Root: m.Root, DataRoot: m.DataRoot, Endpoint: m.Endpoint}
+		if err := restarted.loadOperations(); err != nil {
+			t.Fatal(err)
+		}
+		job, err = restarted.Recover(id)
+		full.RequestBound = true
+		if err != nil || job.State != "done" || job.Transaction == nil || *job.Transaction != full {
+			t.Fatal("original-ID query did not discover CLI-bound profile/scope", err, job)
+		}
+		log, err := os.ReadFile(calls)
+		if err != nil {
+			t.Fatal(err)
+		}
+		lines := strings.Split(strings.TrimSpace(string(log)), "\n")
+		if len(lines) != 2 || strings.Contains(string(log), "--set") {
+			t.Fatal("recovery replayed the setter")
+		}
+		t.Setenv("RESPIRE_TEST_CORE_DROP_REPLY", "0")
+		for _, response := range []struct{ raw, state string }{
+			{`{"status":"ok","summary":{}}`, "unconfirmed"},
+			{`{"status":"fail","summary":{"reason":"invalid_input"}}`, "failed"},
+			{`{"status":"fail","details":{"error_type":"outcome_unknown"}}`, "unconfirmed"},
+		} {
+			if err := os.WriteFile(reply, []byte(response.raw), 0600); err != nil {
+				t.Fatal(err)
+			}
+			bound := hostTransaction{OperationID: strings.TrimPrefix(id, "desktop-"), Kind: "core_config", RequestBound: true}
+			m.jobs[id] = &Operation{ID: id, Name: "agent_set", State: "running", host: true, write: true, Transaction: &bound}
+			spec, _ := operationSpec("agent_set")
+			spec.method = "core_config.set"
+			m.runOperation(spec, []string{"agent-config", "--set=recall_fusion={\"fusion\":\"legacy\"}"}, "", id)
+			job, err := m.Operation(id)
+			if err != nil || job.State != response.state || job.Transaction == nil || *job.Transaction != bound {
+				t.Fatal("missing identity was accepted or erased", job.State, err)
+			}
+		}
+	})
 	for _, outcome := range []string{"unknown", "applied", "rejected", "foreign_scope"} {
 		t.Run("core_config_"+outcome, func(t *testing.T) {
 			m, id, reply, calls := recoveryMaterialFixture(t)

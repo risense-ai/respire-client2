@@ -172,6 +172,21 @@ func (m *Manager) Submit(name, id string, raw json.RawMessage, confirmed bool, s
 	if err != nil {
 		return Operation{}, err
 	}
+	if name == "agent_set" {
+		var input struct {
+			Setting string `json:"setting"`
+		}
+		if err := json.Unmarshal(raw, &input); err != nil {
+			return Operation{}, err
+		}
+		key, _, _ := strings.Cut(input.Setting, "=")
+		if key = strings.TrimSpace(key); key == "read_heat" || key == "recall_fusion" {
+			if !hostOperationID.MatchString(strings.TrimPrefix(id, "desktop-")) {
+				return Operation{}, errors.New("核心配置需要有效 UUID")
+			}
+			spec.method = "core_config.set"
+		}
+	}
 	if name == "model_progress" {
 		argv = append(argv, "false")
 	}
@@ -217,6 +232,10 @@ func (m *Manager) Submit(name, id string, raw json.RawMessage, confirmed bool, s
 		delete(m.jobs, oldest.ID)
 	}
 	job := &Operation{ID: id, Name: name, State: "running", Started: time.Now().UTC(), host: spec.host, write: spec.write}
+	if spec.method == "core_config.set" {
+		operation := strings.TrimPrefix(id, "desktop-")
+		job.Transaction = &hostTransaction{OperationID: operation, Kind: "core_config", RequestBound: true}
+	}
 	m.jobs[id] = job
 	if job.write {
 		if err = m.persistOperationsLocked(); err != nil {
@@ -259,7 +278,29 @@ func (m *Manager) runOperation(spec commandSpec, args []string, secret, id strin
 	defer m.mu.Unlock()
 	job := m.jobs[id]
 	if spec.host {
-		job.Transaction = transactionFromEnvelope(job.Name, envelope)
+		returned := transactionFromEnvelope(job.Name, envelope)
+		if job.Transaction != nil && job.Transaction.RequestBound {
+			if returned == nil && (len(envelope) > 0 || err == nil) {
+				var rejection struct {
+					Status  string `json:"status"`
+					Summary struct {
+						Reason string `json:"reason"`
+					} `json:"summary"`
+				}
+				if json.Unmarshal(envelope, &rejection) != nil || rejection.Status != "fail" || rejection.Summary.Reason != "invalid_input" {
+					err = &unconfirmedError{id, errors.Join(err, errors.New("核心配置回执缺少原事务身份"))}
+				}
+			} else if returned != nil {
+				if !job.Transaction.acceptsCoreResult(returned) {
+					err = &unconfirmedError{id, errors.New("核心配置回执与预绑定请求不匹配")}
+				} else {
+					returned.RequestBound = true
+					job.Transaction = returned
+				}
+			}
+		} else {
+			job.Transaction = returned
+		}
 	}
 	finished := time.Now().UTC()
 	job.Finished = &finished
@@ -460,6 +501,13 @@ func (m *Manager) Recover(id string) (Operation, error) {
 	defer m.mu.Unlock()
 	j := m.jobs[id]
 	if len(envelope) > 0 {
+		if j.Transaction != nil && j.Transaction.RequestBound {
+			returned := transactionFromEnvelope(j.Name, envelope)
+			if j.Transaction.acceptsCoreResult(returned) {
+				returned.RequestBound = true
+				j.Transaction = returned
+			}
+		}
 		j.Envelope = envelope
 		j.inputBlocked = false
 	}

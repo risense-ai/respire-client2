@@ -7,6 +7,7 @@ import (
 	"errors"
 	"path/filepath"
 	"regexp"
+	"strings"
 )
 
 // Persist only the public identity needed by the CLI's original-result commands.
@@ -16,6 +17,13 @@ type hostTransaction struct {
 	Kind          string       `json:"kind"`
 	Register      bool         `json:"register,omitempty"`
 	Scope         runtimeScope `json:"scope,omitzero"`
+	RequestBound  bool         `json:"request_bound,omitempty"`
+}
+
+func (transaction *hostTransaction) acceptsCoreResult(reply *hostTransaction) bool {
+	return reply != nil && reply.Kind == "core_config" && reply.OperationID == transaction.OperationID &&
+		(transaction.SourceProfile == "" || reply.SourceProfile == transaction.SourceProfile) &&
+		(transaction.Scope == (runtimeScope{}) || reply.Scope == transaction.Scope)
 }
 
 var hostOperationID = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
@@ -121,6 +129,16 @@ func hostEnvelopeError(raw json.RawMessage) error {
 
 func (m *Manager) recoverHost(ctx context.Context, job Operation) (json.RawMessage, error) {
 	transaction := job.Transaction
+	if transaction != nil && transaction.RequestBound && transaction.Kind == "core_config" {
+		if transaction.OperationID != strings.TrimPrefix(job.ID, "desktop-") || !hostOperationID.MatchString(transaction.OperationID) {
+			return nil, &unconfirmedError{job.ID, errors.New("核心配置预绑定身份不匹配")}
+		}
+		raw, err := m.hostOperation(ctx, nil, "", "core_config.result", job.ID)
+		if !transaction.acceptsCoreResult(transactionFromEnvelope(job.Name, raw)) {
+			return raw, &unconfirmedError{job.ID, errors.New("核心配置查询尚未返回原事务身份")}
+		}
+		return raw, err
+	}
 	if transaction == nil || !hostOperationID.MatchString(transaction.OperationID) || !filepath.IsAbs(transaction.SourceProfile) {
 		return nil, &unconfirmedError{job.ID, errors.New("CLI 未返回可查询的结构化事务身份，请核对当前账户；不能以桌面请求 ID 代替宿主事务 ID")}
 	}
