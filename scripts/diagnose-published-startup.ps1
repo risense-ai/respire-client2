@@ -117,8 +117,9 @@ function Health {
 function Assert-Actor($Health) {
     $expected = Join-Path $binaryDirectory 'runtime/2.0.0-dev.23/rsrs-runtime.exe'
     $actor = Get-CimInstance Win32_Process -Filter "ProcessId=$($Health.pid)"
-    if (-not $actor -or -not [string]::Equals($actor.ExecutablePath, $expected, [StringComparison]::OrdinalIgnoreCase) -or
-        $Health.store_ready -ne $true -or $Health.credential_state -cne 'available') { throw 'Runtime actor or key handoff differs' }
+    $report.actor_found = $null -ne $actor
+    $report.actor_path_match = [string]::Equals($actor.ExecutablePath, $expected, [StringComparison]::OrdinalIgnoreCase)
+    if (-not $actor -or -not [string]::Equals($actor.ExecutablePath, $expected, [StringComparison]::OrdinalIgnoreCase)) { throw 'Runtime actor identity differs' }
     return $actor
 }
 $desktop = $null
@@ -135,6 +136,8 @@ try {
     $started = Invoke-Child 'initial_start' $clientPath @('--headless','start')
     if (-not $started.ok) { throw 'Initial Client2 start did not succeed' }
     $runtimeActor = Assert-Actor (Health)
+    $initialHealth = Health
+    if ($initialHealth.store_ready -ne $true -or $initialHealth.credential_state -cne 'available') { throw 'Initial key handoff differs' }
     $previousId = $runtimeActor.ProcessId
     $report.initial_start = $true
     $text = 'published-startup-' + [Guid]::NewGuid().ToString('N')
@@ -151,9 +154,14 @@ try {
     $report.phase = 'existing_keys_gui_restart'
     $desktop = Start-Child $clientPath @('--tray')
     $deadline = [Diagnostics.Stopwatch]::StartNew()
+    $report.runtime_observations = @()
     do {
         try { $health = Health } catch [Net.Http.HttpRequestException] { $health = $null }
-        if ($health) { $runtimeActor = Assert-Actor $health; break }
+        if ($health) {
+            $report.runtime_observations += @{pid=$health.pid; store_ready=$health.store_ready; credential_state=$(if ($health.credential_state -cin @('required','available')) { $health.credential_state } else { 'other' })}
+            $runtimeActor = Assert-Actor $health
+            break
+        }
         if ($desktop.WaitForExit(500)) { throw 'Desktop exited before automatic startup' }
     } while ($deadline.Elapsed.TotalSeconds -lt 60)
     if (-not $runtimeActor -or $runtimeActor.ProcessId -eq $previousId) { throw 'Automatic startup did not yield a new actor' }
@@ -161,7 +169,15 @@ try {
     $report.runtime_pid = $runtimeActor.ProcessId
     # Use the original native GUI fixture's scoped read-only RPC oracle.
     $report.phase = 'automatic_key_handoff'
-    $health = Health
+    $startedHealth = $health
+    do {
+        $health = Health
+        if ($health.pid -ne $startedHealth.pid -or $health.instance_id -cne $startedHealth.instance_id -or $health.generation -ne $startedHealth.generation) { throw 'Runtime identity changed during key handoff' }
+        if ($health.store_ready -eq $true -and $health.credential_state -ceq 'available') { break }
+        if ($health.store_ready -ne $false -or $health.credential_state -cne 'required') { throw 'Runtime key state is not a pending handoff' }
+        if ($desktop.WaitForExit(500)) { throw 'Desktop exited before key handoff' }
+    } while ($deadline.Elapsed.TotalSeconds -lt 60)
+    if ($health.store_ready -ne $true -or $health.credential_state -cne 'available') { throw 'Automatic key handoff timed out' }
     if ($health.v -ne 1 -or -not $health.account_id -or -not $health.instance_id -or $health.generation -le 0) { throw 'Runtime RPC scope missing' }
     $scope = @{account_id=$health.account_id; instance_id=$health.instance_id; generation=$health.generation}
     $requestId = 'published-startup-' + [Guid]::NewGuid().ToString('N')
@@ -181,6 +197,22 @@ try {
     $report.status = 'diagnostic-passed'
 } catch {
     $report.failure_phase = $report.phase
+    $fixedFailures = @{
+        'Runtime actor identity differs'='runtime_actor_identity_mismatch'
+        'Initial key handoff differs'='initial_key_handoff_failed'
+        'Automatic startup did not yield a new actor'='automatic_start_not_observed'
+        'Desktop exited before automatic startup'='desktop_exited_before_start'
+        'Runtime identity changed during key handoff'='runtime_changed_during_handoff'
+        'Runtime key state is not a pending handoff'='unexpected_credential_state'
+        'Desktop exited before key handoff'='desktop_exited_before_handoff'
+        'Automatic key handoff timed out'='automatic_key_handoff_timeout'
+        'Runtime RPC scope missing'='rpc_scope_missing'
+        'Automatic key handoff did not reopen the original memory'='original_memory_rpc_mismatch'
+        'Runtime identity changed during readback'='runtime_changed_during_readback'
+        'Child operation failed; raw output withheld'='child_operation_failed'
+        'Legacy CLI readback differs'='legacy_cli_readback_mismatch'
+    }
+    $report.failure_code = if ($fixedFailures.ContainsKey($_.Exception.Message)) { $fixedFailures[$_.Exception.Message] } else { 'diagnostic_operation_failed' }
     if (-not $report.failure_category) { $report.failure_category = Classify $_.Exception.Message }
 } finally {
     $logPath = Join-Path $dataDirectory 'client2/client.log'
