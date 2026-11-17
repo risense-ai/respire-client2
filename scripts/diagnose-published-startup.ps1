@@ -68,6 +68,7 @@ $categories = [ordered]@{
     memory_missing='not_found|not found|不存在'
     invalid_config='invalid_config|client config|configuration.*changed'
     runtime_locked='runtime_locked|supply private key material|library remains locked'
+    runtime_maintenance='runtime_maintenance|runtime (maintenance|is draining)'
     runtime_worker='runtime worker is gone|dispatcher.*disconnected'
     timeout='timed out|deadline|超时'
 }
@@ -239,7 +240,8 @@ try {
     $report.rpc_code = if ($read.code -cin $rpcCodes) { $read.code } elseif ($null -eq $read.code) { 'none' } else { 'other' }
     $report.rpc_envelope_present = $null -ne $read.envelope
     $fixedRpcErrors = @('runtime maintenance rejected business execution', 'runtime maintenance pauses model/index preparation',
-        'runtime maintenance rejected queued business', 'runtime maintenance rejected queued execution')
+        'runtime maintenance rejected queued business', 'runtime maintenance rejected queued execution',
+        'runtime is draining and rejected new business', 'runtime_maintenance: runtime maintenance rejected queued business')
     $report.rpc_error = if ($read.error -cin $fixedRpcErrors) { $read.error } else { 'other' }
     $report.maintenance_after_read = Test-Path -LiteralPath $markerPath
     $afterRejection = Health

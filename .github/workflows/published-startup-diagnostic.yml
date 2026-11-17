@@ -1,11 +1,20 @@
 name: Published Client2 startup diagnostic
 on:
   workflow_dispatch:
-  push:
-    branches: [codex/dev19-client2-autostart-20261117]
-    paths:
-      - '.github/workflows/published-startup-diagnostic.yml'
-      - 'scripts/diagnose-published-startup.ps1'
+    inputs:
+      cli_run_id:
+        description: 'Existing Windows CLI artifact run ID (no build is triggered)'
+        required: true
+        type: string
+      cli_run_attempt:
+        description: 'Attempt that produced the CLI artifact'
+        required: true
+        default: '1'
+        type: string
+      cli_source_sha:
+        description: 'Full CLI commit SHA; must match run and schema2 build metadata'
+        required: true
+        type: string
 permissions:
   contents: read
   actions: read
@@ -26,41 +35,57 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: '3.12'
-      - name: Reuse and verify the original candidate and public releases
+      - name: Reuse and verify the selected CLI and pinned public releases
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
+          CLI_RUN_ID: ${{ inputs.cli_run_id }}
+          CLI_RUN_ATTEMPT: ${{ inputs.cli_run_attempt }}
+          CLI_SOURCE_SHA: ${{ inputs.cli_source_sha }}
         run: |
           $ErrorActionPreference = 'Stop'
+          if ($env:CLI_RUN_ID -cnotmatch '^[1-9][0-9]*$' -or $env:CLI_RUN_ATTEMPT -cnotmatch '^[1-9][0-9]*$' -or
+              $env:CLI_SOURCE_SHA -cnotmatch '^[0-9a-f]{40}$') { throw 'Require numeric run/attempt and a full lowercase CLI SHA' }
           $assets = Join-Path $env:RUNNER_TEMP 'startup-assets'
-          gh run download 44033703087 -R risense-ai/respire-cli -n cli-release-x86_64-pc-windows-msvc -D "$assets/cli"
+          $run = gh api "repos/risense-ai/respire-cli/actions/runs/$env:CLI_RUN_ID/attempts/$env:CLI_RUN_ATTEMPT" | ConvertFrom-Json
+          if ($LASTEXITCODE -or $run.id -ne $env:CLI_RUN_ID -or $run.run_attempt -ne $env:CLI_RUN_ATTEMPT -or
+              $run.head_sha -cne $env:CLI_SOURCE_SHA -or $run.repository.full_name -cne 'risense-ai/respire-cli') { throw 'CLI workflow source differs' }
+          $inventory = gh api --paginate --slurp "repos/risense-ai/respire-cli/actions/runs/$env:CLI_RUN_ID/artifacts" | ConvertFrom-Json
+          if ($LASTEXITCODE) { throw 'CLI artifact inventory failed' }
+          $artifact = @($inventory.artifacts | Where-Object name -CEQ 'cli-release-x86_64-pc-windows-msvc')
+          if ($artifact.Count -ne 1 -or $artifact[0].expired -or $artifact[0].workflow_run.head_sha -cne $env:CLI_SOURCE_SHA) { throw 'Require one unexpired Windows CLI artifact from the selected commit' }
+          gh run download $env:CLI_RUN_ID -R risense-ai/respire-cli -n cli-release-x86_64-pc-windows-msvc -D "$assets/cli"
           if ($LASTEXITCODE) { throw 'CLI artifact download failed' }
-          gh run download 44033703087 -R risense-ai/respire-cli -n candidate-assets-x86_64-pc-windows-msvc -D "$assets/proof"
-          if ($LASTEXITCODE) { throw 'Candidate receipt download failed' }
+          $cliBuild = Get-Content "$assets/cli/cli-build-x86_64-pc-windows-msvc.json" -Raw | ConvertFrom-Json
+          $cliFile = Get-Item "$assets/cli/rsrs-x86_64-pc-windows-msvc.exe"
+          if ($cliBuild.schema_version -ne 2 -or $cliBuild.artifact_layout -cne 'cli-frontend-v2' -or
+              $cliBuild.git_sha -cne $env:CLI_SOURCE_SHA -or $cliBuild.target -cne 'x86_64-pc-windows-msvc' -or
+              $cliBuild.binary_file -cne $cliFile.Name -or $cliBuild.binary_size -ne $cliFile.Length -or
+              $cliBuild.producer.run_id -ne $env:CLI_RUN_ID -or $cliBuild.producer.run_attempt -ne $env:CLI_RUN_ATTEMPT -or
+              (Get-FileHash $cliFile.FullName -Algorithm SHA256).Hash.ToLowerInvariant() -cne $cliBuild.binary_sha256) { throw 'CLI schema2 source or binary proof differs' }
           gh release download v2.0.0-dev.23 -R risense-ai/respire-runtime -p rsrs-runtime-x86_64-pc-windows-msvc.tar.gz -p runtime-build-x86_64-pc-windows-msvc.json -D "$assets/runtime"
           if ($LASTEXITCODE) { throw 'Runtime release download failed' }
           gh release download v2.0.0-dev.15 -R risense-ai/respire-client2 -p respire-windows-amd64.exe -p SHA256SUMS -D "$assets/client"
           if ($LASTEXITCODE) { throw 'Client2 release download failed' }
-          $proof = Get-Content "$assets/proof/candidate-assets-receipt.json" -Raw | ConvertFrom-Json
-          if (-not $proof.assets_verified -or -not $proof.payloads_verified -or
-              $proof.candidate.source.sha -cne '1e6384d213b00975a98998e3331f5b21941da8a1' -or
-              $proof.candidate.source.run_id -ne 44033703087 -or $proof.candidate.source.run_attempt -ne 1 -or
-              $proof.candidate.client2.source_sha -cne 'f3455ce639cc2ab9e35762c2668367fccb3d2ad5' -or
-              $proof.candidate.runtime.version -cne '2.0.0-dev.23') { throw 'Original candidate identity differs' }
-          foreach ($file in $proof.cli_assets) {
-            $path = Join-Path "$assets/cli" $file.name
-            if ((Get-Item $path).Length -ne $file.size -or (Get-FileHash $path -Algorithm SHA256).Hash.ToLowerInvariant() -cne $file.sha256) { throw 'CLI candidate byte mismatch' }
+          $runtimePins = @{
+            'rsrs-runtime-x86_64-pc-windows-msvc.tar.gz' = 'd6b7cce426603965edad623b9f949338204cc61a1ce10efe1373aa1aecfd0b0c'
+            'runtime-build-x86_64-pc-windows-msvc.json' = '15ddae7d5638bdfef113b32eb201648a101e3949b9ef316e696b2430662b8450'
           }
-          foreach ($name in @('rsrs-runtime-x86_64-pc-windows-msvc.tar.gz','runtime-build-x86_64-pc-windows-msvc.json')) {
-            $expected = @($proof.candidate.runtime.assets | Where-Object name -CEQ $name)
-            if ($expected.Count -ne 1 -or (Get-Item "$assets/runtime/$name").Length -ne $expected[0].size -or
-                (Get-FileHash "$assets/runtime/$name" -Algorithm SHA256).Hash.ToLowerInvariant() -cne $expected[0].sha256) { throw 'Runtime dev23 byte mismatch' }
+          foreach ($name in $runtimePins.Keys) {
+            if ((Get-FileHash "$assets/runtime/$name" -Algorithm SHA256).Hash.ToLowerInvariant() -cne $runtimePins[$name]) { throw 'Pinned Runtime dev23 byte mismatch' }
           }
           $checksums = @(Get-Content "$assets/client/SHA256SUMS" | Where-Object { $_ -cmatch '^[0-9a-f]{64}  respire-windows-amd64\.exe$' })
-          if ($checksums.Count -ne 1 -or (Get-FileHash "$assets/client/respire-windows-amd64.exe" -Algorithm SHA256).Hash.ToLowerInvariant() -cne $checksums[0].Substring(0,64)) { throw 'Published Client2 checksum differs' }
+          $clientHash = (Get-FileHash "$assets/client/respire-windows-amd64.exe" -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($checksums.Count -ne 1 -or $clientHash -cne $checksums[0].Substring(0,64) -or
+              $clientHash -cne '83db6bd2fe15a1726aedf1ab6b05d56d4108cf4d5db742ea5ad100a53d76e26a') { throw 'Pinned Client2 dev15 byte mismatch' }
           $tag = gh api repos/risense-ai/respire-client2/git/ref/tags/v2.0.0-dev.15 | ConvertFrom-Json
-          if ($tag.object.type -cne 'commit' -or $tag.object.sha -cne $proof.candidate.client2.source_sha) { throw 'Published Client2 tag source differs' }
-          $proof | ConvertTo-Json -Depth 30 | Set-Content "$assets/input-proof.json" -Encoding utf8NoBOM
+          if ($LASTEXITCODE -or $tag.object.type -cne 'commit' -or $tag.object.sha -cne 'f3455ce639cc2ab9e35762c2668367fccb3d2ad5') { throw 'Published Client2 tag source differs' }
+          [ordered]@{
+            schema = 1; scope = 'published dev15 startup with selected CLI and pinned Runtime23'
+            cli = $cliBuild; cli_artifact = $artifact[0]
+            runtime = @{version='2.0.0-dev.23'; source_sha='f1a8812a96dc6decbda6c5f1eb8765520a111c68'; assets=$runtimePins}
+            client2 = @{tag='v2.0.0-dev.15'; source_sha=$tag.object.sha; sha256=$clientHash}
+          } | ConvertTo-Json -Depth 20 | Set-Content "$assets/input-proof.json" -Encoding utf8NoBOM
       - name: Explicitly install the official public model and verify real CPU inference
         shell: pwsh
         env:
