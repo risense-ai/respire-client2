@@ -2,12 +2,13 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-current="${1:?Usage: release-notes.sh <tag> [output]}"
+current="${1:?Usage: release-notes.sh <tag> [output] [source-ref]}"
 output="${2:-RELEASE_NOTES.md}"
 repository="${GITHUB_REPOSITORY:-risense-ai/respire-client2}"
 [[ "$current" == v* ]] || { echo "Release tag must start with v: $current" >&2; exit 1; }
 
 current_version="${current#v}"
+source_ref="${3:-$current}"
 previous=""
 while IFS= read -r tag; do
     [[ "$tag" != "$current" ]] || continue
@@ -23,9 +24,9 @@ while IFS= read -r tag; do
     if [[ "$highest" == "$tag_version" ]]; then previous="$tag"; fi
 done < <(git tag --list 'v*')
 
-range="$current"
+range="$source_ref"
 if [[ -n "$previous" ]]; then
-    range="$previous..$current"
+    range="$previous..$source_ref"
 fi
 tmpdir="$(mktemp -d)"
 trap 'rm -rf "$tmpdir"' EXIT
