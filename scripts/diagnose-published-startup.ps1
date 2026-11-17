@@ -183,6 +183,15 @@ try {
     $requestId = 'published-startup-' + [Guid]::NewGuid().ToString('N')
     $request = @{v=1; id=$requestId; operation_id=$requestId; idempotency_key=$requestId; scope=$scope; method='cli.exec'; args=@('--json','show',$memoryId)}
     $read = Invoke-RestMethod -Uri "http://127.0.0.1:$port/api/rpc" -Method Post -ContentType 'application/json' -Body ($request | ConvertTo-Json -Depth 5 -Compress) -TimeoutSec 30 -NoProxy
+    $report.rpc_checks = [ordered]@{
+        protocol=($read.v -eq 1); request_id=($read.id -ceq $requestId); ok=($read.ok -eq $true); exit_zero=($read.exit -eq 0)
+        operation_id=($read.operation_id -ceq $requestId); idempotency_key=($read.idempotency_key -ceq $requestId)
+        account_scope=($read.scope.account_id -ceq $scope.account_id); instance_scope=($read.scope.instance_id -ceq $scope.instance_id)
+        generation_scope=($read.scope.generation -eq $scope.generation); command=($read.envelope.command -ceq 'show')
+        status=($read.envelope.status -ceq 'ok'); errors_empty=(@($read.envelope.errors).Count -eq 0)
+        memory_id=($read.envelope.details.entry.id -ceq $memoryId); memory_content=($read.envelope.details.entry.content -ceq $text)
+    }
+    $report.rpc_error_category = Classify ($read.error + ($read.envelope.errors -join ' '))
     if ($read.v -ne 1 -or $read.id -cne $requestId -or -not $read.ok -or $read.exit -ne 0 -or
         $read.operation_id -cne $requestId -or $read.idempotency_key -cne $requestId -or
         $read.scope.account_id -cne $scope.account_id -or $read.scope.instance_id -cne $scope.instance_id -or $read.scope.generation -ne $scope.generation -or
