@@ -179,7 +179,7 @@ func (m *Manager) requireHostMethod(ctx context.Context, method string) error {
 }
 
 func (m *Manager) runHostContinuation(job Operation, transportID string, input json.RawMessage) {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
+	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	raw, err := m.recoverHost(ctx, job)
 	confirmedInput := false
