@@ -434,8 +434,15 @@ func (m *Manager) Recover(id string) (Operation, error) {
 	original.inputBlocked = true
 	m.mu.Unlock()
 	var err error
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	// Host result queries can drain and restore Runtime and verify native custody.
+	// Like account submissions, let the CLI own their lifecycle deadlines.
+	if !job.host {
+		timedCtx, timedCancel := context.WithTimeout(ctx, 30*time.Second)
+		defer timedCancel()
+		ctx = timedCtx
+	}
 	var envelope json.RawMessage
 	if job.host {
 		envelope, err = m.recoverHost(ctx, job)
