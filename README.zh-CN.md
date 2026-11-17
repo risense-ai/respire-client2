@@ -4,8 +4,9 @@
 
 基于 Wails v3 与 Go 构建的 Windows、macOS、Linux 桌面客户端，用于替代 `risense-ai/respire-client` 中的桌面应用。CLI、TUI、托管 Dashboard 以及既有用户数据保持独立。
 
-固定 Runtime23 的基线、宿主配置及密钥归属，以及发布验收范围，见
-[组件职责边界](docs/component-boundaries.md)。
+宿主配置、密钥归属及发布验收范围见[组件职责边界](docs/component-boundaries.md)。
+本轮已授权的纯核心配置接口、Client2 基线升级、配置回执界面和公开产物验收任务，见
+[Runtime24 与宿主 DEV 发布目标](docs/runtime24-host-release-goal.md)。Runtime24 完成发布与核验前，已发布基线仍为 Runtime23。
 
 从 [Releases](https://github.com/risense-ai/respire-client2/releases) 下载与操作系统和架构匹配的产物。请将解压后的应用保存在可写入的固定目录。Windows 为单个 EXE，需要 Microsoft Edge WebView2。Apple Silicon 用户可将 `respire-darwin-arm64.dmg` 中的 `Respire.app` 拖入 Applications。Linux 为包含单个可执行文件的 tarball，需要 GTK 3、WebKitGTK 4.1 和 X11 库。最终用户无需安装 Node.js、Go、npm 或 Rust。桌面包不内置 CLI、Runtime、Core 或模型权重。首次使用时，客户端按所选通道独立下载缺失组件，并校验元数据与 SHA-256，因此需要联网。若不存在客户端管理的 CLI，客户端可识别 `<root>/bin/rsrs[.exe]` 处的外部 CLI，包括 npm 安装的版本。
 
