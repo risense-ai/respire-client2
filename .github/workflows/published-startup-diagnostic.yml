@@ -1,0 +1,112 @@
+name: Published Client2 startup diagnostic
+on:
+  workflow_dispatch:
+  push:
+    branches: [codex/dev19-client2-autostart-20261117]
+    paths:
+      - '.github/workflows/published-startup-diagnostic.yml'
+      - 'scripts/diagnose-published-startup.ps1'
+permissions:
+  contents: read
+  actions: read
+jobs:
+  existing-keys:
+    runs-on: windows-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@v7
+        with:
+          repository: risense-ai/respire-cli
+          ref: 1e6384d213b00975a98998e3331f5b21941da8a1
+          path: .cli
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - name: Reuse and verify the original candidate and public releases
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $assets = Join-Path $env:RUNNER_TEMP 'startup-assets'
+          gh run download 44033703087 -R risense-ai/respire-cli -n cli-release-x86_64-pc-windows-msvc -D "$assets/cli"
+          if ($LASTEXITCODE) { throw 'CLI artifact download failed' }
+          gh run download 44033703087 -R risense-ai/respire-cli -n candidate-assets-x86_64-pc-windows-msvc -D "$assets/proof"
+          if ($LASTEXITCODE) { throw 'Candidate receipt download failed' }
+          gh release download v2.0.0-dev.23 -R risense-ai/respire-runtime -p rsrs-runtime-x86_64-pc-windows-msvc.tar.gz -p runtime-build-x86_64-pc-windows-msvc.json -D "$assets/runtime"
+          if ($LASTEXITCODE) { throw 'Runtime release download failed' }
+          gh release download v2.0.0-dev.15 -R risense-ai/respire-client2 -p respire-windows-amd64.exe -p SHA256SUMS -D "$assets/client"
+          if ($LASTEXITCODE) { throw 'Client2 release download failed' }
+          $proof = Get-Content "$assets/proof/candidate-assets-receipt.json" -Raw | ConvertFrom-Json
+          if (-not $proof.assets_verified -or -not $proof.payloads_verified -or
+              $proof.candidate.source.sha -cne '1e6384d213b00975a98998e3331f5b21941da8a1' -or
+              $proof.candidate.source.run_id -ne 44033703087 -or $proof.candidate.source.run_attempt -ne 1 -or
+              $proof.candidate.client2.source_sha -cne 'f3455ce639cc2ab9e35762c2668367fccb3d2ad5' -or
+              $proof.candidate.runtime.version -cne '2.0.0-dev.23') { throw 'Original candidate identity differs' }
+          foreach ($file in $proof.cli_assets) {
+            $path = Join-Path "$assets/cli" $file.name
+            if ((Get-Item $path).Length -ne $file.size -or (Get-FileHash $path -Algorithm SHA256).Hash.ToLowerInvariant() -cne $file.sha256) { throw 'CLI candidate byte mismatch' }
+          }
+          foreach ($name in @('rsrs-runtime-x86_64-pc-windows-msvc.tar.gz','runtime-build-x86_64-pc-windows-msvc.json')) {
+            $expected = @($proof.candidate.runtime.assets | Where-Object name -CEQ $name)
+            if ($expected.Count -ne 1 -or (Get-Item "$assets/runtime/$name").Length -ne $expected[0].size -or
+                (Get-FileHash "$assets/runtime/$name" -Algorithm SHA256).Hash.ToLowerInvariant() -cne $expected[0].sha256) { throw 'Runtime dev23 byte mismatch' }
+          }
+          $checksums = @(Get-Content "$assets/client/SHA256SUMS" | Where-Object { $_ -cmatch '^[0-9a-f]{64}  respire-windows-amd64\.exe$' })
+          if ($checksums.Count -ne 1 -or (Get-FileHash "$assets/client/respire-windows-amd64.exe" -Algorithm SHA256).Hash.ToLowerInvariant() -cne $checksums[0].Substring(0,64)) { throw 'Published Client2 checksum differs' }
+          $tag = gh api repos/risense-ai/respire-client2/git/ref/tags/v2.0.0-dev.15 | ConvertFrom-Json
+          if ($tag.object.type -cne 'commit' -or $tag.object.sha -cne $proof.candidate.client2.source_sha) { throw 'Published Client2 tag source differs' }
+          $proof | ConvertTo-Json -Depth 30 | Set-Content "$assets/input-proof.json" -Encoding utf8NoBOM
+      - name: Explicitly install the official public model and verify real CPU inference
+        shell: pwsh
+        env:
+          RSRS_ENGINE: cpu
+          RSRS_NO_AUTOSYNC: '1'
+          RSRS_UPDATE_CHECK: '0'
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $assets = Join-Path $env:RUNNER_TEMP 'startup-assets'
+          $env:RSRS_DATA_DIR = Join-Path $env:RUNNER_TEMP 'startup-model-preparation'
+          $env:HOME = Join-Path $env:RSRS_DATA_DIR 'home'
+          $env:USERPROFILE = $env:HOME
+          New-Item -ItemType Directory -Path $env:HOME | Out-Null
+          $env:RSRS_M3_DIR = Join-Path $env:RSRS_DATA_DIR 'models/bge-m3'
+          $cli = "$assets/cli/rsrs-x86_64-pc-windows-msvc.exe"
+          & $cli --json runtime install --file "$assets/runtime/rsrs-runtime-x86_64-pc-windows-msvc.tar.gz" --version 2.0.0-dev.23
+          if ($LASTEXITCODE) { throw 'Official Runtime model preparation install failed' }
+          $env:RSRS_RUNTIME_BIN = Join-Path $env:RSRS_DATA_DIR 'bin/runtime/2.0.0-dev.23/rsrs-runtime.exe'
+          $output = & $cli --direct model install-m3 --json
+          if ($LASTEXITCODE) { throw 'Official model install or inference failed' }
+          $model = $output | ConvertFrom-Json
+          $evidence = $model.details.backend_load.evidence
+          if ($model.status -cne 'ok' -or -not $evidence.ready -or -not $evidence.inference_completed -or
+              -not $evidence.fresh_session -or $evidence.dimensions -ne 1024 -or $evidence.selected -cne 'CPU') { throw 'Real model inference proof differs' }
+          $output | Set-Content "$assets/model-inference.json" -Encoding utf8NoBOM
+          python -c "import importlib.util,os,pathlib; p=pathlib.Path('.cli/scripts/native-model-cache.py'); s=importlib.util.spec_from_file_location('public_models',p); m=importlib.util.module_from_spec(s); s.loader.exec_module(m); root=pathlib.Path(os.environ['RSRS_M3_DIR']); [m.verify_file(root/name,digest) for name,digest in m.FILES.items() if name != 'onnx/model_fp16.onnx']"
+          if ($LASTEXITCODE) { throw 'Public model hash verification failed' }
+          & $cli --runtime-internal --stop --json
+          if ($LASTEXITCODE) { throw 'Model preparation Runtime stop failed' }
+      - name: Diagnose the published desktop existing-key restart
+        shell: pwsh
+        run: |
+          $assets = Join-Path $env:RUNNER_TEMP 'startup-assets'
+          ./scripts/diagnose-published-startup.ps1 `
+            -Cli "$assets/cli/rsrs-x86_64-pc-windows-msvc.exe" `
+            -Client "$assets/client/respire-windows-amd64.exe" `
+            -RuntimeArchive "$assets/runtime/rsrs-runtime-x86_64-pc-windows-msvc.tar.gz" `
+            -ModelDirectory "$env:RUNNER_TEMP/startup-model-preparation/models/bge-m3" `
+            -OutputDirectory "$env:RUNNER_TEMP/published-startup-diagnostic"
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: published-client2-startup-diagnostic
+          path: |
+            ${{ runner.temp }}/startup-assets/input-proof.json
+            ${{ runner.temp }}/startup-assets/model-inference.json
+            ${{ runner.temp }}/published-startup-diagnostic/startup-diagnostic.json
+          if-no-files-found: error
+          retention-days: 3
