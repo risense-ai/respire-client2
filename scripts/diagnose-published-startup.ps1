@@ -66,6 +66,9 @@ $categories = [ordered]@{
     rpc_scope='scope|generation|instance_id'
     command_input='invalid_input|unrecognized|unexpected argument'
     memory_missing='not_found|not found|不存在'
+    invalid_config='invalid_config|client config|configuration.*changed'
+    runtime_locked='runtime_locked|supply private key material|library remains locked'
+    runtime_worker='runtime worker is gone|dispatcher.*disconnected'
     timeout='timed out|deadline|超时'
 }
 function Classify([string]$Text) {
@@ -192,6 +195,11 @@ try {
         memory_id=($read.envelope.details.entry.id -ceq $memoryId); memory_content=($read.envelope.details.entry.content -ceq $text)
     }
     $report.rpc_error_category = Classify ($read.error + ($read.envelope.errors -join ' '))
+    $rpcCodes = @('invalid_config','runtime_locked','scope_mismatch','scope_required','daemon_unavailable','runtime_maintenance',
+        'model_switch_busy','request_in_progress','operation_id_conflict','invalid_operation_id','invalid_request_id','protocol_version_mismatch',
+        'unknown_method','queue_full','request_timeout')
+    $report.rpc_code = if ($read.code -cin $rpcCodes) { $read.code } elseif ($null -eq $read.code) { 'none' } else { 'other' }
+    $report.rpc_envelope_present = $null -ne $read.envelope
     if ($read.v -ne 1 -or $read.id -cne $requestId -or -not $read.ok -or $read.exit -ne 0 -or
         $read.operation_id -cne $requestId -or $read.idempotency_key -cne $requestId -or
         $read.scope.account_id -cne $scope.account_id -or $read.scope.instance_id -cne $scope.instance_id -or $read.scope.generation -ne $scope.generation -or
@@ -226,7 +234,10 @@ try {
 } finally {
     $logPath = Join-Path $dataDirectory 'client2/client.log'
     if (Test-Path -LiteralPath $logPath) {
+        $report.client_log_present = $true
+        $report.client_log_bytes = (Get-Item -LiteralPath $logPath).Length
         $lines = @(Get-Content -LiteralPath $logPath | Where-Object { $_ -match '连接 Runtime:' })
+        $report.startup_error_count = $lines.Count
         $report.startup_errors = @($lines | ForEach-Object { Classify $_ })
     }
     try {
