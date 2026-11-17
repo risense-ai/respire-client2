@@ -79,6 +79,7 @@ jobs:
           node scripts/test-account-session-state.cjs
           node scripts/test-client-refresh.cjs
           python3 -m py_compile scripts/desktop-candidate.py scripts/update-manifest.py
+          python3 scripts/desktop-candidate.py self-check
           go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12 -shellcheck= -pyflakes= .github/workflows/desktop.yml
   native:
     name: ${{ matrix.os }}-${{ matrix.arch }}

@@ -9,6 +9,7 @@ from pathlib import Path
 import re
 import stat
 import subprocess
+import tempfile
 import zipfile
 
 
@@ -23,6 +24,7 @@ TARGETS = {
 ASSETS = {name for names in TARGETS.values() for name in names}
 FILES = ASSETS | {"SHA256SUMS", "LICENSE.txt", "THIRD_PARTY_NOTICES.txt",
                   "client-updates.json", "release-notes.md"}
+IMMUTABLE_FILES = FILES - {"client-updates.json"}
 SCOPE = "package_checks"
 SHA = re.compile(r"[0-9a-f]{40}")
 VERSION = re.compile(r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-[0-9A-Za-z]+(?:[.-][0-9A-Za-z]+)*)?")
@@ -48,6 +50,62 @@ def read(path):
 
 def write(path, value):
     path.write_text(json.dumps(value, indent=2) + "\n", encoding="utf-8", newline="\n")
+
+
+def record_digest(value):
+    return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(",", ":"),
+                                     ensure_ascii=False).encode("utf-8")).hexdigest()
+
+
+def discovery_index(root, version):
+    stable = "-" not in version
+    path = root / "client-updates.json"
+    return {"filename": path.name, "role": "stable_dev_discovery" if stable else "version_update_manifest",
+            "initial": {"sha256": digest(path), "size": path.stat().st_size},
+            "stable_record_sha256": record_digest(read(path)["stable"]) if stable else None}
+
+
+def verify_discovery(root, manifest, update, published):
+    index = manifest["discovery_index"]
+    stable = "-" not in manifest["version"]
+    require(set(index) == {"filename", "role", "initial", "stable_record_sha256"}
+            and index["filename"] == "client-updates.json"
+            and index["role"] == ("stable_dev_discovery" if stable else "version_update_manifest"),
+            "Discovery metadata role differs")
+    if stable:
+        require(set(update) == {"schemaVersion", "stable", "dev"}
+                and record_digest(update["stable"]) == index["stable_record_sha256"],
+                "Stable release record changed in discovery index")
+    else:
+        require(set(update) == {"schemaVersion", "dev"} and index["stable_record_sha256"] is None,
+                "Version update metadata differs")
+    if not published:
+        require(index == discovery_index(root, manifest["version"]), "Initial discovery index bytes changed")
+        return
+    # Only the existing stable Release's DEV discovery record is mutable. Never
+    # use this inspection mode to promote a candidate or manufacture a receipt.
+    require(stable, "Published discovery inspection is only valid for stable Releases")
+    require(set(index["initial"]) == {"sha256", "size"}
+            and re.fullmatch(r"[0-9a-f]{64}", index["initial"]["sha256"])
+            and type(index["initial"]["size"]) is int and index["initial"]["size"] > 0,
+            "Initial discovery byte binding is missing")
+    dev = update["dev"]
+    if dev == update["stable"]:
+        return
+    version = re.fullmatch(r"(\d+)\.(\d+)\.(\d+)-dev\.(\d+)", dev["version"])
+    require(version and tuple(map(int, version.groups()[:3]))
+            > tuple(map(int, manifest["version"].split("."))), "DEV discovery must advance the initial stable version")
+    require(set(dev) == {"version", "notes", "publishedAt", "artifacts"}
+            and isinstance(dev["notes"], str) and isinstance(dev["publishedAt"], str)
+            and len(dev["artifacts"]) == len(TARGETS)
+            and {a["filename"] for a in dev["artifacts"]} == {names[0] for names in TARGETS.values()},
+            "DEV discovery must retain exactly six desktop targets")
+    for asset in dev["artifacts"]:
+        require(set(asset) == {"filename", "url", "size", "sha256"}
+                and asset["url"] == f"https://github.com/{manifest['producer']['repository']}/releases/download/v{dev['version']}/{asset['filename']}"
+                and type(asset["size"]) is int and asset["size"] > 0
+                and len(base64.b64decode(asset["sha256"], validate=True)) == 32,
+                "DEV discovery asset identity differs")
 
 
 def gh(*args):
@@ -110,7 +168,7 @@ def producer(root):
                       "producer": read(root / "candidate.json")["producer"]}))
 
 
-def verify(root, sealed=False):
+def verify(root, sealed=False, published_discovery=False):
     manifest = read(root / "candidate.json")
     expected_producer = {"repository": os.environ["GITHUB_REPOSITORY"],
                          "run_id": os.environ.get("INPUT_RUN_ID") or os.environ["GITHUB_RUN_ID"],
@@ -120,7 +178,7 @@ def verify(root, sealed=False):
             and manifest["version"] == os.environ["CANDIDATE_VERSION"]
             and manifest["producer"] == expected_producer and manifest["targets"] == TARGETS,
             "Candidate source/version/producer/six-target binding differs")
-    require(set(manifest["files"]) == FILES, "Candidate must contain exactly nine product assets and release metadata")
+    require(set(manifest["files"]) == IMMUTABLE_FILES, "Immutable file set must exclude the declared discovery index")
     require({p.name for p in root.iterdir()} == FILES | {"candidate.json"}
             | ({"package-checks.json"} if sealed else set()), "Unexpected or missing candidate files")
     for name, info in manifest["files"].items():
@@ -130,6 +188,7 @@ def verify(root, sealed=False):
     require(len(sums) == len(ASSETS) and set(sums) == {
         f"{manifest['files'][name]['sha256']}  {name}" for name in ASSETS}, "Product checksum set differs")
     update = read(root / "client-updates.json")
+    verify_discovery(root, manifest, update, published_discovery)
     release = update["dev" if "-" in manifest["version"] else "stable"]
     expected_updates = [{"filename": names[0],
         "url": f"https://github.com/{expected_producer['repository']}/releases/download/v{manifest['version']}/{names[0]}",
@@ -155,29 +214,119 @@ def check_receipts(root, receipts):
             "Native package receipt is not bound to this candidate/attempt")
 
 
+def create_manifest(root):
+    require(subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
+            == os.environ["CANDIDATE_SOURCE"], "Assembly checkout differs from producer source")
+    require({p.name for p in root.iterdir()} == FILES, "Assembly has unexpected or missing files")
+    write(root / "candidate.json", {"schema_version": 1, "scope": SCOPE,
+        "source": os.environ["CANDIDATE_SOURCE"], "version": os.environ["CANDIDATE_VERSION"],
+        "producer": {"repository": os.environ["GITHUB_REPOSITORY"], "run_id": os.environ["GITHUB_RUN_ID"],
+                     "attempt": int(os.environ["GITHUB_RUN_ATTEMPT"])}, "targets": TARGETS,
+        "discovery_index": discovery_index(root, os.environ["CANDIDATE_VERSION"]),
+        "files": {name: {"sha256": digest(root / name), "size": (root / name).stat().st_size}
+                  for name in sorted(IMMUTABLE_FILES)}})
+    verify(root)
+
+
+def self_check():
+    # Metadata fixtures only: this does not issue native package-check evidence.
+    env = {"GITHUB_REPOSITORY": "risense-ai/respire-client2", "GITHUB_RUN_ID": "1",
+           "GITHUB_RUN_ATTEMPT": "1", "INPUT_RUN_ID": "", "INPUT_ATTEMPT": "",
+           "CANDIDATE_VERSION": "1.0.0", "CANDIDATE_SOURCE":
+           subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()}
+    previous = {key: os.environ.get(key) for key in env}
+    os.environ.update(env)
+    def rejected(callback):
+        try:
+            callback()
+        except ValueError:
+            return
+        raise AssertionError("Metadata mutation was accepted")
+    try:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            for name in IMMUTABLE_FILES - {"SHA256SUMS"}:
+                (root / name).write_bytes(("metadata fixture: " + name).encode())
+            (root / "SHA256SUMS").write_text("".join(
+                f"{digest(root / name)}  {name}\n" for name in sorted(ASSETS)), encoding="utf-8")
+            stable = {"version": "1.0.0", "notes": (root / "release-notes.md").read_text(),
+                "publishedAt": "2026-01-01T00:00:00Z", "artifacts": [{"filename": names[0],
+                "url": f"https://github.com/{env['GITHUB_REPOSITORY']}/releases/download/v1.0.0/{names[0]}",
+                "sha256": base64.b64encode(bytes.fromhex(digest(root / names[0]))).decode(),
+                "size": (root / names[0]).stat().st_size} for names in TARGETS.values()]}
+            write(root / "client-updates.json", {"schemaVersion": 1, "stable": stable, "dev": stable})
+            create_manifest(root)
+            manifest = read(root / "candidate.json")
+            write(root / "package-checks.json", [{"scope": SCOPE, "target": target, "status": "passed",
+                "candidate_sha256": digest(root / "candidate.json"), "producer": manifest["producer"]}
+                for target in TARGETS])
+            verify(root, True)
+            protected = {name: (root / name).read_bytes() for name in
+                         ["candidate.json", "SHA256SUMS", "package-checks.json"]}
+            update = read(root / "client-updates.json")
+            update["dev"]["version"] = "2.0.0-dev.1"
+            for asset in update["dev"]["artifacts"]:
+                asset["url"] = asset["url"].replace("/v1.0.0/", "/v2.0.0-dev.1/")
+            write(root / "client-updates.json", update)
+            rejected(lambda: verify(root, True))  # Promotion still requires initial bytes.
+            verify(root, True, True)  # Existing clients' stable URL can discover DEV.
+            update["stable"]["notes"] += "changed"
+            write(root / "client-updates.json", update)
+            rejected(lambda: verify(root, True, True))
+            update["stable"] = stable
+            missing = update["dev"]["artifacts"].pop()
+            write(root / "client-updates.json", update)
+            rejected(lambda: verify(root, True, True))
+            update["dev"]["artifacts"].append(missing)
+            write(root / "client-updates.json", update)
+            exe = root / "respire-windows-amd64.exe"
+            original_exe = exe.read_bytes()
+            exe.write_bytes(b"changed product")
+            rejected(lambda: verify(root, True, True))
+            exe.write_bytes(original_exe)
+            receipts = read(root / "package-checks.json")
+            receipts[0]["candidate_sha256"] = "0" * 64
+            write(root / "package-checks.json", receipts)
+            rejected(lambda: verify(root, True, True))
+            (root / "package-checks.json").write_bytes(protected["package-checks.json"])
+            verify(root, True, True)
+            require(all((root / name).read_bytes() == content for name, content in protected.items()),
+                    "Discovery verification changed immutable evidence")
+            dev_root = root / "dev-candidate"
+            dev_root.mkdir()
+            for name in IMMUTABLE_FILES:
+                (dev_root / name).write_bytes((root / name).read_bytes())
+            write(dev_root / "client-updates.json", {"schemaVersion": 1, "dev": update["dev"]})
+            os.environ["CANDIDATE_VERSION"] = "2.0.0-dev.1"
+            create_manifest(dev_root)
+            rejected(lambda: verify(dev_root, published_discovery=True))
+    finally:
+        for key, value in previous.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+    print("PASS stable-to-DEV discovery; strict initial bytes, stable record, six targets, products and receipts")
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("action", choices=["inputs", "producer", "manifest", "verify", "receipt", "seal", "tag"])
+    parser.add_argument("action", choices=["inputs", "producer", "manifest", "verify", "receipt", "seal", "tag", "self-check"])
     parser.add_argument("--root", type=Path, default=Path("dist"))
     parser.add_argument("--receipts", type=Path, default=Path("package-checks"))
     parser.add_argument("--target", choices=TARGETS)
     parser.add_argument("--sealed", action="store_true")
+    parser.add_argument("--published-discovery", action="store_true",
+                        help="Inspect a published stable DEV index; never valid for candidate promotion")
     args = parser.parse_args()
+    require(not args.published_discovery or args.action == "verify" and args.sealed,
+            "Published discovery inspection requires verify --sealed")
     if args.action == "inputs":
         inputs()
     elif args.action == "producer":
         producer(args.root)
     elif args.action == "manifest":
-        require(subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
-                == os.environ["CANDIDATE_SOURCE"], "Assembly checkout differs from producer source")
-        require({p.name for p in args.root.iterdir()} == FILES, "Assembly has unexpected or missing files")
-        write(args.root / "candidate.json", {"schema_version": 1, "scope": SCOPE,
-            "source": os.environ["CANDIDATE_SOURCE"], "version": os.environ["CANDIDATE_VERSION"],
-            "producer": {"repository": os.environ["GITHUB_REPOSITORY"], "run_id": os.environ["GITHUB_RUN_ID"],
-                         "attempt": int(os.environ["GITHUB_RUN_ATTEMPT"])}, "targets": TARGETS,
-            "files": {name: {"sha256": digest(args.root / name), "size": (args.root / name).stat().st_size}
-                      for name in sorted(FILES)}})
-        verify(args.root)
+        create_manifest(args.root)
     elif args.action == "receipt":
         manifest = verify(args.root)
         require(args.target, "Native target required")
@@ -205,8 +354,10 @@ def main():
             while obj["type"] == "tag":
                 obj = gh(f"repos/{repo}/git/tags/{obj['sha']}")["object"]
             require(obj["type"] == "commit" and obj["sha"] == source, "Existing release tag points to different source")
+    elif args.action == "self-check":
+        self_check()
     else:
-        verify(args.root, args.sealed)
+        verify(args.root, args.sealed, args.published_discovery)
 
 
 if __name__ == "__main__":
