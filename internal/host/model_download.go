@@ -165,7 +165,7 @@ func (m *Manager) DownloadModel(ctx context.Context, model, variant, mirror stri
 		}
 	} else {
 		if variant == "baseline" {
-			variant = "quantized"
+			variant = definition.Variants[0].Name
 		}
 		spec, specErr := definition.modelFileSpecFor(variant)
 		if specErr != nil {

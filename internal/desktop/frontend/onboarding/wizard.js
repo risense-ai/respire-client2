@@ -25,6 +25,7 @@ import {
   MODEL_CARDS,
   MODEL_OPTIONS,
   DEVICE_VARIANTS,
+  graniteVariant,
   DEVICES,
   engineAvailable,
   fetchInventory,
@@ -530,6 +531,7 @@ export function createWizard(ctx) {
       choice.addEventListener("click", () => {
         if (state.model !== choice.dataset.choice) {
           state.model = choice.dataset.choice;
+          if (graniteVariant(state.model)) state.device = "cpu";
           state.variantTouched = false;
           state.variant = "";
         }
@@ -573,6 +575,7 @@ export function createWizard(ctx) {
       `<div class="wizard-choices">${DEVICES.map((device) =>
         card(device.title, device.detail, device.id, {
           disabled:
+            (Boolean(graniteVariant(state.model)) && device.id !== "cpu") ||
             (device.id === "gpu" && !gpuEntry) ||
             (device.id === "npu" && !npuEntry),
           badge: device.id === "cpu" ? "默认" : "",
@@ -616,7 +619,7 @@ export function createWizard(ctx) {
     }
     if (!root.isConnected || state.step !== "device") return;
     if (!state.variantTouched || !state.variant)
-      state.variant = DEVICE_VARIANTS[state.device] || "quantized";
+      state.variant = graniteVariant(state.model) || DEVICE_VARIANTS[state.device] || "quantized";
     const weights = $("[data-weights]", body);
     if (weights) {
       const options = inventory.variants
@@ -781,7 +784,7 @@ export function createWizard(ctx) {
     // run; derive the device default so the download never uses a blank
     // variant name.
     if (!state.variant)
-      state.variant = DEVICE_VARIANTS[state.device] || "quantized";
+      state.variant = graniteVariant(state.model) || DEVICE_VARIANTS[state.device] || "quantized";
     executeActions([]);
     try {
       if (startStage === "download") {

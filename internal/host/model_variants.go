@@ -97,7 +97,7 @@ func modelFilesPresent(dir string) bool {
 func installedVariantsFor(definition modelDefinition, dir string) map[string]int64 {
 	present := map[string]int64{}
 	for _, variant := range definition.Variants {
-		if info, err := os.Stat(filepath.Join(dir, variantFileName(variant.Name))); err == nil && info.Size() == variant.Size {
+		if info, err := os.Stat(filepath.Join(dir, definition.weightPath(variant.Name))); err == nil && info.Size() == variant.Size {
 			present[variant.Name] = info.Size()
 		}
 	}
@@ -133,7 +133,7 @@ func (m *Manager) ModelVariants(ctx context.Context, model string) (map[string]a
 		entry := map[string]any{
 			"name":      variant.Name,
 			"size":      variant.Size,
-			"path":      filepath.Join(dir, variantFileName(variant.Name)),
+			"path":      filepath.Join(dir, definition.weightPath(variant.Name)),
 			"bytes":     0,
 			"installed": false,
 		}
