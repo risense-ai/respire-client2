@@ -70,7 +70,7 @@ jobs:
         with:
           node-version: '22'
       - name: Linux build libraries
-        run: sudo apt-get update -qq && sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev libx11-dev fontconfig
+        run: sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends libgtk-3-dev libwebkit2gtk-4.1-dev libx11-dev fontconfig
       - name: Vet, frontend check, test
         run: |
           go vet -tags production,gtk3 ./...
@@ -107,7 +107,7 @@ jobs:
           cache: true
       - name: Linux build libraries
         if: matrix.os == 'linux'
-        run: sudo apt-get update -qq && sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev libx11-dev fontconfig
+        run: sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends libgtk-3-dev libwebkit2gtk-4.1-dev libx11-dev fontconfig
       - name: Build Windows
         if: matrix.os == 'windows'
         shell: pwsh
