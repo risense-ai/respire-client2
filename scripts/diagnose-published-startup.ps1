@@ -262,6 +262,12 @@ try {
     $report.status = 'diagnostic-passed'
 } catch {
     $report.failure_phase = $report.phase
+    # Preserve the first error without retaining exception text, response bodies or keys.
+    $report.failure_exception_type = $_.Exception.GetType().FullName
+    $report.failure_inner_exception_type = if ($_.Exception.InnerException) { $_.Exception.InnerException.GetType().FullName } else { $null }
+    $report.failure_script_line = $_.InvocationInfo.ScriptLineNumber
+    $report.failure_command = $_.InvocationInfo.MyCommand.Name
+    $report.failure_http_status = if ($_.Exception.Response) { [int]$_.Exception.Response.StatusCode } else { $null }
     $fixedFailures = @{
         'Runtime actor identity differs'='runtime_actor_identity_mismatch'
         'Initial key handoff differs'='initial_key_handoff_failed'
