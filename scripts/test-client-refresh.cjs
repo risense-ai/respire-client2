@@ -132,5 +132,77 @@ async function test(name, fn) { await fn(); console.log(`PASS ${++count}: ${name
     release(); await pending; stateWait = null;
     assert.deepEqual(events, ['state', 'appearance', 'runtime-status', 'view.update', 'nav']);
   });
+  await test('core configuration notices require the original applied receipt', async () => {
+    const models = read('pages/models.js');
+    const start = models.indexOf('  function fusionApplicationNotice(');
+    const notice = new Function(models.slice(start, models.indexOf('\n  // Polling', start)) + '\nreturn fusionApplicationNotice;')();
+    for (const state of [undefined, null, {state:'unknown'}, {state:'applied'}, {state:'pending'}]) {
+      const value = notice(state);
+      assert.equal(value.warning, true);
+      assert.doesNotMatch(value.text, /已保存|核心已应用/);
+    }
+    assert.match(notice({state:'pending', reason:'runtime_not_running'}).text, /核心待应用/);
+    assert.equal(notice({state:'applied', applies:'next_query', revision:2,
+      scope:{account_id:'synthetic', instance_id:'original', generation:1}, effective:{recall_fusion:{}}}).warning, false);
+  });
+  await test('core configuration Unknown queries the original desktop request without another setter', async () => {
+    const models = read('pages/models.js');
+    const start = models.indexOf('  // Keep an uncertain operation');
+    const listeners = {}, calls = [], notices = [];
+    const fusion = {runtime:{effective:{}}, requestId:null};
+    let pending, queriedState = 'unconfirmed';
+    const save = {disabled:false};
+    const nodes = {};
+    const $ = selector => selector === '[type=submit]' ? save : (nodes[selector] ||= {
+      addEventListener:(_, callback) => {listeners[selector] = callback;},
+    });
+    const renderStart = models.indexOf('  function renderFusion()');
+    const renderFusion = new Function('$', 'root', 'fusion', 'FUSION_NUMERIC',
+      models.slice(renderStart, models.indexOf('  // Collect + validate', renderStart)) + '\nreturn renderFusion;')($, {}, fusion, []);
+    const coreSource = read('ui/core.js');
+    const productionAction = new Function('notify', coreSource.slice(coreSource.indexOf('export async function action('),
+      coreSource.indexOf('export function panel(')).replace(/^export /gm, '') + '\nreturn action;')(
+      (...args) => notices.push(args));
+    const bindings = {root:{}, fusion, summary:envelope => envelope.summary,
+      $, action:(button, fn) => (pending = productionAction(button, fn)),
+      fusionDraft:() => ({fusion:'legacy'}), renderFusion,
+      notify:(...args) => notices.push(args),
+      async execute(name) {
+        calls.push(name);
+        const error = Error('unknown'); error.requestId = 'desktop-original';
+        error.operation = {state:'unconfirmed'}; throw error;
+      },
+      async api(name, args) {
+        calls.push([name, args]);
+        return {state:queriedState, envelope:{summary:{core_application:{state:'applied'}}}};
+      },
+      fusionApplicationNotice:() => ({text:'original receipt', warning:false}),
+    };
+    new Function(...Object.keys(bindings), models.slice(start, models.indexOf('  // Restoring defaults', start)))(...Object.values(bindings));
+    const submit = {preventDefault() {}, target:{}};
+    const saving = listeners['[data-fusion-form]'](submit);
+    assert.equal(save.disabled, true);
+    const duplicate = listeners['[data-fusion-form]'](submit);
+    assert.equal(save.disabled, true);
+    await duplicate;
+    await saving;
+    await pending;
+    assert.equal(fusion.requestId, 'desktop-original');
+    assert.equal(save.disabled, true);
+    await listeners['[data-fusion-form]'](submit);
+    assert.equal(save.disabled, true);
+    save.disabled = false; // Even a direct submission cannot bypass the original-request guard.
+    await listeners['[data-fusion-form]'](submit);
+    assert.equal(save.disabled, true);
+    assert.match(notices.at(-1)[0], /查询原请求/);
+    listeners['[data-fusion-query]']({currentTarget:{}}); await pending;
+    assert.equal(fusion.requestId, 'desktop-original');
+    assert.equal(save.disabled, true);
+    queriedState = 'done';
+    listeners['[data-fusion-query]']({currentTarget:{}}); await pending;
+    assert.equal(fusion.requestId, null);
+    assert.equal(save.disabled, false);
+    assert.deepEqual(calls, ['agent_set', ['operation-recover', {id:'desktop-original'}], ['operation-recover', {id:'desktop-original'}]]);
+  });
   console.log(`${count} focused refresh tests passed; browser/native UIA not exercised.`);
 })().catch(error => { console.error(error); process.exitCode = 1; });

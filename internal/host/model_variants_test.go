@@ -1,9 +1,16 @@
 package host
 
 import (
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
+	"errors"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 )
 
@@ -48,6 +55,113 @@ func TestInstalledVariants(t *testing.T) {
 	}
 	if _, ok := present[full.Name]; !ok {
 		t.Fatalf("%q missing from %v", full.Name, present)
+	}
+}
+
+func TestModelDownloadDiscardsCorruptChunks(t *testing.T) {
+	good := []byte("known-good-model")
+	bad := append([]byte(nil), good...)
+	bad[0] ^= 0xff
+	checksum := sha256.Sum256(good)
+	spec := modelFileSpec{rel: "model.bin", size: int64(len(good)), sha256: hex.EncodeToString(checksum[:])}
+	var requests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		payload := good
+		if requests.Add(1) == 1 {
+			payload = bad
+		}
+		w.WriteHeader(http.StatusPartialContent)
+		if _, err := w.Write(payload); err != nil {
+			t.Errorf("write response: %v", err)
+		}
+	}))
+	defer server.Close()
+	manager := &Manager{modelHTTPClient: server.Client()}
+	dest := filepath.Join(t.TempDir(), "model.bin")
+	original := []byte("previous-incomplete-model")
+	if err := os.WriteFile(dest, original, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.downloadModelFrom(context.Background(), server.URL, dest, spec); err == nil {
+		t.Fatal("corrupted download must fail verification")
+	}
+	if data, err := os.ReadFile(dest); err != nil || string(data) != string(original) {
+		t.Fatalf("existing model was changed on verification failure: %v", err)
+	}
+	for _, path := range []string{dest + ".download", dest + ".download.p0"} {
+		if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("corrupt download remains at %s: %v", path, err)
+		}
+	}
+	if err := manager.downloadModelFrom(context.Background(), server.URL, dest, spec); err != nil {
+		t.Fatalf("download after corruption: %v", err)
+	}
+	if !modelFileValid(dest, spec) || requests.Load() != 2 {
+		t.Fatalf("expected a valid replacement from a fresh request, got %d requests", requests.Load())
+	}
+}
+
+func TestModelDownloadResumesIncompleteChunk(t *testing.T) {
+	good := []byte("known-good-model")
+	checksum := sha256.Sum256(good)
+	spec := modelFileSpec{rel: "model.bin", size: int64(len(good)), sha256: hex.EncodeToString(checksum[:])}
+	dest := filepath.Join(t.TempDir(), "model.bin")
+	if err := os.WriteFile(dest+".download.p0", good[:5], 0600); err != nil {
+		t.Fatal(err)
+	}
+	ranges := make(chan string, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ranges <- r.Header.Get("Range")
+		w.WriteHeader(http.StatusPartialContent)
+		if _, err := w.Write(good[5:]); err != nil {
+			t.Errorf("write response: %v", err)
+		}
+	}))
+	defer server.Close()
+	manager := &Manager{modelHTTPClient: server.Client()}
+	if err := manager.downloadModelFrom(context.Background(), server.URL, dest, spec); err != nil {
+		t.Fatalf("resume download: %v", err)
+	}
+	if got := <-ranges; got != "bytes=5-15" {
+		t.Fatalf("resume requested %q", got)
+	}
+	if !modelFileValid(dest, spec) {
+		t.Fatal("resumed download failed verification")
+	}
+}
+
+func TestDownloadModelSucceedsAfterOriginError(t *testing.T) {
+	good := []byte("known-good-model")
+	checksum := sha256.Sum256(good)
+	spec := modelFileSpec{rel: "model.bin", size: int64(len(good)), sha256: hex.EncodeToString(checksum[:])}
+	var firstRequests, secondRequests atomic.Int32
+	first := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		firstRequests.Add(1)
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer first.Close()
+	second := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		secondRequests.Add(1)
+		w.WriteHeader(http.StatusPartialContent)
+		if _, err := w.Write(good); err != nil {
+			t.Errorf("write response: %v", err)
+		}
+	}))
+	defer second.Close()
+	originalMirrors := modelMirrors
+	originalSpec := modelFileSpecs["quantized"]
+	t.Cleanup(func() {
+		modelMirrors = originalMirrors
+		modelFileSpecs["quantized"] = originalSpec
+	})
+	modelMirrors = []string{first.URL, second.URL}
+	modelFileSpecs["quantized"] = spec
+	manager := &Manager{DataRoot: t.TempDir(), modelHTTPClient: second.Client()}
+	if err := manager.DownloadModel(context.Background(), "m3", "quantized", "auto"); err != nil {
+		t.Fatalf("download from the second origin: %v", err)
+	}
+	if firstRequests.Load() == 0 || secondRequests.Load() != 1 || !modelFileValid(filepath.Join(manager.ModelDir(), spec.rel), spec) {
+		t.Fatalf("unexpected requests: first=%d second=%d", firstRequests.Load(), secondRequests.Load())
 	}
 }
 

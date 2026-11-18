@@ -14,31 +14,47 @@ import (
 )
 
 type Operation struct {
-	ID          string          `json:"id"`
-	Name        string          `json:"name"`
-	State       string          `json:"state"`
-	Started     time.Time       `json:"started"`
-	Finished    *time.Time      `json:"finished,omitempty"`
-	Error       string          `json:"error,omitempty"`
-	Envelope    json.RawMessage `json:"envelope,omitempty"`
-	write, host bool
+	ID              string            `json:"id"`
+	Name            string            `json:"name"`
+	State           string            `json:"state"`
+	Started         time.Time         `json:"started"`
+	Finished        *time.Time        `json:"finished,omitempty"`
+	Error           string            `json:"error,omitempty"`
+	Envelope        json.RawMessage   `json:"envelope,omitempty"`
+	Scope           *runtimeScope     `json:"scope,omitempty"`
+	RuntimeID       string            `json:"runtimeOperationId,omitempty"`
+	Transaction     *hostTransaction  `json:"transaction,omitempty"`
+	Input           *hostInputRequest `json:"input,omitempty"`
+	TransportID     string            `json:"transportId,omitempty"`
+	MaterialSaved   bool              `json:"materialSaved,omitempty"`
+	MaterialPending bool              `json:"materialPending,omitempty"`
+	write, host     bool
+	inputBlocked    bool
 }
 
 type operationRecord struct {
-	ID      string    `json:"id"`
-	Name    string    `json:"name"`
-	Started time.Time `json:"started"`
-	State   string    `json:"state"`
-	Host    bool      `json:"host"`
+	ID            string           `json:"id"`
+	Name          string           `json:"name"`
+	Started       time.Time        `json:"started"`
+	State         string           `json:"state"`
+	Host          bool             `json:"host"`
+	Scope         *runtimeScope    `json:"scope,omitempty"`
+	RuntimeID     string           `json:"runtimeOperationId,omitempty"`
+	Transaction   *hostTransaction `json:"transaction,omitempty"`
+	TransportID   string           `json:"transportId,omitempty"`
+	MaterialSaved bool             `json:"materialSaved,omitempty"`
 }
 
 type rpcResponse struct {
-	V        int             `json:"v"`
-	ID       string          `json:"id"`
-	OK       bool            `json:"ok"`
-	Error    string          `json:"error"`
-	Code     string          `json:"code"`
-	Envelope json.RawMessage `json:"envelope"`
+	V           int             `json:"v"`
+	ID          string          `json:"id"`
+	OK          bool            `json:"ok"`
+	Exit        int             `json:"exit"`
+	Error       string          `json:"error"`
+	Code        string          `json:"code"`
+	Envelope    json.RawMessage `json:"envelope"`
+	Scope       *runtimeScope   `json:"scope,omitempty"`
+	OperationID string          `json:"operation_id,omitempty"`
 }
 
 var operationID = regexp.MustCompile(`^desktop-[0-9a-f-]{36}$`)
@@ -64,7 +80,7 @@ func (m *Manager) loadOperations() error {
 		if state == "running" {
 			state = "unconfirmed"
 		}
-		m.jobs[r.ID] = &Operation{ID: r.ID, Name: r.Name, Started: r.Started, State: state, host: r.Host, write: true}
+		m.jobs[r.ID] = &Operation{ID: r.ID, Name: r.Name, Started: r.Started, State: state, host: r.Host, write: true, Scope: r.Scope, RuntimeID: r.RuntimeID, Transaction: r.Transaction, TransportID: r.TransportID, MaterialSaved: r.MaterialSaved}
 	}
 	return nil
 }
@@ -73,7 +89,7 @@ func (m *Manager) persistOperationsLocked() error {
 	var records []operationRecord
 	for _, j := range m.jobs {
 		if j.write {
-			records = append(records, operationRecord{j.ID, j.Name, j.Started, j.State, j.host})
+			records = append(records, operationRecord{ID: j.ID, Name: j.Name, Started: j.Started, State: j.State, Host: j.host, Scope: j.Scope, RuntimeID: j.RuntimeID, Transaction: j.Transaction, TransportID: j.TransportID, MaterialSaved: j.MaterialSaved})
 		}
 	}
 	sort.Slice(records, func(i, j int) bool { return records[i].Started.After(records[j].Started) })
@@ -86,6 +102,8 @@ func (m *Manager) Operations() []Operation {
 	list := make([]Operation, 0, len(m.jobs))
 	for _, j := range m.jobs {
 		copy := *j
+		copy.Input = pendingHostInput(copy)
+		copy.MaterialPending = copy.materialPending()
 		copy.Envelope = nil
 		list = append(list, copy)
 	}
@@ -100,7 +118,10 @@ func (m *Manager) Operation(id string) (Operation, error) {
 	if !ok {
 		return Operation{}, errors.New("操作记录不存在")
 	}
-	return *job, nil
+	copy := *job
+	copy.Input = pendingHostInput(copy)
+	copy.MaterialPending = copy.materialPending()
+	return copy, nil
 }
 
 func (m *Manager) HasActiveOperations() bool {
@@ -131,7 +152,35 @@ func (m *Manager) Acknowledge(id string) error {
 }
 
 func (m *Manager) RuntimeStatus(ctx context.Context) (json.RawMessage, error) {
-	return m.executeRPC(ctx, "cli.exec", []string{"--json", "status"}, "status-"+fmt.Sprint(time.Now().UnixNano()))
+	scope, err := m.requestScope(ctx)
+	if err != nil {
+		return nil, err
+	}
+	id := "status-" + fmt.Sprint(time.Now().UnixNano())
+	reply, err := m.rpcResponse(ctx, "cli.exec", []string{"--json", "status"}, id, scope)
+	if err != nil {
+		return m.inspectResult(ctx, id, scope, err)
+	}
+	if reply.Scope == nil || *reply.Scope != *scope || reply.OperationID != id {
+		return nil, &unconfirmedError{id, errors.New("Runtime 业务回复作用域或操作 ID 与原请求不匹配，请查询原请求")}
+	}
+	var status struct {
+		Command string `json:"command"`
+		Status  string `json:"status"`
+		Summary struct {
+			CredentialState string `json:"credential_state"`
+			StoreReady      *bool  `json:"store_ready"`
+		} `json:"summary"`
+		Errors []string `json:"errors"`
+	}
+	// A locked store is a valid read-only status, but other RPC warnings still fail.
+	if !reply.OK && reply.Exit == 2 && reply.Code == "" && reply.Error == "" &&
+		json.Unmarshal(reply.Envelope, &status) == nil && status.Command == "status" &&
+		status.Status == "warn" && status.Summary.CredentialState == "required" &&
+		status.Summary.StoreReady != nil && !*status.Summary.StoreReady && len(status.Errors) == 0 {
+		return reply.Envelope, nil
+	}
+	return reply.Envelope, responseError(reply)
 }
 
 func (m *Manager) Submit(name, id string, raw json.RawMessage, confirmed bool, secret string) (Operation, error) {
@@ -151,6 +200,21 @@ func (m *Manager) Submit(name, id string, raw json.RawMessage, confirmed bool, s
 	argv, err := spec.build(raw)
 	if err != nil {
 		return Operation{}, err
+	}
+	if name == "agent_set" {
+		var input struct {
+			Setting string `json:"setting"`
+		}
+		if err := json.Unmarshal(raw, &input); err != nil {
+			return Operation{}, err
+		}
+		key, _, _ := strings.Cut(input.Setting, "=")
+		if key = strings.TrimSpace(key); key == "read_heat" || key == "recall_fusion" {
+			if !hostOperationID.MatchString(strings.TrimPrefix(id, "desktop-")) {
+				return Operation{}, errors.New("核心配置需要有效 UUID")
+			}
+			spec.method = "core_config.set"
+		}
 	}
 	if name == "model_progress" {
 		argv = append(argv, "false")
@@ -181,7 +245,7 @@ func (m *Manager) Submit(name, id string, raw json.RawMessage, confirmed bool, s
 	for key, j := range m.jobs {
 		if j.State == "running" {
 			active++
-		} else if j.State != "unconfirmed" && (oldest == nil || j.Started.Before(oldest.Started)) {
+		} else if j.State != "unconfirmed" && !j.materialPending() && (oldest == nil || j.Started.Before(oldest.Started)) {
 			oldest = m.jobs[key]
 		}
 	}
@@ -197,6 +261,10 @@ func (m *Manager) Submit(name, id string, raw json.RawMessage, confirmed bool, s
 		delete(m.jobs, oldest.ID)
 	}
 	job := &Operation{ID: id, Name: name, State: "running", Started: time.Now().UTC(), host: spec.host, write: spec.write}
+	if spec.method == "core_config.set" {
+		operation := strings.TrimPrefix(id, "desktop-")
+		job.Transaction = &hostTransaction{OperationID: operation, Kind: "core_config", RequestBound: true}
+	}
 	m.jobs[id] = job
 	if job.write {
 		if err = m.persistOperationsLocked(); err != nil {
@@ -212,8 +280,14 @@ func (m *Manager) Submit(name, id string, raw json.RawMessage, confirmed bool, s
 }
 
 func (m *Manager) runOperation(spec commandSpec, args []string, secret, id string) {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
+	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	// Account operations wait for human authorization without a wall-clock deadline.
+	if !strings.HasPrefix(spec.method, "auth.") {
+		timedCtx, timedCancel := context.WithTimeout(ctx, 30*time.Minute)
+		defer timedCancel()
+		ctx = timedCtx
+	}
 	var envelope json.RawMessage
 	var err error
 	switch {
@@ -232,6 +306,31 @@ func (m *Manager) runOperation(spec commandSpec, args []string, secret, id strin
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	job := m.jobs[id]
+	if spec.host {
+		returned := transactionFromEnvelope(job.Name, envelope)
+		if job.Transaction != nil && job.Transaction.RequestBound {
+			if returned == nil && (len(envelope) > 0 || err == nil) {
+				var rejection struct {
+					Status  string `json:"status"`
+					Summary struct {
+						Reason string `json:"reason"`
+					} `json:"summary"`
+				}
+				if json.Unmarshal(envelope, &rejection) != nil || rejection.Status != "fail" || rejection.Summary.Reason != "invalid_input" {
+					err = &unconfirmedError{id, errors.Join(err, errors.New("核心配置回执缺少原事务身份"))}
+				}
+			} else if returned != nil {
+				if !job.Transaction.acceptsCoreResult(returned) {
+					err = &unconfirmedError{id, errors.New("核心配置回执与预绑定请求不匹配")}
+				} else {
+					returned.RequestBound = true
+					job.Transaction = returned
+				}
+			}
+		} else {
+			job.Transaction = returned
+		}
+	}
 	finished := time.Now().UTC()
 	job.Finished = &finished
 	job.Envelope = envelope
@@ -273,6 +372,9 @@ func envelopeError(raw json.RawMessage) error {
 	if result.Status == "" {
 		return errors.New("Runtime 未返回有效状态")
 	}
+	if result.Status == "pending" {
+		return &unconfirmedError{cause: errors.New("操作仍在执行，请查询原请求，未自动重放")}
+	}
 	if result.Status == "fail" {
 		if len(result.Errors) > 0 {
 			return errors.New(result.Errors[0])
@@ -282,8 +384,8 @@ func envelopeError(raw json.RawMessage) error {
 	return nil
 }
 
-func (m *Manager) rpcResponse(ctx context.Context, method string, args []string, id string) (rpcResponse, error) {
-	raw, err := m.localRequest(ctx, "POST", "/api/rpc", map[string]any{"v": 1, "id": id, "method": method, "args": args})
+func (m *Manager) rpcResponse(ctx context.Context, method string, args []string, id string, scope *runtimeScope) (rpcResponse, error) {
+	raw, err := m.localRequest(ctx, "POST", "/api/rpc", map[string]any{"v": 1, "id": id, "method": method, "args": args, "scope": scope})
 	var reply rpcResponse
 	if err != nil {
 		return reply, err
@@ -298,26 +400,64 @@ func (m *Manager) rpcResponse(ctx context.Context, method string, args []string,
 }
 
 func (m *Manager) executeRPC(ctx context.Context, method string, args []string, id string) (json.RawMessage, error) {
-	if _, _, err := m.Health(ctx); err != nil {
+	scope, err := m.requestScope(ctx)
+	if err != nil {
 		return nil, err
 	}
-	reply, err := m.rpcResponse(ctx, method, args, id)
-	if err != nil {
-		return m.inspectResult(ctx, id, err)
-	}
-	if !reply.OK {
-		if reply.Error != "" {
-			return reply.Envelope, errors.New(reply.Error)
-		}
-	}
-	return reply.Envelope, envelopeError(reply.Envelope)
+	return m.executeRPCScoped(ctx, method, args, id, scope)
 }
 
-func (m *Manager) inspectResult(ctx context.Context, id string, original error) (json.RawMessage, error) {
+func (m *Manager) executeRPCScoped(ctx context.Context, method string, args []string, id string, scope *runtimeScope) (json.RawMessage, error) {
+	parent, _, _ := strings.Cut(id, "/")
+	m.mu.Lock()
+	if job := m.jobs[parent]; job != nil {
+		job.Scope, job.RuntimeID = scope, id
+		if job.write {
+			if err := m.persistOperationsLocked(); err != nil {
+				m.mu.Unlock()
+				return nil, err
+			}
+		}
+	}
+	m.mu.Unlock()
+	reply, err := m.rpcResponse(ctx, method, args, id, scope)
+	if err != nil {
+		return m.inspectResult(ctx, id, scope, err)
+	}
+	switch method {
+	case "runtime.status", "assets.status", "model.catalog", "model.progress", "cli.progress", "runtime.result":
+	default:
+		if reply.Scope == nil || *reply.Scope != *scope || reply.OperationID != id {
+			return nil, &unconfirmedError{id, errors.New("Runtime 业务回复作用域或操作 ID 与原请求不匹配，请查询原请求")}
+		}
+	}
+	return reply.Envelope, responseError(reply)
+}
+
+func responseError(reply rpcResponse) error {
+	if !reply.OK && reply.Error != "" {
+		return errors.New(reply.Error)
+	}
+	if err := envelopeError(reply.Envelope); err != nil {
+		return err
+	}
+	if !reply.OK {
+		return errors.New("Runtime 拒绝请求")
+	}
+	return nil
+}
+
+func (m *Manager) inspectResult(ctx context.Context, id string, scope *runtimeScope, original error) (json.RawMessage, error) {
+	if scope == nil || scope.AccountID == "" || scope.InstanceID == "" || scope.Generation == 0 {
+		return nil, &unconfirmedError{id, errors.New("原请求未保留完整作用域，不能使用当前身份替代查询")}
+	}
 	for {
-		reply, err := m.rpcResponse(ctx, "runtime.result", []string{id}, "inspect-"+id)
+		reply, err := m.rpcResponse(ctx, "runtime.result", []string{id}, "inspect-"+id, scope)
 		if err != nil {
 			return nil, &unconfirmedError{id, errors.Join(original, err)}
+		}
+		if err = responseError(reply); err != nil {
+			return reply.Envelope, &unconfirmedError{id, err}
 		}
 		var envelope struct {
 			Summary struct {
@@ -329,17 +469,12 @@ func (m *Manager) inspectResult(ctx context.Context, id string, original error) 
 			return nil, &unconfirmedError{id, err}
 		}
 		switch envelope.Summary.State {
-		case "completed":
+		case "completed", "failed":
 			result := envelope.Summary.Response
-			if result == nil || result.ID != id {
+			if result == nil || result.V != 1 || result.ID != id || result.Scope == nil || *result.Scope != *scope || result.OperationID != id || (envelope.Summary.State == "completed") != result.OK {
 				return nil, &unconfirmedError{id, errors.New("Runtime 缓存回执无效")}
 			}
-			if !result.OK {
-				if result.Error != "" {
-					return result.Envelope, errors.New(result.Error)
-				}
-			}
-			return result.Envelope, envelopeError(result.Envelope)
+			return result.Envelope, responseError(*result)
 		case "pending":
 			select {
 			case <-ctx.Done():
@@ -354,35 +489,75 @@ func (m *Manager) inspectResult(ctx context.Context, id string, original error) 
 
 // Recover inspects a saved request; it never submits its command again.
 func (m *Manager) Recover(id string) (Operation, error) {
-	job, err := m.Operation(id)
-	if err != nil {
-		return job, err
+	m.mu.Lock()
+	original := m.jobs[id]
+	if original == nil {
+		m.mu.Unlock()
+		return Operation{}, errors.New("操作记录不存在")
 	}
-	if job.State != "unconfirmed" {
+	job := *original
+	if job.State != "unconfirmed" && !job.materialPending() {
+		m.mu.Unlock()
 		return job, nil
 	}
-	if job.host {
-		return job, errors.New("宿主操作不能通过 Runtime 查询，请刷新对应页面确认当前状态")
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	original.State = "running"
+	original.inputBlocked = true
+	m.mu.Unlock()
+	var err error
+	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	envelope, err := m.inspectResult(ctx, id, errors.New("客户端上次退出时操作尚未结束"))
+	// Host result queries can drain and restore Runtime and verify native custody.
+	// Like account submissions, let the CLI own their lifecycle deadlines.
+	if !job.host {
+		timedCtx, timedCancel := context.WithTimeout(ctx, 30*time.Second)
+		defer timedCancel()
+		ctx = timedCtx
+	}
+	var envelope json.RawMessage
+	if job.host {
+		envelope, err = m.recoverHost(ctx, job)
+	} else {
+		runtimeID := job.RuntimeID
+		if runtimeID == "" {
+			runtimeID = id
+		}
+		envelope, err = m.inspectResult(ctx, runtimeID, job.Scope, errors.New("客户端上次退出时操作尚未结束"))
+		if err == nil && job.Name == "model_engine_apply" {
+			err = &unconfirmedError{id, errors.New("原模型步骤已完成；整项应用还需核对模型当前状态，未自动继续或恢复其他步骤")}
+		}
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	j := m.jobs[id]
-	j.Envelope = envelope
+	if len(envelope) > 0 {
+		if j.Transaction != nil && j.Transaction.RequestBound {
+			returned := transactionFromEnvelope(j.Name, envelope)
+			if j.Transaction.acceptsCoreResult(returned) {
+				returned.RequestBound = true
+				j.Transaction = returned
+			}
+		}
+		j.Envelope = envelope
+		j.inputBlocked = false
+	}
 	if err == nil {
 		j.State = "done"
 		j.Error = ""
 	} else {
 		j.Error = err.Error()
 		var unknown *unconfirmedError
-		if !errors.As(err, &unknown) {
+		if errors.As(err, &unknown) {
+			unknown.id = id
+			j.State, j.Error = "unconfirmed", err.Error()
+		} else {
 			j.State = "failed"
 		}
 	}
 	if err = m.persistOperationsLocked(); err != nil {
 		return *j, err
 	}
-	return *j, nil
+	copy := *j
+	copy.Input = pendingHostInput(copy)
+	copy.MaterialPending = copy.materialPending()
+	return copy, nil
 }

@@ -1,14 +1,42 @@
 # Required CLI authentication transport
 
+Configuration, credentials and process ownership follow
+[component boundaries](component-boundaries.md). Host configuration reads,
+including `agent-config`, must not be sent to Runtime business RPC.
+
+For the pure Runtime DEV23 target, see [DEV13 preparation](dev13-release.md).
+The transport remains version 1. CLI host continuation support must advertise
+`auth.login.continue` and `auth.key.continue` under
+`summary.capabilities.host_rpc.methods`. Pending receipts are not successful
+completion; supplemental inputs always target the original transaction.
+
 The legacy desktop passes passwords/recovery values through CLI process arguments. This client uses bounded standard-input host RPC for registration, password login, key recovery and super-password reset. Classification keys also use redirected standard input. Credentials do not need to appear in process arguments.
 
 ## Implemented transport and compatibility
 
 CLI PR [#170](https://github.com/risense-ai/respire-cli/pull/170) implements host-only `--host-rpc-stdio`. It reads a bounded JSON request from stdin, validates fixed methods and credential fields, then dispatches existing host authentication/profile transactions. Ordinary HTTP `cli.exec` retains its host-only gate: an account commit can restart that memory Runtime, so the host transport owns the request and final receipt.
 
-Use CLI Stable `1.0.18` or a compatible published package advertising host RPC version 1. The transport first appeared in `1.0.18-dev.1`; verify availability in the official CLI release list rather than inferring it from the client version. Stable/Dev selection does not silently change to enable an account operation.
+The original transport first appeared in `1.0.18-dev.1`. This historical fact does
+not make that CLI compatible with the current Runtime23 stack: use the current
+CLI and verify its required host continuation capabilities. Check the official
+release rather than inferring compatibility from equal version numbers.
+Stable/Dev selection does not silently change to enable an account operation.
 
-Methods are `auth.register`, `auth.login` (including TOTP), `auth.recover` and `auth.reset`. The request is `{v:1,id,method,params}`; a reply contains `{v:1,id,ok,exit,envelope}`. Input is limited to 64 KiB and fields to 16 KiB. Unknown fields, malformed/trailing JSON and client-only invocation are rejected. CLI capabilities advertise transport version 1. The client reports an explicit upgrade error for older packages and never automatically replays authentication after an unknown outcome.
+Initial methods are `auth.register`, `auth.login` (including TOTP), `auth.recover` and `auth.reset`. The request is `{v:1,id,method,params}`; a reply contains `{v:1,id,ok,exit,envelope}`. Input is limited to 64 KiB and fields to 16 KiB. Unknown fields, malformed/trailing JSON and client-only invocation are rejected. CLI capabilities advertise transport version 1. The client reports an explicit upgrade error for older packages and never automatically replays authentication after an unknown outcome.
+
+Browser authorization uses the separately advertised `auth.login.browser`
+method. Its string-map params accept only optional `addr` (or `{}`). CLI owns
+OAuth and private custody while returning the structured original account
+receipt. Desktop OAuth tokens, authorization objects and credentials are rejected.
+
+Continuation methods use typed JSON params rather than the original four
+methods' string map. Login params are `{operation_id,source_profile,continuation,
+super_password?,totp?}`; key params are `{operation_id,source_profile,input}`.
+The original host operation ID and source profile are fixed. A new outer request
+ID identifies each transport submission. CLI restores original login intent and
+private custody; the desktop cannot provide `material`, `challenge`,
+`custody_ack` or migration-intent replacements. Only `awaiting_input` can accept
+supplemental inputs. Other states are queried and displayed as returned.
 
 The client will pass only the host-entry flag on the command line. Credentials remain in stdin/process memory; they must not enter desktop preferences, request journals, logs or release assets. Returned recovery material is displayed explicitly for the user to save. Authentication failures must not echo submitted credentials.
 

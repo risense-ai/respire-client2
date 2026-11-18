@@ -72,6 +72,11 @@ export async function execute(
     error.requestId = id;
     throw error;
   }
+  return waitForOperation(job, onProgress);
+}
+
+export async function waitForOperation(job, onProgress) {
+  const { id, name } = job;
   pending.set(id, name);
   try {
     let rounds = 0;
@@ -87,9 +92,12 @@ export async function execute(
       );
       error.requestId = id;
       error.envelope = job.envelope;
+      error.operation = job;
       throw error;
     }
-    return job.envelope;
+    return job.materialPending
+      ? { ...job.envelope, recoveryRequestId: id }
+      : job.envelope;
   } catch (error) {
     if (job.state === "running") {
       error.message = `请求 ${id} 的回执读取失败，结果尚未确认。请到操作记录查询原请求，不要重复提交。${error.message}`;

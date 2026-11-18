@@ -7,13 +7,10 @@ package host
 // revisions so activation can verify resources without re-downloading.
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
-	"net/http"
 	"path/filepath"
 	"time"
 )
@@ -185,21 +182,7 @@ func (m *Manager) runtimeRPC(ctx context.Context, method string, args []string) 
 		"method": method,
 		"args":   args,
 	}
-	encoded, err := json.Marshal(body)
-	if err != nil {
-		return nil, err
-	}
-	req, err := http.NewRequestWithContext(ctx, "POST", m.Endpoint+"/api/rpc", bytes.NewReader(encoded))
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	res, err := m.localClient.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer res.Body.Close()
-	raw, err := io.ReadAll(io.LimitReader(res.Body, 8<<20))
+	raw, err := m.localRequest(ctx, "POST", "/api/rpc", body)
 	if err != nil {
 		return nil, err
 	}

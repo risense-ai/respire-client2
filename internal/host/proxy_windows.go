@@ -3,6 +3,7 @@
 package host
 
 import (
+	"errors"
 	"strings"
 
 	"golang.org/x/sys/windows/registry"
@@ -15,7 +16,10 @@ func readSystemProxy() systemProxy {
 	key, err := registry.OpenKey(registry.CURRENT_USER,
 		`Software\Microsoft\Windows\CurrentVersion\Internet Settings`, registry.QUERY_VALUE)
 	if err != nil {
-		return systemProxy{Source: proxySourceDirect}
+		if errors.Is(err, registry.ErrNotExist) {
+			return systemProxy{Source: proxySourceDirect}
+		}
+		return systemProxy{Source: proxySourceUnavailable, Note: "读取 Windows 系统代理失败"}
 	}
 	defer key.Close()
 	enabled := false

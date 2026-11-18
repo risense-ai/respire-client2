@@ -21,6 +21,7 @@ package host
 // spawning a helper on every state poll.
 
 import (
+	"errors"
 	"net"
 	"net/http"
 	"net/url"
@@ -46,6 +47,7 @@ const (
 	proxySourceSystem      = "system"
 	proxySourceDirect      = "direct"
 	proxySourceOff         = "off"
+	proxySourceUnavailable = "unavailable"
 )
 
 // systemProxyTTL bounds how stale a cached system proxy lookup may be. It
@@ -130,6 +132,15 @@ func (r *proxyResolver) proxyFunc(mode func() string) func(*http.Request) (*url.
 
 func (r *proxyResolver) matcherForURL(target *url.URL) (*url.URL, error) {
 	cfg := r.config()
+	if cfg.Source == proxySourceUnavailable {
+		// Use the same matcher for localhost and explicitly bypassed hosts.
+		bypass := httpproxy.Config{HTTPProxy: "http://proxy.invalid", HTTPSProxy: "http://proxy.invalid", NoProxy: cfg.NoProxy}
+		proxy, err := bypass.ProxyFunc()(target)
+		if err != nil || proxy == nil {
+			return nil, err
+		}
+		return nil, errors.New(cfg.Note)
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if !r.matcherReady || r.matcherFor != cfg.key() {
@@ -198,13 +209,25 @@ func (m *Manager) ProxyInfo() ProxyInfo {
 // fills variables that are not already set, and never overrides an explicit
 // environment proxy. Used for helper processes the client spawns (plugin
 // git clones), not for the client's own HTTP clients.
-func (m *Manager) ProxyEnv(env []string) []string {
-	if m == nil || m.proxy == nil || m.Preferences().ProxyMode == ProxyModeDirect {
-		return env
+func (m *Manager) ProxyEnv(env []string) ([]string, error) {
+	if m.Preferences().ProxyMode == ProxyModeDirect {
+		direct := make([]string, 0, len(env))
+		for _, item := range env {
+			key, _, _ := strings.Cut(item, "=")
+			switch strings.ToLower(key) {
+			case "http_proxy", "https_proxy", "all_proxy", "no_proxy":
+				continue
+			}
+			direct = append(direct, item)
+		}
+		return direct, nil
 	}
 	cfg := m.proxy.config()
+	if cfg.Source == proxySourceUnavailable {
+		return nil, errors.New(cfg.Note)
+	}
 	if cfg.Source != proxySourceSystem {
-		return env
+		return env, nil
 	}
 	present := map[string]bool{}
 	for _, item := range env {
@@ -220,7 +243,7 @@ func (m *Manager) ProxyEnv(env []string) []string {
 	add("HTTP_PROXY", cfg.HTTPProxy)
 	add("HTTPS_PROXY", cfg.HTTPSProxy)
 	add("NO_PROXY", cfg.NoProxy)
-	return env
+	return env, nil
 }
 
 // redactProxyURL drops embedded credentials before a proxy URL is shown or
@@ -336,7 +359,8 @@ func parseScutilProxy(output string) systemProxy {
 	}
 	if httpProxy == "" && httpsProxy == "" {
 		if values["ProxyAutoConfigEnable"] == "1" || values["ProxyAutoDiscoveryEnable"] == "1" {
-			result.Note = "系统代理使用 PAC 自动配置，客户端无法解析；已直连"
+			result.Source = proxySourceUnavailable
+			result.Note = "无法解析系统 PAC，请配置显式代理或选择直连"
 		}
 		return result
 	}
@@ -376,7 +400,7 @@ func splitWindowsProxyServer(server string) (httpProxy, httpsProxy, socksProxy s
 // windowsSystemProxy is the pure part of the Windows lookup.
 func windowsSystemProxy(enabled bool, server, override, autoConfigURL string) systemProxy {
 	if strings.TrimSpace(autoConfigURL) != "" {
-		return systemProxy{Source: proxySourceDirect, Note: "系统代理使用 PAC 自动配置，客户端无法解析；已直连"}
+		return systemProxy{Source: proxySourceUnavailable, NoProxy: windowsNoProxy(override), Note: "无法解析系统 PAC，请配置显式代理或选择直连"}
 	}
 	if !enabled {
 		return systemProxy{Source: proxySourceDirect}

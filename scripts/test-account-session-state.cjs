@@ -67,6 +67,8 @@ const dependencies = {
   invitationDialog() {},
   membersDialog() {},
   authenticationPanel() {},
+  executeAuthentication: (...args) => dependencies.execute(...args),
+  recoveryMaterialDialog() {},
 };
 let imports = 0;
 const moduleBody = src.replace(/^import\s[\s\S]*?from "[^"]+";\r?\n/gm, () => { imports++; return ''; });
@@ -105,6 +107,50 @@ function callCount(kind) {
   return [...calls, ...apiCalls].filter(call => call.name === commandFor[kind]).length;
 }
 function allow(kind) { return { has_local_keys: kind === 'keys', has_token: kind === 'logout' }; }
+
+function authenticationHarness(job, { ackError = false } = {}) {
+  const requests = [], dialogs = [], events = [];
+  const doc = { dispatchEvent(event) { events.push(event.type); } };
+  class Event { constructor(type) { this.type = type; } }
+  const testApi = async (name, args) => {
+    requests.push({ name, args });
+    if (name === 'operations') return job.materialSaved ? [] : [{ ...job, envelope: undefined }];
+    if (name === 'operation-recover') { assert.equal(args.id, job.id); return job; }
+    if (name === 'recovery-material-ack') {
+      assert.deepEqual(args, { id: job.id, confirmed: true });
+      if (ackError) throw Error('save receipt unavailable');
+      job.materialSaved = true; job.materialPending = false;
+      return 'saved';
+    }
+    if (name === 'operation-ack') return;
+    throw Error(`Unexpected API ${name}`);
+  };
+  const liveCore = new Function('document', 'CustomEvent', 'testApi', core.replace(/^export /gm, '') + '\napi = testApi; return {waitForOperation};')(doc, Event, testApi);
+  const bindings = {
+    ...helpers, api: testApi, notify() {}, document: doc, CustomEvent: Event,
+    execute: async (name) => { assert.equal(name, 'auth_reset'); return liveCore.waitForOperation(job); },
+    waitForOperation: liveCore.waitForOperation,
+    select() {}, confirm() {},
+    dialog(options) {
+      const element = new Element('dialog');
+      element.children = [new Element('button', 'type="submit"'), new Element('input', 'data-saved'), new Element('button', 'data-close')];
+      element.children.forEach(child => { child.remove = () => { child.removed = true; }; });
+      element.close = () => { for (const fn of element.listeners.close || []) fn(); };
+      dialogs.push({ element, options });
+      return element;
+    },
+  };
+  const source = fs.readFileSync(path.join(repoRoot, 'internal/desktop/frontend/pages/authentication.js'), 'utf8');
+  const body = source.replace(/^import\s[\s\S]*?from "[^"]+";\r?\n/gm, '').replace(/^export /gm, '');
+  const auth = new Function(...Object.keys(bindings), body + '\nreturn {recoveryMaterialDialog, restorePendingRecoveryMaterials, executeAuthentication, continueAuthentication};')(...Object.values(bindings));
+  return { ...auth, requests, dialogs, events };
+}
+
+function pendingResetJob() {
+  return { id: 'desktop-original-reset', name: 'auth_reset', state: 'done', materialPending: true,
+    transaction: { operation_id: 'original-cli-operation', source_profile: '/original-profile', kind: 'key' },
+    envelope: { status: 'ok', summary: { outcome: 'committed', super: 'synthetic-recovery-material' } } };
+}
 let passed = 0;
 async function test(name, run) {
   reset();
@@ -114,8 +160,73 @@ async function test(name, run) {
 }
 
 (async () => {
+  await test('reset material survives closing without save and is restored by original query on restart', async () => {
+    const job = pendingResetJob(), first = authenticationHarness(job);
+    const envelope = await first.executeAuthentication('auth_reset');
+    assert.equal(envelope.recoveryRequestId, job.id);
+    const initial = first.recoveryMaterialDialog(envelope);
+    assert.equal(initial.querySelector('[type=submit]').disabled, true);
+    assert.equal(await first.dialogs[0].options.onSubmit(), false);
+    assert.equal(first.requests.filter(r => r.name === 'recovery-material-ack').length, 0);
+    assert.equal(job.materialPending, true); // Exiting here does not produce a save receipt.
+    const restarted = authenticationHarness(job), restored = restarted.restorePendingRecoveryMaterials();
+    await flush();
+    assert.deepEqual(restarted.requests, [{ name: 'operations', args: undefined }, { name: 'operation-recover', args: { id: job.id } }]);
+    const { element, options } = restarted.dialogs[0];
+    assert(options.body.includes('synthetic-recovery-material'));
+    assert.equal(element.querySelector('[type=submit]').disabled, true);
+    assert(element.querySelectorAll('[data-close]').every(button => button.removed));
+    let prevented = false;
+    element.listeners.cancel[0]({ preventDefault() { prevented = true; } });
+    assert.equal(prevented, true);
+    const checkbox = element.querySelector('[data-saved]'); checkbox.checked = true;
+    checkbox.listeners.change[0]();
+    assert.equal(element.querySelector('[type=submit]').disabled, false);
+    await options.onSubmit(); element.close(); await restored;
+    assert.equal(job.materialSaved, true); assert.equal(job.materialPending, false);
+    assert.deepEqual(restarted.requests.at(-1), { name: 'recovery-material-ack', args: { id: job.id, confirmed: true } });
+    assert(!JSON.stringify(restarted.requests).includes('synthetic-recovery-material'));
+    const savedRestart = authenticationHarness(job);
+    await savedRestart.restorePendingRecoveryMaterials();
+    assert.equal(savedRestart.dialogs.length, 0);
+    assert.deepEqual(savedRestart.requests, [{ name: 'operations', args: undefined }]);
+  });
+  await test('save receipt failure keeps recovery material pending and is not reported as saved', async () => {
+    const job = pendingResetJob(), auth = authenticationHarness(job, { ackError: true });
+    const element = auth.recoveryMaterialDialog(job.envelope, { requestId: job.id });
+    element.querySelector('[data-saved]').checked = true;
+    await assert.rejects(auth.dialogs[0].options.onSubmit, /save receipt unavailable/);
+    assert.equal(job.materialPending, true); assert.equal(job.materialSaved, undefined);
+    assert.deepEqual(auth.events, []);
+  });
+  await test('queried reset continuation retains save identity without submitting another reset', async () => {
+    const job = pendingResetJob(), auth = authenticationHarness(job);
+    const envelope = await auth.continueAuthentication(job.id);
+    assert.equal(envelope.recoveryRequestId, job.id);
+    auth.recoveryMaterialDialog(envelope);
+    assert.deepEqual(auth.requests, [{ name: 'operation-recover', args: { id: job.id } }]);
+    assert.equal(job.materialPending, true);
+  });
+  for (const state of ['unconfirmed', 'failed']) {
+    await test(`startup ${state} reset result never confirms material or starts another reset`, async () => {
+      const job = pendingResetJob(); job.state = state;
+      const auth = authenticationHarness(job);
+      await auth.restorePendingRecoveryMaterials();
+      assert.equal(auth.dialogs.length, 0); assert.equal(job.materialSaved, undefined);
+      assert.deepEqual(auth.requests.map(r => r.name), ['operations', 'operation-recover']);
+    });
+  }
+  await test('ordinary issued material without reset identity does not create a reset save receipt', async () => {
+    const auth = authenticationHarness(pendingResetJob());
+    const element = auth.recoveryMaterialDialog({ summary: { super: 'other-issued-material' } });
+    element.querySelector('[data-saved]').checked = true;
+    await auth.dialogs[0].options.onSubmit();
+    assert.deepEqual(auth.requests, []);
+    assert.equal(auth.recoveryMaterialDialog({ summary: { ok: true } }), null);
+  });
   // Preserve the original 13 session-state cases, now through real mounting and
   // production click dispatch instead of calling copied/extracted page logic.
+  const originalCasesStart = passed;
   for (const keys of [false, true]) for (const token of [false, true]) {
     await test(`session constraints keys=${keys} token=${token}`, async () => {
       const page = mount(context({ has_local_keys: keys, has_token: token }));
@@ -169,7 +280,7 @@ async function test(name, run) {
     assert.equal(page.button('keygen').disabled, false);
     page.leave();
   });
-  assert.equal(passed, 13, 'All original cases must run');
+  assert.equal(passed - originalCasesStart, 13, 'All original cases must run');
 
   for (const kind of kinds) for (const rejected of [false, true]) {
     await test(`${kind} navigation guard and ${rejected ? 'rejection' : 'completion'} refresh current controls`, async () => {

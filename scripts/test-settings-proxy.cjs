@@ -26,8 +26,8 @@ const cases = [
     count: 1,
   },
   {
-    snapshot: { mode: 'system', source: 'direct', note: '系统代理使用 PAC 自动配置，客户端无法解析；已直连' },
-    expect: [['代理来源', '未配置代理'], ['代理说明', '系统代理使用 PAC 自动配置，客户端无法解析；已直连']],
+    snapshot: { mode: 'system', source: 'unavailable', note: '无法解析系统 PAC，请配置显式代理或选择直连' },
+    expect: [['代理来源', '系统代理不可用'], ['代理说明', '无法解析系统 PAC，请配置显式代理或选择直连']],
   },
   {
     snapshot: {},

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -30,46 +31,64 @@ func (b *cappedOutput) Write(p []byte) (int, error) {
 }
 
 func (m *Manager) hostExecutable(ctx context.Context) (string, error) {
-	info, err := m.Installed()
-	if errors.Is(err, os.ErrNotExist) {
-		external, externalErr := m.External(ctx)
-		if externalErr == nil {
-			return external.Path, nil
-		}
-	} else if err == nil {
-		dir := m.runtimeDir(info.Version)
-		if err = m.verifyInstalled(info); err != nil {
-			return "", err
-		}
-		return filepath.Join(dir, runtimeBinary()), nil
-	}
-	if err != nil && !errors.Is(err, os.ErrNotExist) {
-		return "", err
-	}
-	h, _, err := m.Health(ctx)
+	cli, err := m.External(ctx)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("宿主操作需要独立 CLI，请先安装或修复 CLI: %w", err)
 	}
-	if err = verifyHostProcess(h); err != nil {
-		return "", err
-	}
-	if err = verifyExecutable(h.Exe); err != nil {
-		return "", err
-	}
-	return h.Exe, nil
+	return cli.Path, nil
 }
 
 func (m *Manager) hostOperation(ctx context.Context, args []string, secret, method, id string) (json.RawMessage, error) {
-	executable, err := m.hostExecutable(ctx)
-	if err != nil {
-		return nil, err
-	}
-	hostRPC := strings.HasPrefix(method, "auth.")
+	m.cliInstallMu.RLock()
+	defer m.cliInstallMu.RUnlock()
+	return m.hostOperationLocked(ctx, args, secret, method, id)
+}
+
+func (m *Manager) hostOperationLocked(ctx context.Context, args []string, secret, method, id string) (json.RawMessage, error) {
+	hostRPC := strings.HasPrefix(method, "auth.") || strings.HasPrefix(method, "core_config.")
 	stdin := secret + "\n"
 	if hostRPC {
-		params, inputErr := authParams(args, secret)
-		if inputErr != nil {
-			return nil, inputErr
+		if method == "auth.login.browser" {
+			if secret != "" {
+				return nil, errors.New("浏览器授权不接受桌面凭据")
+			}
+			if err := m.requireHostMethodLocked(ctx, method); err != nil {
+				return nil, err
+			}
+		}
+		var params map[string]string
+		if strings.HasPrefix(method, "core_config.") {
+			if err := m.requireHostMethodLocked(ctx, method); err != nil {
+				return nil, err
+			}
+			if method == "core_config.set" {
+				if err := m.requireHostMethodLocked(ctx, "core_config.result"); err != nil {
+					return nil, err
+				}
+			}
+			if secret != "" {
+				return nil, errors.New("核心配置不接受凭据")
+			}
+			params = map[string]string{}
+			switch method {
+			case "core_config.set":
+				if len(args) != 2 || args[0] != "agent-config" || !strings.HasPrefix(args[1], "--set=") {
+					return nil, errors.New("核心配置参数无效")
+				}
+				params["setting"] = strings.TrimPrefix(args[1], "--set=")
+			case "core_config.result":
+				if len(args) != 0 {
+					return nil, errors.New("核心配置查询不能携带新参数")
+				}
+			default:
+				return nil, errors.New("未知核心配置操作")
+			}
+		} else {
+			var inputErr error
+			params, inputErr = authParams(args, secret)
+			if inputErr != nil {
+				return nil, inputErr
+			}
 		}
 		payload, encodeErr := json.Marshal(map[string]any{"v": 1, "id": id, "method": method, "params": params})
 		if encodeErr != nil {
@@ -86,17 +105,42 @@ func (m *Manager) hostOperation(ctx context.Context, args []string, secret, meth
 		}
 		args = append(args, "--key-stdin")
 	}
+	return m.runHostCommandLocked(ctx, args, stdin, secret != "" || hostRPC, hostRPC, method, id)
+}
+
+// Shared process boundary: authentication payloads travel only on stdin.
+func (m *Manager) runHostCommand(ctx context.Context, args []string, stdin string, hasInput, hostRPC bool, method, id string) (json.RawMessage, error) {
+	m.cliInstallMu.RLock()
+	defer m.cliInstallMu.RUnlock()
+	return m.runHostCommandLocked(ctx, args, stdin, hasInput, hostRPC, method, id)
+}
+
+func (m *Manager) runHostCommandLocked(ctx context.Context, args []string, stdin string, hasInput, hostRPC bool, method, id string) (json.RawMessage, error) {
+	executable, err := m.hostExecutable(ctx)
+	if err != nil {
+		return nil, err
+	}
 	cmd := exec.CommandContext(ctx, executable, append([]string{"--json"}, args...)...)
 	configureCommand(cmd)
 	for _, item := range os.Environ() {
 		key, _, _ := strings.Cut(item, "=")
-		if strings.EqualFold(key, "RSRS_BIN_DIR") || strings.EqualFold(key, "RSRS_CLIENT_ONLY") || strings.EqualFold(key, "RSRS_NO_AUTOSTART") {
+		if strings.HasPrefix(method, "runtime.") && strings.EqualFold(key, "RSRS_RPC_PORT") {
+			continue
+		}
+		if strings.EqualFold(key, "RSRS_BIN_DIR") || strings.EqualFold(key, "RSRS_CLIENT_ONLY") || strings.EqualFold(key, "RSRS_NO_AUTOSTART") || strings.EqualFold(key, "RSRS_DATA_DIR") || strings.EqualFold(key, "RSRS_CLIENT2_HOST") || strings.EqualFold(key, "RSRS_RUNTIME_BIN") || strings.EqualFold(key, "ONEMEMORY_RUNTIME_BIN") || strings.EqualFold(key, "RESPIRE_RUNTIME_BIN") {
 			continue
 		}
 		cmd.Env = append(cmd.Env, item)
 	}
-	cmd.Env = append(cmd.Env, "RSRS_BIN_DIR="+filepath.Dir(executable), "RSRS_CLIENT_ONLY=0", "RSRS_NO_AUTOSTART=0")
-	if secret != "" || hostRPC {
+	cmd.Env = append(cmd.Env, "RSRS_BIN_DIR="+filepath.Dir(executable), "RSRS_CLIENT_ONLY=0", "RSRS_NO_AUTOSTART=0", "RSRS_DATA_DIR="+m.DataRoot, "RSRS_CLIENT2_HOST=1")
+	if strings.HasPrefix(method, "runtime.") {
+		endpoint, parseErr := url.Parse(m.Endpoint)
+		if parseErr != nil || endpoint.Port() == "" {
+			return nil, errors.New("无法确认待解锁 Runtime 的端口")
+		}
+		cmd.Env = append(cmd.Env, "RSRS_RPC_PORT="+endpoint.Port())
+	}
+	if hasInput {
 		cmd.Stdin = strings.NewReader(stdin)
 	}
 	out, stderr := &cappedOutput{limit: 8 << 20}, &cappedOutput{limit: 64 << 10}
@@ -110,6 +154,24 @@ func (m *Manager) hostOperation(ctx context.Context, args []string, secret, meth
 		return nil, &unconfirmedError{cause: errors.New("宿主回执超过 8 MiB，请刷新当前状态确认结果")}
 	}
 	raw := bytes.TrimSpace(out.Bytes())
+	if method == "capabilities" {
+		if runErr != nil {
+			return nil, fmt.Errorf("CLI 能力探测未正常退出: %w", runErr)
+		}
+		var probe struct {
+			Status string `json:"status"`
+		}
+		if err := json.Unmarshal(raw, &probe); err != nil {
+			return nil, fmt.Errorf("CLI 能力探测回执无效: %w", err)
+		}
+		if probe.Status != "ok" {
+			return nil, errors.New("CLI 能力探测状态不是 ok，未确认协议能力")
+		}
+		if err := hostEnvelopeError(raw); err != nil {
+			return nil, err
+		}
+		return raw, nil
+	}
 	// Browser authorization can print progress before its final JSON envelope.
 	if !json.Valid(raw) {
 		lines := bytes.Split(raw, []byte("\n"))
@@ -133,9 +195,15 @@ func (m *Manager) hostOperation(ctx context.Context, args []string, secret, meth
 				}
 				return nil, &unconfirmedError{id, errors.New("账户 RPC 回执协议或 ID 不匹配，请先核对当前身份")}
 			}
-			return reply.Envelope, envelopeError(reply.Envelope)
+			if receiptErr := hostEnvelopeError(reply.Envelope); receiptErr != nil {
+				return reply.Envelope, receiptErr
+			}
+			if !reply.OK || runErr != nil {
+				return reply.Envelope, &unconfirmedError{id, errors.New("宿主退出状态与完成回执不一致，请查询原事务")}
+			}
+			return reply.Envelope, nil
 		}
-		if err = envelopeError(raw); err != nil {
+		if err = hostEnvelopeError(raw); err != nil {
 			return raw, err
 		}
 		return raw, nil

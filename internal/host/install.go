@@ -251,6 +251,125 @@ func (m *Manager) installOnlineCLI(ctx context.Context, compat Compat) error {
 	return m.installFrontendCLI(ctx, source, meta.Version, meta.BinaryHash, compat)
 }
 
+// RequireCoreConfigHost only probes capabilities; it never installs or replays.
+func (m *Manager) RequireCoreConfigHost(ctx context.Context) error {
+	for _, method := range []string{"core_config.set", "core_config.result"} {
+		if err := m.requireHostMethod(ctx, method); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// EnsureCoreConfigHost runs only during startup, before business operations.
+func (m *Manager) EnsureCoreConfigHost(ctx context.Context) error {
+	_, err := m.External(ctx)
+	missing := errors.Is(err, os.ErrNotExist)
+	if err == nil {
+		err = m.RequireCoreConfigHost(ctx)
+	}
+	if err == nil {
+		return nil
+	}
+	if !missing && !errors.Is(err, errHostMethodUnsupported) {
+		return fmt.Errorf("无法确认 CLI 核心配置能力，未升级: %w", err)
+	}
+	if m.HasActiveOperations() {
+		return errors.New("业务操作尚未完成，未升级 CLI；原事务保留")
+	}
+	lock, err := m.lockRuntime(ctx)
+	if err != nil {
+		return err
+	}
+	defer lock.Close()
+	compat, err := m.coreHostCompat(ctx)
+	if err != nil {
+		return err
+	}
+	// Exclude running host commands while replacing only the CLI. Runtime
+	// selection, processes and supervisor ownership are never changed here.
+	m.cliInstallMu.Lock()
+	if m.HasActiveOperations() {
+		err = errors.New("业务操作尚未完成，未升级 CLI；原事务保留")
+	} else {
+		err = m.installOnlineCLI(ctx, compat)
+	}
+	m.cliInstallMu.Unlock()
+	if err != nil {
+		return fmt.Errorf("CLI 核心配置能力准备失败，未启动业务: %w", err)
+	}
+	if err = m.RequireCoreConfigHost(ctx); err != nil {
+		return fmt.Errorf("当前渠道的 CLI 不满足核心配置协议，未启动业务: %w", err)
+	}
+	return nil
+}
+
+// coreHostCompat intersects the published contracts of selected and running
+// Runtime bytes. With no Runtime yet, it uses channel discovery without installing it.
+func (m *Manager) coreHostCompat(ctx context.Context) (Compat, error) {
+	compat := Compat{MinCLI: "0.0.0", MaxCLI: "*"}
+	found := false
+	include := func(version, hash string) error {
+		if !validVersion(version) || !validHash(hash) {
+			return errors.New("无法确认现用 Runtime 的版本或摘要，未升级 CLI")
+		}
+		target, err := runtimeTarget()
+		if err != nil {
+			return err
+		}
+		var raw json.RawMessage
+		if err = m.fetchJSON(ctx, "https://github.com/risense-ai/"+runtimeRepo+"/releases/download/v"+version+"/runtime-build-"+target+".json", &raw); err != nil {
+			return err
+		}
+		meta, err := NormalizeRuntimeMetadata(raw)
+		if err != nil {
+			return err
+		}
+		if err = CheckRuntimeMetadata(meta, "v"+version, target); err != nil {
+			return err
+		}
+		if meta.BinaryHash != hash {
+			return errors.New("现用 Runtime 与发布摘要不匹配，未升级 CLI")
+		}
+		if semver.Compare("v"+meta.Compat.MinCLI, "v"+compat.MinCLI) > 0 {
+			compat.MinCLI = meta.Compat.MinCLI
+		}
+		if meta.Compat.MaxCLI != "*" && (compat.MaxCLI == "*" || semver.Compare("v"+meta.Compat.MaxCLI, "v"+compat.MaxCLI) < 0) {
+			compat.MaxCLI = meta.Compat.MaxCLI
+		}
+		found = true
+		return CheckCLICompat(compat.MinCLI, compat)
+	}
+	selected, err := m.Installed()
+	if err == nil {
+		if err = m.verifyInstalled(selected); err != nil {
+			return compat, err
+		}
+		if err = include(selected.Version, selected.SHA256); err != nil {
+			return compat, err
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return compat, err
+	}
+	health, _, err := m.Health(ctx)
+	if err == nil {
+		hash, hashErr := fileHash(health.Exe)
+		if hashErr != nil {
+			return compat, hashErr
+		}
+		if err = include(health.Version, hash); err != nil {
+			return compat, err
+		}
+	} else if !IsUnavailable(err) {
+		return compat, err
+	}
+	if !found {
+		_, meta, err := m.LatestRuntime(ctx)
+		return meta.Compat, err
+	}
+	return compat, nil
+}
+
 func (m *Manager) InstallRuntime(automatic bool, restart bool) error {
 	if err := m.MigrateRuntime(); err != nil {
 		return err
@@ -270,18 +389,22 @@ func (m *Manager) InstallRuntime(automatic bool, restart bool) error {
 	var release ReleaseInfo
 	var meta RuntimeMetadata
 	var payload *bootstrapPayload
-	if embedded, payloadErr := readBootstrapPayload(); errors.Is(prevErr, os.ErrNotExist) && payloadErr == nil && embedded.Manifest.Channel == m.Preferences().RuntimeChannel {
-		// Only bootstrap an absent installation from a matching channel.
-		// Installed clients use release discovery so the bundle cannot pin updates.
-		payload = &embedded
-		meta = embedded.runtimeMetadata()
-		if meta, err = m.provenRuntimeMetadata(ctx, meta); err != nil {
-			return err
+	if errors.Is(prevErr, os.ErrNotExist) {
+		embedded, payloadErr := readBootstrapPayload()
+		if payloadErr != nil && !errors.Is(payloadErr, errBootstrapAbsent) {
+			return fmt.Errorf("bootstrap payload: %w", payloadErr)
 		}
-	} else {
-		// No valid payload (absent, foreign platform, or failed verification):
-		// keep the documented online path so non-DMG builds behave unchanged.
-		var err error
+		if payloadErr == nil {
+			channel := m.Preferences().RuntimeChannel
+			if embedded.Manifest.Channel != channel {
+				return fmt.Errorf("嵌入 Runtime 通道 %q 与设置中的通道 %q 不一致", embedded.Manifest.Channel, channel)
+			}
+			payload = &embedded
+			meta = embedded.Metadata
+		}
+	}
+	if payload == nil {
+		// Installed clients and absent payloads use release discovery.
 		release, meta, err = m.LatestRuntime(ctx)
 		if err != nil {
 			return err
@@ -323,8 +446,8 @@ func (m *Manager) InstallRuntime(automatic bool, restart bool) error {
 				meta = retainedMeta
 			}
 			reuseRuntime = true
-		} else if semver.Compare("v"+previous.Version, "v"+meta.RuntimeVersion) > 0 {
-			return fmt.Errorf("installed newer Runtime verification failed: %w", verifyErr)
+		} else {
+			return fmt.Errorf("installed Runtime verification failed: %w", verifyErr)
 		}
 	}
 	h, _, err := m.Health(ctx)
@@ -386,8 +509,10 @@ func (m *Manager) InstallRuntime(automatic bool, restart bool) error {
 		return err
 	}
 	if reuseRuntime {
-		if err := m.Start(); err != nil {
-			return err
+		if restart {
+			if err := m.Start(); err != nil {
+				return err
+			}
 		}
 		return m.finishBootstrapPath(payload)
 	}

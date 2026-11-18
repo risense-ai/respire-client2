@@ -5,33 +5,60 @@ on:
     tags: ['v*']
   pull_request:
   workflow_dispatch:
+    inputs:
+      mode:
+        type: choice
+        options: [candidate, promote]
+        default: candidate
+        description: Build/package-check a candidate, or publish its exact sealed bytes
+      version:
+        type: string
+        required: true
+        description: Explicit version without v (X.Y.Z or X.Y.Z-dev.N)
+      producer_run_id:
+        type: string
+        description: Promotion only - successful main candidate run ID
+      producer_attempt:
+        type: string
+        description: Promotion only - exact successful producer attempt
+      source_sha:
+        type: string
+        description: Promotion only - full candidate source SHA
+      confirm_publish:
+        type: boolean
+        default: false
+        description: Publish these bytes after independent required functional acceptance
 permissions:
   contents: read
+  actions: read
 concurrency:
-  group: desktop-${{ github.ref }}
-  cancel-in-progress: true
+  group: desktop-${{ github.ref }}-${{ inputs.mode || github.event_name }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 jobs:
-  plan:
-    name: plan
+  prepare:
+    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-24.04
-    timeout-minutes: 5
     outputs:
-      matrix: ${{ steps.pick.outputs.matrix }}
+      mode: ${{ steps.inputs.outputs.mode }}
+      version: ${{ steps.inputs.outputs.version }}
+      source: ${{ steps.inputs.outputs.source }}
     steps:
-      - id: pick
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - id: inputs
+        name: Validate explicit candidate or promotion identity
         env:
-          REF_TYPE: ${{ github.ref_type }}
-          EVENT: ${{ github.event_name }}
-        run: |
-          if [[ "$REF_TYPE" == 'tag' || "$EVENT" == 'workflow_dispatch' ]]; then
-            echo 'matrix={"include":[{"os":"windows","arch":"amd64","runner":"windows-latest"},{"os":"windows","arch":"arm64","runner":"windows-11-arm"},{"os":"darwin","arch":"amd64","runner":"macos-15-intel"},{"os":"darwin","arch":"arm64","runner":"macos-15"},{"os":"linux","arch":"amd64","runner":"ubuntu-22.04"},{"os":"linux","arch":"arm64","runner":"ubuntu-22.04-arm"}]}' >> "$GITHUB_OUTPUT"
-          else
-            echo 'matrix={"include":[{"os":"windows","arch":"amd64","runner":"windows-latest"},{"os":"linux","arch":"amd64","runner":"ubuntu-22.04"}]}' >> "$GITHUB_OUTPUT"
-          fi
+          INPUT_MODE: ${{ inputs.mode }}
+          INPUT_VERSION: ${{ inputs.version }}
+          INPUT_RUN_ID: ${{ inputs.producer_run_id }}
+          INPUT_ATTEMPT: ${{ inputs.producer_attempt }}
+          INPUT_SOURCE_SHA: ${{ inputs.source_sha }}
+          INPUT_CONFIRM: ${{ inputs.confirm_publish }}
+        run: python3 scripts/desktop-candidate.py inputs
   lint:
     name: lint
-    runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
@@ -42,26 +69,34 @@ jobs:
         with:
           node-version: '22'
       - name: Linux build libraries
-        run: sudo apt-get update -qq && sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev libx11-dev fontconfig
+        run: sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends libgtk-3-dev libwebkit2gtk-4.1-dev libx11-dev fontconfig
       - name: Vet, frontend check, test
         run: |
           go vet -tags production,gtk3 ./...
           while IFS= read -r -d '' source; do node --check "$source"; done < <(find internal/desktop/frontend -name '*.js' -type f -print0)
           go test -tags production,gtk3 ./...
-          node --check scripts/test-account-session-state.cjs
           node scripts/test-account-session-state.cjs
-          node --check scripts/test-client-refresh.cjs
           node scripts/test-client-refresh.cjs
-          node --check scripts/test-settings-proxy.cjs
           node scripts/test-settings-proxy.cjs
-      - name: Bootstrap fetch fixture self-test
-        run: bash scripts/test-fetch-macos-components.sh
+          python3 -m py_compile scripts/desktop-candidate.py scripts/update-manifest.py
+          python3 scripts/desktop-candidate.py self-check
+          go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12 -shellcheck= -pyflakes= .github/workflows/desktop.yml
   native:
     name: ${{ matrix.os }}-${{ matrix.arch }}
-    needs: [plan]
+    needs: [prepare]
+    if: needs.prepare.outputs.mode != 'promote'
+    env:
+      CANDIDATE_VERSION: ${{ needs.prepare.outputs.version }}
     strategy:
       fail-fast: false
-      matrix: ${{ fromJson(needs.plan.outputs.matrix) }}
+      matrix:
+        include:
+          - {os: windows, arch: amd64, runner: windows-latest}
+          - {os: windows, arch: arm64, runner: windows-11-arm}
+          - {os: darwin, arch: amd64, runner: macos-15-intel}
+          - {os: darwin, arch: arm64, runner: macos-15}
+          - {os: linux, arch: amd64, runner: ubuntu-22.04}
+          - {os: linux, arch: arm64, runner: ubuntu-22.04-arm}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 20
     steps:
@@ -72,14 +107,123 @@ jobs:
           cache: true
       - name: Linux build libraries
         if: matrix.os == 'linux'
-        run: sudo apt-get update -qq && sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev libx11-dev fontconfig
+        run: sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends libgtk-3-dev libwebkit2gtk-4.1-dev libx11-dev fontconfig
       - name: Build Windows
         if: matrix.os == 'windows'
         shell: pwsh
         run: |
-          $version = '0.2.56-dev.${{ github.run_number }}'
-          if ('${{ github.ref_type }}' -eq 'tag') { $version = '${{ github.ref_name }}'.TrimStart('v') }
-          ./scripts/build.ps1 -Version $version -Arch '${{ matrix.arch }}'
+          ./scripts/build.ps1 -Version $env:CANDIDATE_VERSION -Arch '${{ matrix.arch }}'
+      - name: Build installer
+        if: matrix.os == 'windows'
+        shell: pwsh
+        run: |
+          choco install innosetup -y --no-progress
+          ./scripts/build-installer.ps1 -Version $env:CANDIDATE_VERSION -Arch '${{ matrix.arch }}'
+      - name: Build Unix
+        if: matrix.os != 'windows'
+        shell: bash
+        run: |
+          bash scripts/build.sh "$CANDIDATE_VERSION" '${{ matrix.arch }}'
+          if [[ '${{ matrix.os }}-${{ matrix.arch }}' == darwin-arm64 ]]; then bash scripts/build-dmg.sh; fi
+      - uses: actions/upload-artifact@v7
+        with:
+          name: respire-${{ matrix.os }}-${{ matrix.arch }}-${{ github.run_attempt }}
+          path: |
+            dist/respire-${{ matrix.os }}-${{ matrix.arch }}.*
+            dist/respire-${{ matrix.os }}-${{ matrix.arch }}-setup.exe
+            dist/SHA256SUMS
+            dist/LICENSE.txt
+            dist/THIRD_PARTY_NOTICES.txt
+          if-no-files-found: error
+  assemble:
+    needs: [prepare, lint, native]
+    runs-on: ubuntu-24.04
+    env:
+      CANDIDATE_VERSION: ${{ needs.prepare.outputs.version }}
+      CANDIDATE_SOURCE: ${{ needs.prepare.outputs.source }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: respire-*-${{ github.run_attempt }}
+          path: artifacts
+      - name: Assemble and verify release
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir dist
+          find artifacts -mindepth 2 -maxdepth 2 -name SHA256SUMS -exec cat {} + | sort > dist/SHA256SUMS
+          find artifacts -mindepth 2 -maxdepth 2 -name 'respire-*' -type f -exec cp {} dist/ \;
+          cp artifacts/respire-windows-amd64-${{ github.run_attempt }}/LICENSE.txt dist/
+          cp artifacts/respire-windows-amd64-${{ github.run_attempt }}/THIRD_PARTY_NOTICES.txt dist/
+          cd dist
+          sha256sum --check SHA256SUMS
+          # Six application update assets, two Windows installers and one DMG.
+          test "$(wc -l < SHA256SUMS)" -eq 9
+      - name: Generate release notes
+        shell: bash
+        env:
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: bash scripts/release-notes.sh "v$CANDIDATE_VERSION" dist/release-notes.md "$CANDIDATE_SOURCE"
+      - name: Generate update manifest
+        shell: bash
+        run: python3 scripts/update-manifest.py "v$CANDIDATE_VERSION" dist dist/release-notes.md dist/client-updates.json 6
+      - name: Bind source, version, producer attempt and all six targets
+        run: python3 scripts/desktop-candidate.py manifest
+      - uses: actions/upload-artifact@v7
+        with:
+          name: desktop-candidate-${{ github.run_attempt }}
+          path: dist/*
+          if-no-files-found: error
+  native-acceptance:
+    name: Candidate package checks (${{ matrix.os }}-${{ matrix.arch }})
+    needs: [prepare, assemble]
+    env:
+      CANDIDATE_VERSION: ${{ needs.prepare.outputs.version }}
+      CANDIDATE_SOURCE: ${{ needs.prepare.outputs.source }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {os: windows, arch: amd64, runner: windows-latest, asset: respire-windows-amd64.exe}
+          - {os: windows, arch: arm64, runner: windows-11-arm, asset: respire-windows-arm64.exe}
+          - {os: darwin, arch: amd64, runner: macos-15-intel, asset: respire-darwin-amd64.zip}
+          - {os: darwin, arch: arm64, runner: macos-15, asset: respire-darwin-arm64.zip}
+          - {os: linux, arch: amd64, runner: ubuntu-22.04, asset: respire-linux-amd64.tar.gz}
+          - {os: linux, arch: arm64, runner: ubuntu-22.04-arm, asset: respire-linux-arm64.tar.gz}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Linux native libraries
+        if: matrix.os == 'linux'
+        run: sudo apt-get update -qq && sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev libx11-dev fontconfig
+      - uses: actions/download-artifact@v8
+        with:
+          name: desktop-candidate-${{ github.run_attempt }}
+          path: dist
+      - name: Verify candidate source, version and asset bytes
+        shell: bash
+        run: python3 scripts/desktop-candidate.py verify
+      - name: Run existing native tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          tags=production
+          if [[ '${{ matrix.os }}' == linux ]]; then tags=production,gtk3; fi
+          go test -tags "$tags" ./...
+      - name: Verify candidate Windows executable identity and fonts
+        if: matrix.os == 'windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $version = $env:CANDIDATE_VERSION
           $versionFile = Join-Path $env:RUNNER_TEMP 'respire-version.json'
           $process = Start-Process -FilePath "$PWD/dist/respire-windows-${{ matrix.arch }}.exe" -ArgumentList '--version' -RedirectStandardOutput $versionFile -WindowStyle Hidden -PassThru
           if (!$process.WaitForExit(10000)) { throw 'Executable startup timed out' }
@@ -94,14 +238,35 @@ jobs:
           if ($fontProcess.ExitCode -ne 0) { throw 'Font enumeration failed' }
           $fonts = Get-Content $fontsFile -Raw | ConvertFrom-Json
           if (!$fonts.ok -or $fonts.result.Count -eq 0) { throw 'No system fonts returned' }
-      - name: Build installer
-        if: matrix.os == 'windows'
-        shell: pwsh
+      - name: Verify candidate Unix executable identity and fonts
+        if: matrix.os != 'windows'
+        shell: bash
+        env:
+          ASSET: ${{ matrix.asset }}
+          RELEASE_VERSION: ${{ needs.prepare.outputs.version }}
+          EXPECTED_PLATFORM: ${{ matrix.os }}-${{ matrix.arch }}
         run: |
-          $version = '0.2.56-dev.${{ github.run_number }}'
-          if ('${{ github.ref_type }}' -eq 'tag') { $version = '${{ github.ref_name }}'.TrimStart('v') }
-          choco install innosetup -y --no-progress
-          ./scripts/build-installer.ps1 -Version $version -Arch '${{ matrix.arch }}'
+          set -euo pipefail
+          mkdir unpack
+          if [[ '${{ matrix.os }}' == darwin ]]; then
+            ditto -x -k "dist/$ASSET" unpack
+            executable=unpack/Respire.app/Contents/MacOS/respire
+          else
+            tar -xzf "dist/$ASSET" -C unpack
+            executable=unpack/respire
+          fi
+          "$executable" --version > "$RUNNER_TEMP/respire-version.json"
+          "$executable" --headless fonts > "$RUNNER_TEMP/respire-fonts.json"
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          root = Path(os.environ['RUNNER_TEMP'])
+          info = json.loads((root / 'respire-version.json').read_text())
+          assert info['version'] == os.environ['RELEASE_VERSION'].removeprefix('v')
+          assert info['platform'] == os.environ['EXPECTED_PLATFORM']
+          fonts = json.loads((root / 'respire-fonts.json').read_text())
+          assert fonts['ok'] and fonts['result'], 'No system fonts returned'
+          PY
       - name: Install and uninstall Windows package
         if: matrix.os == 'windows'
         shell: pwsh
@@ -133,8 +298,7 @@ jobs:
           if ($install.ExitCode -ne 0) { throw 'Installer smoke failed' }
           try {
             if (Test-Path -LiteralPath (Join-Path $appRoot 'bootstrap')) { throw 'Installer bundled CLI or Runtime components' }
-            $version = '0.2.56-dev.${{ github.run_number }}'
-            if ('${{ github.ref_type }}' -eq 'tag') { $version = '${{ github.ref_name }}'.TrimStart('v') }
+            $version = $env:CANDIDATE_VERSION
             foreach ($check in @(@{ Name = 'version'; Args = @('--version') }, @{ Name = 'fonts'; Args = @('--headless', 'fonts') })) {
               $output = Join-Path $smokeRoot ($check.Name + '.json')
               $process = Start-Process -FilePath (Join-Path $appRoot 'Respire.exe') -ArgumentList $check.Args -RedirectStandardOutput $output -WindowStyle Hidden -PassThru
@@ -155,17 +319,6 @@ jobs:
           if ($uninstallKeys | Where-Object { Test-Path -LiteralPath $_ }) { throw 'Uninstall left registration' }
           if ((Get-FileHash -LiteralPath $preferences -Algorithm SHA256).Hash -ne $preferencesHash -or (Get-FileHash -LiteralPath $dataSentinel -Algorithm SHA256).Hash -ne $dataHash) { throw 'Install/uninstall changed existing data' }
           if ((Get-ItemProperty -LiteralPath 'HKCU:\Environment' -Name Path -ErrorAction SilentlyContinue).Path -cne $pathBefore -or (Test-Path -LiteralPath 'HKCU:\Software\Respire\Installer')) { throw 'Install/uninstall changed user PATH state' }
-      - name: Build Unix
-        if: matrix.os != 'windows'
-        shell: bash
-        run: |
-          version='0.2.56-dev.${{ github.run_number }}'
-          if [[ '${{ github.ref_type }}' == tag ]]; then version='${{ github.ref_name }}'; version="${version#v}"; fi
-          bash scripts/build.sh "$version" '${{ matrix.arch }}'
-          ./dist/respire --version
-          ./dist/respire --headless fonts > "$RUNNER_TEMP/respire-fonts.json"
-          node -e 'const fs=require("fs");const r=JSON.parse(fs.readFileSync(process.argv[1],"utf8"));if(!r.ok||!Array.isArray(r.result)||!r.result.length)throw Error("No system fonts returned")' "$RUNNER_TEMP/respire-fonts.json"
-          if [[ '${{ matrix.os }}-${{ matrix.arch }}' == darwin-arm64 ]]; then bash scripts/build-dmg.sh; fi
       - name: Check application copied from DMG
         if: matrix.os == 'darwin' && matrix.arch == 'arm64'
         shell: bash
@@ -177,72 +330,89 @@ jobs:
           hdiutil attach -readonly -nobrowse -mountpoint "$smoke_root/mount" dist/respire-darwin-arm64.dmg >/dev/null
           trap 'hdiutil detach "$smoke_root/mount" >/dev/null' EXIT
           ditto "$smoke_root/mount/Respire.app" "$smoke_root/Respire.app"
-          version='0.2.56-dev.${{ github.run_number }}'
-          if [[ '${{ github.ref_type }}' == tag ]]; then version='${{ github.ref_name }}'; version="${version#v}"; fi
+          version="$CANDIDATE_VERSION"
           RSRS_DATA_DIR="$smoke_root/profile" "$smoke_root/Respire.app/Contents/MacOS/respire" --version > "$smoke_root/version.json"
           python3 - "$smoke_root/version.json" "$version" <<'PY'
           import json, sys
           info = json.load(open(sys.argv[1]))
           assert info['version'] == sys.argv[2] and info['platform'] == 'darwin-arm64', 'Copied DMG executable identity mismatch'
           PY
+      - name: Record package checks for these exact candidate bytes
+        shell: bash
+        run: python3 scripts/desktop-candidate.py receipt --target '${{ matrix.os }}-${{ matrix.arch }}'
       - uses: actions/upload-artifact@v7
         with:
-          name: respire-${{ matrix.os }}-${{ matrix.arch }}
-          path: |
-            dist/respire-${{ matrix.os }}-${{ matrix.arch }}.*
-            dist/respire-${{ matrix.os }}-${{ matrix.arch }}-setup.exe
-            dist/SHA256SUMS
-            dist/LICENSE.txt
-            dist/THIRD_PARTY_NOTICES.txt
+          name: desktop-package-check-${{ github.run_attempt }}-${{ matrix.os }}-${{ matrix.arch }}
+          path: package-checks/*.json
+          if-no-files-found: error
+  package-checks:
+    needs: [prepare, native-acceptance]
+    runs-on: ubuntu-24.04
+    env:
+      CANDIDATE_VERSION: ${{ needs.prepare.outputs.version }}
+      CANDIDATE_SOURCE: ${{ needs.prepare.outputs.source }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          name: desktop-candidate-${{ github.run_attempt }}
+          path: dist
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: desktop-package-check-${{ github.run_attempt }}-*
+          merge-multiple: true
+          path: package-checks
+      - name: Seal six package checks (not WebView or CLI/Runtime functional acceptance)
+        run: python3 scripts/desktop-candidate.py seal
+      - uses: actions/upload-artifact@v7
+        with:
+          name: desktop-package-checks-${{ github.run_attempt }}
+          path: dist/*
           if-no-files-found: error
   release:
-    if: startsWith(github.ref, 'refs/tags/v')
-    needs: [lint, native]
+    if: >-
+      always() && needs.prepare.result == 'success' && needs.lint.result == 'success' &&
+      (needs.prepare.outputs.mode == 'promote' ||
+      (needs.prepare.outputs.mode == 'tag' && needs.package-checks.result == 'success'))
+    needs: [prepare, lint, package-checks]
     runs-on: ubuntu-24.04
     permissions:
       contents: write
+      actions: read
+    concurrency:
+      group: desktop-publish-${{ needs.prepare.outputs.version }}
+      cancel-in-progress: false
+    env:
+      GH_TOKEN: ${{ github.token }}
+      CANDIDATE_VERSION: ${{ needs.prepare.outputs.version }}
+      CANDIDATE_SOURCE: ${{ needs.prepare.outputs.source }}
+      INPUT_RUN_ID: ${{ inputs.producer_run_id }}
+      INPUT_ATTEMPT: ${{ inputs.producer_attempt }}
     steps:
       - uses: actions/checkout@v7
-        with:
-          fetch-depth: 0
+      - name: Require successful trusted main producer and exact attempt
+        if: needs.prepare.outputs.mode == 'promote'
+        run: python3 scripts/desktop-candidate.py producer
       - uses: actions/download-artifact@v8
+        if: needs.prepare.outputs.mode == 'tag'
         with:
-          pattern: respire-*
-          path: artifacts
-      - name: Assemble and verify release
+          name: desktop-package-checks-${{ github.run_attempt }}
+          path: dist
+      - name: Verify sealed bytes and immutable release tag
+        run: python3 scripts/desktop-candidate.py tag
+      - name: Publish the package-checked bytes without rebuilding or repackaging
         shell: bash
         run: |
           set -euo pipefail
-          mkdir dist
-          find artifacts -mindepth 2 -maxdepth 2 -name SHA256SUMS -exec cat {} + | sort > dist/SHA256SUMS
-          find artifacts -mindepth 2 -maxdepth 2 -name 'respire-*' -type f -exec cp {} dist/ \;
-          cp artifacts/respire-windows-amd64/LICENSE.txt dist/
-          cp artifacts/respire-windows-amd64/THIRD_PARTY_NOTICES.txt dist/
-          cd dist
-          sha256sum --check SHA256SUMS
-          # Six application update assets, two Windows installers and one DMG.
-          test "$(wc -l < SHA256SUMS)" -eq 9
-      - name: Generate release notes
-        shell: bash
-        env:
-          GITHUB_REPOSITORY: ${{ github.repository }}
-        run: bash scripts/release-notes.sh "$GITHUB_REF_NAME" .release-notes.md
-      - name: Generate update manifest
-        shell: bash
-        run: python3 scripts/update-manifest.py "$GITHUB_REF_NAME" dist .release-notes.md dist/client-updates.json 6
-      - name: Publish tagged release
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          CURRENT_TAG: ${{ github.ref_name }}
-          REPOSITORY: ${{ github.repository }}
-        shell: bash
-        run: |
-          args=(release create "$CURRENT_TAG" dist/* --repo "$REPOSITORY" --verify-tag --title "$CURRENT_TAG" --notes-file .release-notes.md)
-          if [[ "$CURRENT_TAG" == *-* ]]; then args+=(--prerelease); fi
+          tag="v$CANDIDATE_VERSION"
+          args=(release create "$tag" dist/* --repo "$GITHUB_REPOSITORY" --verify-tag --title "$tag" --notes-file dist/release-notes.md)
+          if [[ "$tag" == *-* ]]; then args+=(--prerelease); fi
           gh "${args[@]}"
+          gh release download "$tag" --repo "$GITHUB_REPOSITORY" --dir published
+          python3 scripts/desktop-candidate.py verify --root published --sealed
   update-index:
-    if: startsWith(github.ref, 'refs/tags/v') && contains(github.ref_name, '-dev.')
-    needs: [release]
+    if: always() && needs.release.result == 'success' && contains(needs.prepare.outputs.version, '-dev.')
+    needs: [prepare, release]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:
@@ -254,7 +424,7 @@ jobs:
       - name: Update existing clients' DEV discovery manifest
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          CURRENT_TAG: ${{ github.ref_name }}
+          CURRENT_TAG: v${{ needs.prepare.outputs.version }}
           REPOSITORY: ${{ github.repository }}
         shell: bash
         run: |

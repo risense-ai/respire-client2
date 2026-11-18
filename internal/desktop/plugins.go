@@ -149,8 +149,12 @@ func (d *desktop) ensurePlugin(ctx context.Context, id string, mirror bool) (str
 		return "", false, err
 	}
 	var out pluginOutput
+	env, err := d.m.ProxyEnv(os.Environ())
+	if err != nil {
+		return "", false, err
+	}
 	for _, command := range commands {
-		command.env = d.pluginEnv()
+		command.env = env
 		if err = runPluginCommand(ctx, command, &out); err != nil {
 			return "", false, err
 		}
@@ -236,7 +240,10 @@ func pluginSourceExists(path string) bool {
 }
 
 func (d *desktop) updatePluginSource(ctx context.Context, path, repo string) error {
-	env := d.pluginEnv()
+	env, err := d.m.ProxyEnv(os.Environ())
+	if err != nil {
+		return err
+	}
 	if pluginSourceExists(path) {
 		if err := runPluginCommand(ctx, pluginCommand{name: "git", args: []string{"fetch", "--depth", "1", "origin", "main"}, dir: path, env: env}, nil); err != nil {
 			return fmt.Errorf("更新插件源失败: %w", err)
@@ -247,12 +254,4 @@ func (d *desktop) updatePluginSource(ctx context.Context, path, repo string) err
 		return nil
 	}
 	return runPluginCommand(ctx, pluginCommand{name: "git", args: []string{"clone", "--depth", "1", "--branch", "main", repo, path}, env: env}, nil)
-}
-
-// pluginEnv gives helper processes (git clones, install scripts) the proxy
-// the client resolved from the environment or the operating system. Without
-// it, a GUI launch has no proxy variables and plugin downloads bypass the
-// proxy the user configured in System Settings.
-func (d *desktop) pluginEnv() []string {
-	return d.m.ProxyEnv(os.Environ())
 }

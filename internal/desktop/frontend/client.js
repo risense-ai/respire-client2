@@ -12,6 +12,7 @@ import {
   operations,
 } from "./pages/settings.js";
 import { accounts } from "./pages/accounts.js";
+import { restorePendingRecoveryMaterials } from "./pages/authentication.js";
 import { injection } from "./pages/injection.js";
 import { applyTypography } from "./ui/typography.js";
 import { grants } from "./pages/grants.js";
@@ -414,6 +415,11 @@ async function poll() {
   // the first status read and never opens when this machine already has a
   // local account; the entry in Settings → About still opens a full re-run.
   const firstPoll = poll();
+  try {
+    await restorePendingRecoveryMaterials();
+  } catch (error) {
+    notify(error.message, true);
+  }
   if (!ctx.desktop || ctx.desktop.preferences?.onboardingCompleted) return;
   await firstPoll;
   if (ctx.status?.summary?.session?.has_token) return;

@@ -62,7 +62,7 @@ Every outbound request (update manifests, GitHub release metadata and assets, mo
 
 1. `HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY`, plus lowercase spellings, and `ALL_PROXY` as a fallback for a missing scheme. Any of these present means the environment wins, which keeps terminal and CI launches explicit.
 2. Otherwise the operating system proxy: `scutil --proxy` on macOS (System Settings → Network → Proxies, including its bypass list) and the per-user `Internet Settings` registry key on Windows (`ProxyEnable`, `ProxyServer`, `ProxyOverride`). Linux has no portable system-proxy API, so it stops at step 1; use the environment variables there.
-3. Loopback, `localhost` and `NO_PROXY` / `ProxyOverride` entries never use a proxy. A PAC (`ProxyAutoConfig`) setting is not evaluated: the client stays direct and says so in Settings → Network.
+3. Loopback, `localhost` and `NO_PROXY` / `ProxyOverride` entries never use a proxy. When the client cannot resolve an active PAC setting, outbound requests fail explicitly. Choose an explicit proxy or select direct mode in Settings → Network.
 
 The `proxyMode` preference switches between `system` (steps 1–2) and `direct` (no proxy at all). Settings → Network shows the active source, proxy addresses and bypass list. Proxy URLs are reported without embedded credentials. The `--headless proxy` action prints the same information for diagnostics.
 

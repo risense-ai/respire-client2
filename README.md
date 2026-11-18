@@ -4,6 +4,11 @@ English | [简体中文](README.zh-CN.md)
 
 A desktop client built with Wails v3 and Go for Windows, macOS and Linux. It replaces the desktop application in `risense-ai/respire-client`. The CLI, TUI, hosted dashboard and existing user data remain independent.
 
+See [component boundaries](docs/component-boundaries.md) for host configuration,
+key ownership and release acceptance. The [Runtime24 and host DEV release goal](docs/runtime24-host-release-goal.md)
+records the authorized core-only configuration interface work and Client2's baseline,
+receipt UI and public-asset verification tasks. Runtime23 remains the published baseline until Runtime24 is verified.
+
 Download the asset matching your OS and architecture from [Releases](https://github.com/risense-ai/respire-client2/releases). Keep the extracted application in a writable, permanent folder. Windows uses one EXE and requires Microsoft Edge WebView2. On Apple Silicon, drag `Respire.app` from `respire-darwin-arm64.dmg` to Applications. Linux uses a tarball containing one executable and requires GTK 3, WebKitGTK 4.1 and X11 libraries. No Node.js, Go, npm or Rust installation is needed by the end user. Desktop packages contain no CLI, Runtime, Core or model weights. At first use, missing components download independently from the selected channel with metadata and SHA-256 verification; this requires network access. If no client-managed CLI exists, the application can recognize an external CLI at `<root>/bin/rsrs[.exe]`, including an npm installation.
 
 Windows offers a per-user `respire-windows-<arch>-setup.exe` installer alongside the portable EXE. It installs only the application under LocalAppData without requesting elevation and optionally adds the user CLI directory to PATH. Removing the application preserves user databases, identity, CLI, Runtime and receipts under `~/.rsrs`. Desktop builds do not require a CLI or Runtime release; component installation retains the existing ownership, activity, compatibility, hash and receipt checks.

@@ -75,8 +75,8 @@ func TestParseScutilProxyDisabledAndPAC(t *testing.T) {
 		t.Fatalf("disabled proxies must resolve to direct, got %+v", disabled)
 	}
 	pac := parseScutilProxy("<dictionary> {\n  ProxyAutoConfigEnable : 1\n  ProxyAutoConfigURLString : http://wpad/proxy.pac\n}")
-	if pac.Source != proxySourceDirect || pac.Note == "" {
-		t.Fatalf("PAC must stay direct with an explanation, got %+v", pac)
+	if pac.Source != proxySourceUnavailable || pac.Note == "" {
+		t.Fatalf("PAC must report unavailable, got %+v", pac)
 	}
 }
 
@@ -101,8 +101,8 @@ func TestWindowsSystemProxyParsing(t *testing.T) {
 		t.Fatalf("SOCKS-only setting failed: %+v", cfg)
 	}
 	pac := windowsSystemProxy(true, "proxy.example:8080", "", "http://wpad/proxy.pac")
-	if pac.Source != proxySourceDirect || pac.Note == "" {
-		t.Fatalf("PAC must stay direct with an explanation, got %+v", pac)
+	if pac.Source != proxySourceUnavailable || pac.Note == "" {
+		t.Fatalf("PAC must report unavailable, got %+v", pac)
 	}
 }
 
@@ -257,7 +257,10 @@ func TestProxyEnvOnlyFillsMissingVariables(t *testing.T) {
 	for _, name := range []string{"HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy", "ALL_PROXY", "all_proxy", "NO_PROXY", "no_proxy"} {
 		t.Setenv(name, "")
 	}
-	env := m.ProxyEnv([]string{"PATH=/usr/bin", "https_proxy=http://explicit:1"})
+	env, err := m.ProxyEnv([]string{"PATH=/usr/bin", "https_proxy=http://explicit:1"})
+	if err != nil {
+		t.Fatal(err)
+	}
 	joined := map[string]string{}
 	for _, item := range env {
 		key, value, _ := cutEnv(item)
@@ -270,8 +273,8 @@ func TestProxyEnvOnlyFillsMissingVariables(t *testing.T) {
 		t.Fatalf("system proxy must be injected when unset, got %v", joined)
 	}
 	m.prefs.ProxyMode = ProxyModeDirect
-	if got := m.ProxyEnv([]string{"PATH=/usr/bin"}); len(got) != 1 {
-		t.Fatalf("direct mode must not inject proxy variables, got %v", got)
+	if got, err := m.ProxyEnv([]string{"PATH=/usr/bin", "HTTPS_PROXY=http://explicit:1"}); err != nil || len(got) != 1 || got[0] != "PATH=/usr/bin" {
+		t.Fatalf("direct mode must remove inherited proxy variables, got %v (%v)", got, err)
 	}
 }
 

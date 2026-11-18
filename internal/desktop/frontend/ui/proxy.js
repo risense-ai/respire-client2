@@ -9,6 +9,7 @@ const sourceNames = {
   system: "系统代理",
   direct: "未配置代理",
   off: "代理已关闭",
+  unavailable: "系统代理不可用",
 };
 
 export function proxyRows(proxy) {

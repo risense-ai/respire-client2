@@ -3,6 +3,7 @@ package desktop
 import (
 	"context"
 	"embed"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -229,10 +230,12 @@ func hasArg(arg string) bool {
 	return false
 }
 
-func (d *desktop) task(stage string, action func() error) {
-	if err := d.m.RunTask(stage, action); err != nil {
+func (d *desktop) task(stage string, action func() error) error {
+	err := d.m.RunTask(stage, action)
+	if err != nil {
 		log.Printf("%s: %v", stage, err)
 	}
+	return err
 }
 
 func (d *desktop) restartClient() error {
@@ -268,30 +271,85 @@ func updateInterval(value string) time.Duration {
 	}
 }
 
+func installRuntimeForStartup(m interface {
+	InstallRuntime(bool, bool) error
+	Health(context.Context) (host.HealthInfo, json.RawMessage, error)
+	Start() error
+}, restart bool) error {
+	if err := m.InstallRuntime(false, restart); err != nil {
+		return err
+	}
+	if restart {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	_, _, err := m.Health(ctx)
+	cancel()
+	if host.IsUnavailable(err) {
+		return m.Start()
+	}
+	return err
+}
+
+func updateRuntimeForBackground(ctx context.Context, m interface {
+	RunTask(string, func() error) error
+	InstallRuntime(bool, bool) error
+	RequireCoreConfigHost(context.Context) error
+	Health(context.Context) (host.HealthInfo, json.RawMessage, error)
+	Owns(string) bool
+}, preparationErr error, restart bool) error {
+	if preparationErr != nil {
+		return preparationErr
+	}
+	healthCtx, healthCancel := context.WithTimeout(ctx, 3*time.Second)
+	h, _, err := m.Health(healthCtx)
+	healthCancel()
+	if err != nil || !m.Owns(h.Exe) {
+		return nil
+	}
+	return m.RunTask("检查 Runtime 更新", func() error {
+		if err := m.RequireCoreConfigHost(ctx); err != nil {
+			return err
+		}
+		if err := m.InstallRuntime(true, restart); err != nil {
+			return err
+		}
+		return m.RequireCoreConfigHost(ctx)
+	})
+}
+
 func (d *desktop) background() {
-	if d.m.Preferences().AutoRuntime {
-		d.task("连接 Runtime", func() error {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() {
+		select {
+		case <-d.closing:
+			cancel()
+		case <-ctx.Done():
+		}
+	}()
+	startupPreparationErr := d.task("准备 CLI / 连接 Runtime", func() error {
+		if d.m.Preferences().AutoRuntime {
 			if err := d.m.MigrateRuntime(); err != nil {
 				return err
 			}
-			prefs := d.m.Preferences()
-			if info, err := d.m.Installed(); err == nil && prefs.RuntimeAutoUpdate && semver.Compare("v"+info.Version, "v2.0.0-dev.16") < 0 {
-				return d.m.InstallRuntime(false, prefs.RuntimeAutoRestart)
-			}
-			err := d.m.Start()
-			if err != nil {
-				if _, readErr := d.m.Installed(); readErr == nil || errors.Is(readErr, os.ErrNotExist) {
-					ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-					_, _, healthErr := d.m.Health(ctx)
-					cancel()
-					if host.IsUnavailable(healthErr) {
-						return d.m.InstallRuntime(false, d.m.Preferences().RuntimeAutoRestart)
-					}
-				}
-			}
+		}
+		if err := d.m.EnsureCoreConfigHost(ctx); err != nil {
 			return err
-		})
-	}
+		}
+		if !d.m.Preferences().AutoRuntime {
+			return nil
+		}
+		prefs := d.m.Preferences()
+		if info, err := d.m.Installed(); err == nil && prefs.RuntimeAutoUpdate && semver.Compare("v"+info.Version, "v2.0.0-dev.24") < 0 {
+			return installRuntimeForStartup(d.m, prefs.RuntimeAutoRestart)
+		}
+		err := d.m.Start()
+		if errors.Is(err, host.ErrRuntimeNotInstalled) {
+			return installRuntimeForStartup(d.m, d.m.Preferences().RuntimeAutoRestart)
+		}
+		return err
+	})
 	// Client and Runtime update on their own cadences (update page); a staged
 	// client update re-checks every minute so it applies once operations end.
 	var lastClient, lastRuntime time.Time
@@ -322,22 +380,11 @@ func (d *desktop) background() {
 				}
 			}
 		}
-		if prefs.RuntimeAutoUpdate &&
+		if startupPreparationErr == nil && prefs.RuntimeAutoUpdate &&
 			(lastRuntime.IsZero() || now.Sub(lastRuntime) >= updateInterval(prefs.RuntimeUpdateInterval)) {
 			lastRuntime = now
-			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-			h, _, err := d.m.Health(ctx)
-			cancel()
-			if err == nil && d.m.Owns(h.Exe) {
-				d.task("检查 Runtime 更新", func() error {
-					// The restart switch decides whether the running instance
-					// is gracefully rotated onto the new version directory.
-					restart := d.m.Preferences().RuntimeAutoRestart
-					if err := d.m.InstallRuntime(true, restart); err != nil {
-						return d.m.InstallRuntime(false, restart)
-					}
-					return nil
-				})
+			if err := updateRuntimeForBackground(ctx, d.m, startupPreparationErr, d.m.Preferences().RuntimeAutoRestart); err != nil {
+				log.Printf("Runtime 自动更新失败: %v", err)
 			}
 		}
 		delay := 30 * time.Second
