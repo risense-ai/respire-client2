@@ -58,8 +58,7 @@ jobs:
         run: python3 scripts/desktop-candidate.py inputs
   lint:
     name: lint
-    runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
