@@ -49,6 +49,7 @@ type rpcResponse struct {
 	V           int             `json:"v"`
 	ID          string          `json:"id"`
 	OK          bool            `json:"ok"`
+	Exit        int             `json:"exit"`
 	Error       string          `json:"error"`
 	Code        string          `json:"code"`
 	Envelope    json.RawMessage `json:"envelope"`
@@ -151,7 +152,35 @@ func (m *Manager) Acknowledge(id string) error {
 }
 
 func (m *Manager) RuntimeStatus(ctx context.Context) (json.RawMessage, error) {
-	return m.executeRPC(ctx, "cli.exec", []string{"--json", "status"}, "status-"+fmt.Sprint(time.Now().UnixNano()))
+	scope, err := m.requestScope(ctx)
+	if err != nil {
+		return nil, err
+	}
+	id := "status-" + fmt.Sprint(time.Now().UnixNano())
+	reply, err := m.rpcResponse(ctx, "cli.exec", []string{"--json", "status"}, id, scope)
+	if err != nil {
+		return m.inspectResult(ctx, id, scope, err)
+	}
+	if reply.Scope == nil || *reply.Scope != *scope || reply.OperationID != id {
+		return nil, &unconfirmedError{id, errors.New("Runtime 业务回复作用域或操作 ID 与原请求不匹配，请查询原请求")}
+	}
+	var status struct {
+		Command string `json:"command"`
+		Status  string `json:"status"`
+		Summary struct {
+			CredentialState string `json:"credential_state"`
+			StoreReady      *bool  `json:"store_ready"`
+		} `json:"summary"`
+		Errors []string `json:"errors"`
+	}
+	// A locked store is a valid read-only status, but other RPC warnings still fail.
+	if !reply.OK && reply.Exit == 2 && reply.Code == "" && reply.Error == "" &&
+		json.Unmarshal(reply.Envelope, &status) == nil && status.Command == "status" &&
+		status.Status == "warn" && status.Summary.CredentialState == "required" &&
+		status.Summary.StoreReady != nil && !*status.Summary.StoreReady && len(status.Errors) == 0 {
+		return reply.Envelope, nil
+	}
+	return reply.Envelope, responseError(reply)
 }
 
 func (m *Manager) Submit(name, id string, raw json.RawMessage, confirmed bool, secret string) (Operation, error) {
