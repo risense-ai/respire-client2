@@ -161,8 +161,14 @@ try {
     $desktop = Start-Child $clientPath @('--tray')
     $deadline = [Diagnostics.Stopwatch]::StartNew()
     $report.runtime_observations = @()
+    $report.health_probe_timeouts = 0
     do {
         try { $health = Health } catch [Net.Http.HttpRequestException] { $health = $null }
+        catch [Threading.Tasks.TaskCanceledException] {
+            if ($_.Exception.InnerException -isnot [TimeoutException]) { throw }
+            $report.health_probe_timeouts++
+            $health = $null
+        }
         if ($health) {
             $report.runtime_observations += @{pid=$health.pid; store_ready=$health.store_ready; credential_state=$(if ($health.credential_state -cin @('required','available')) { $health.credential_state } else { 'other' })}
             $runtimeActor = Assert-Actor $health
