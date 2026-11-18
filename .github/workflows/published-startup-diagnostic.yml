@@ -16,6 +16,10 @@ on:
         description: 'Existing Windows CLI artifact run ID (no build is triggered)'
         required: true
         type: string
+      cli_version:
+        description: 'Exact CLI DEV version, without v'
+        default: '2.0.0-dev.19'
+        type: string
       cli_run_attempt:
         description: 'Attempt that produced the CLI artifact'
         required: true
@@ -26,8 +30,12 @@ on:
         required: true
         type: string
       client2_run_id:
-        description: 'Successful sealed dev17 Desktop producer run ID'
+        description: 'Successful sealed Desktop producer run ID'
         required: true
+        type: string
+      client2_version:
+        description: 'Exact Client2 DEV version, without v'
+        default: '2.0.0-dev.17'
         type: string
       client2_run_attempt:
         description: 'Attempt that sealed the Desktop candidate'
@@ -35,7 +43,7 @@ on:
         default: '1'
         type: string
       client2_source_sha:
-        description: 'Full source SHA of the sealed dev17 candidate'
+        description: 'Full source SHA of the sealed Desktop candidate'
         required: true
         type: string
 permissions:
@@ -50,7 +58,8 @@ jobs:
       INPUT_RUN_ID: ${{ inputs.client2_run_id }}
       INPUT_ATTEMPT: ${{ inputs.client2_run_attempt }}
       CANDIDATE_SOURCE: ${{ inputs.client2_source_sha }}
-      CANDIDATE_VERSION: '2.0.0-dev.17'
+      CANDIDATE_VERSION: ${{ inputs.client2_version }}
+      CLI_VERSION: ${{ inputs.cli_version }}
       CLIENT2_SOURCE_SHA: ${{ inputs.client2_source_sha }}
       CLI_READER_REF: ${{ inputs.cli_reader_ref }}
     steps:
@@ -94,7 +103,8 @@ jobs:
           $ErrorActionPreference = 'Stop'
           if ($env:CLI_RUN_ID -cnotmatch '^[1-9][0-9]*$' -or $env:CLI_RUN_ATTEMPT -cnotmatch '^[1-9][0-9]*$' -or
               $env:CLI_SOURCE_SHA -cnotmatch '^[0-9a-f]{40}$' -or $env:CLIENT2_SOURCE_SHA -cnotmatch '^[0-9a-f]{40}$' -or
-              $env:INPUT_RUN_ID -cnotmatch '^[1-9][0-9]*$' -or $env:INPUT_ATTEMPT -cnotmatch '^[1-9][0-9]*$') {
+              $env:INPUT_RUN_ID -cnotmatch '^[1-9][0-9]*$' -or $env:INPUT_ATTEMPT -cnotmatch '^[1-9][0-9]*$' -or
+              $env:CLI_VERSION -cnotmatch '^2\.0\.0-dev\.[1-9][0-9]*$' -or $env:CANDIDATE_VERSION -cnotmatch '^2\.0\.0-dev\.[1-9][0-9]*$') {
             throw 'Require exact producer runs, attempts and source SHAs'
           }
           if (Test-Path Env:RSRS_CORE_TEST_MODE) { throw 'Core test mode is forbidden for real startup acceptance' }
@@ -128,7 +138,7 @@ jobs:
           $cliBuild = Get-Content "$assets/cli/cli-build-x86_64-pc-windows-msvc.json" -Raw | ConvertFrom-Json
           $cliFile = Get-Item "$assets/cli/rsrs-x86_64-pc-windows-msvc.exe"
           if ($cliBuild.schema_version -ne 2 -or $cliBuild.artifact_layout -cne 'cli-frontend-v2' -or
-              $cliBuild.version -cne '2.0.0-dev.19' -or
+              $cliBuild.version -cne $env:CLI_VERSION -or
               $cliBuild.git_sha -cne $env:CLI_SOURCE_SHA -or $cliBuild.target -cne 'x86_64-pc-windows-msvc' -or
               $cliBuild.binary_file -cne $cliFile.Name -or $cliBuild.binary_size -ne $cliFile.Length -or
               $cliBuild.producer.run_id -ne $env:CLI_RUN_ID -or $cliBuild.producer.run_attempt -ne $env:CLI_RUN_ATTEMPT -or
@@ -192,7 +202,7 @@ jobs:
           const runtimeRuns=pages(`repos/risense-ai/respire-runtime/actions/workflows/release.yml/runs?head_sha=${proof.runtime.source_sha}&per_page=100`)
             .flatMap(p=>p.workflow_runs).filter(r=>r.head_sha===proof.runtime.source_sha&&r.path==='.github/workflows/release.yml'&&r.status==='completed'&&r.conclusion==='success');
           assert.equal(runtimeRuns.length,1,'Require the exact public Runtime producer');
-          const spec={schema:2,cli:publicPart('cli','2.0.0-dev.19',proof.cli.git_sha,{run_id:Number(proof.cli.producer.run_id),run_attempt:Number(proof.cli.producer.run_attempt)}),
+          const spec={schema:2,cli:publicPart('cli',e.CLI_VERSION,proof.cli.git_sha,{run_id:Number(proof.cli.producer.run_id),run_attempt:Number(proof.cli.producer.run_attempt)}),
             runtime:publicPart('runtime','2.0.0-dev.24',proof.runtime.source_sha,{run_id:runtimeRuns[0].id,run_attempt:runtimeRuns[0].run_attempt})};
           const text=JSON.stringify(spec),hash=sha(text);parsePublishedAssets(text,hash,targets);
           const expected=(part,name)=>part.assets.find(a=>a.name===name);
@@ -203,9 +213,10 @@ jobs:
           writeFileSync(join(root,'published-assets.json'),text);
           const receipt=await verifyPublishedTarget(spec,target,join(root,'reference'),hash,{token:e.GH_TOKEN});
           assert.equal(receipt.assets_verified,true);assert.equal(receipt.payloads_verified,true);assert.equal(receipt.full_passed,false);
-          const client=api('repos/risense-ai/respire-client2/releases/tags/v2.0.0-dev.17');
-          assert.equal(client.draft,false);assert.ok(client.published_at);assert.equal(client.tag_name,'v2.0.0-dev.17');
-          assert.equal(api('repos/risense-ai/respire-client2/commits/v2.0.0-dev.17').sha,proof.client2.source_sha);
+          const clientTag='v'+e.CANDIDATE_VERSION;
+          const client=api('repos/risense-ai/respire-client2/releases/tags/'+clientTag);
+          assert.equal(client.draft,false);assert.ok(client.published_at);assert.equal(client.tag_name,clientTag);
+          assert.equal(api('repos/risense-ai/respire-client2/commits/'+clientTag).sha,proof.client2.source_sha);
           const matches=client.assets.filter(a=>a.name==='respire-windows-amd64.exe');assert.equal(matches.length,1);
           const clientAsset=matches[0];assert.equal(clientAsset.state,'uploaded');assert.equal(clientAsset.digest,'sha256:'+proof.client2.sha256);
           mkdirSync(join(root,'client'));
@@ -214,7 +225,7 @@ jobs:
           const runtimeMetadata=join(root,'reference','runtime',`runtime-build-${target}.json`);
           const inputs={schema:1,scope:'latest-default-online-install-diagnostic',diagnostic_only:true,full_passed:false,
             harness_sha:e.GITHUB_SHA,reader_sha:e.CLI_READER_REF,published_assets_sha256:hash,cli:spec.cli,runtime:spec.runtime,
-            client2:{release_id:client.id,version:'2.0.0-dev.17',source_sha:proof.client2.source_sha,asset_id:clientAsset.id,sha256:proof.client2.sha256},
+            client2:{release_id:client.id,version:e.CANDIDATE_VERSION,source_sha:proof.client2.source_sha,asset_id:clientAsset.id,sha256:proof.client2.sha256},
             payload_identity:receipt.payload_identity,runtime_metadata_path:runtimeMetadata,runtime_metadata_sha256:sha(readFileSync(runtimeMetadata))};
           writeFileSync(join(root,'online-inputs.json'),JSON.stringify(inputs,null,2));
           NODE
