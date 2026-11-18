@@ -25,6 +25,8 @@ export const MODEL_OPTIONS = [
   ["m3", "BGE-M3 · 1024 维 · 多语（默认）"],
   ["bge-base-zh-v1.5", "BGE-base-zh-v1.5 · 768 维 · 中文"],
   ["bge-m3-distill-8l", "BGE-M3-Distill-8L · 1024 维 · 轻量多语"],
+  ["granite-311m-r2", "Granite 311M R2 · 768 维 · 量化"],
+  ["granite-97m-r2", "Granite 97M R2 · 384 维"],
 ];
 
 export const MODEL_HINTS = {
@@ -33,6 +35,8 @@ export const MODEL_HINTS = {
     "BGE-base-zh-v1.5 权重按需下载（多线程并行，约 80–200 MiB/个）。下载 quantized 权重与分词器后，可在下方选择推理方式切换使用：Runtime 会注册模型档案、加载并运行真实推理验证，失败自动回退。",
   "bge-m3-distill-8l":
     "BGE-M3-Distill-8L 权重按需下载（多线程并行，约 0.3–1.1 GiB/个）。下载 quantized 权重与分词器后，可在下方选择推理方式切换使用：Runtime 会注册模型档案、加载并运行真实推理验证，失败自动回退。",
+  "granite-311m-r2": "下载量化权重和分词器，使用 CPU 运行。",
+  "granite-97m-r2": "下载原始权重和分词器，使用 CPU 运行。",
 };
 
 // Wizard card copy: positioning only; download sizes come from the live
@@ -53,7 +57,12 @@ export const MODEL_CARDS = [
     title: "BGE-M3-Distill-8L",
     detail: "多语 · 1024 维 · 较轻量，适合资源受限设备",
   },
+  { id: "granite-311m-r2", title: "Granite 311M R2", detail: "多语 · 768 维 · 量化" },
+  { id: "granite-97m-r2", title: "Granite 97M R2", detail: "多语 · 384 维 · 原始权重" },
 ];
+
+export const graniteVariant = (model) =>
+  ({ "granite-311m-r2": "quantized", "granite-97m-r2": "standard" })[model];
 
 // Weight per device: CPU stays quantized; GPU/NPU prefer fp16.
 export const DEVICE_VARIANTS = { cpu: "quantized", gpu: "fp16", npu: "fp16" };

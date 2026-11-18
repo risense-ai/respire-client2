@@ -23,7 +23,10 @@ type modelDefinition struct {
 	Dimensions  int
 	MaxTokens   int
 	QueryPrefix string
-	Tokenizer   modelFileSpec
+	// Granite exports a single pinned ONNX file with no token_type_ids input.
+	GraniteWeightsPath string
+	PadTokenID         int
+	Tokenizer          modelFileSpec
 	// Variants in display order; profile models activate quantized.
 	Variants []modelVariantFile
 	// Hashes keyed by variant name.
@@ -34,6 +37,22 @@ type modelDefinition struct {
 }
 
 var modelCatalog = []modelDefinition{
+	{
+		ID: "granite-311m-r2", Label: "Granite 311M R2 · 768 维 · 量化",
+		Repo: "ibm-granite/granite-embedding-311m-multilingual-r2", Revision: "44399559930365213510b1ee2eb15ded83374f0e",
+		Dimensions: 768, MaxTokens: 32768, GraniteWeightsPath: "onnx/model_quint8_avx2.onnx",
+		Tokenizer: modelFileSpec{rel: "tokenizer.json", sha256: "0087c868b33bad550a78a08d19798cfd7f713cde4f020803b8f51f405503e15f", size: 33384821},
+		Variants:  []modelVariantFile{{"quantized", 313421909}},
+		Hashes:    map[string]string{"quantized": "f1fdd44e7e1ac51f12ab7957c7bd092e064d596c288513bf9d326842f669edee"},
+	},
+	{
+		ID: "granite-97m-r2", Label: "Granite 97M R2 · 384 维",
+		Repo: "ibm-granite/granite-embedding-97m-multilingual-r2", Revision: "835ad14087e140460703cf0fae09f97d469d65c2",
+		Dimensions: 384, MaxTokens: 32768, GraniteWeightsPath: "onnx/model.onnx", PadTokenID: 179935,
+		Tokenizer: modelFileSpec{rel: "tokenizer.json", sha256: "4f2842d568e2724370aec203652a42ac783c7937f8347a1a2cc7506d71f1582f", size: 25301672},
+		Variants:  []modelVariantFile{{"standard", 390004608}},
+		Hashes:    map[string]string{"standard": "68e592b160673d30250824c1116bc6ab33f70efb22b97c9e1d7ce1e69c1c9d70"},
+	},
 	{
 		ID: "m3", Label: "BGE-M3 · 1024 维 · 多语",
 		Repo: "Xenova/bge-m3", Revision: modelRevision,
@@ -111,6 +130,13 @@ func (m *Manager) ProfileDir(model string) string {
 	return filepath.Join(m.DataRoot, "models", model)
 }
 
+func (definition modelDefinition) weightPath(variant string) string {
+	if definition.GraniteWeightsPath != "" {
+		return filepath.FromSlash(definition.GraniteWeightsPath)
+	}
+	return variantFileName(variant)
+}
+
 // modelFileSpecFor returns the download spec for one variant of a model.
 func (definition modelDefinition) modelFileSpecFor(variant string) (modelFileSpec, error) {
 	hash, ok := definition.Hashes[variant]
@@ -119,7 +145,7 @@ func (definition modelDefinition) modelFileSpecFor(variant string) (modelFileSpe
 	}
 	for _, candidate := range definition.Variants {
 		if candidate.Name == variant {
-			return modelFileSpec{rel: variantFileName(variant), sha256: hash, size: candidate.Size}, nil
+			return modelFileSpec{rel: definition.weightPath(variant), sha256: hash, size: candidate.Size}, nil
 		}
 	}
 	return modelFileSpec{}, errors.New("未知模型文件: " + variant)
@@ -134,6 +160,12 @@ func (definition modelDefinition) ConfigurePayload(variant, weightsPath string) 
 	if err != nil {
 		return "", err
 	}
+	onnx := map[string]string{
+		"input_ids": "input_ids", "attention_mask": "attention_mask", "output": "last_hidden_state",
+	}
+	if definition.GraniteWeightsPath == "" {
+		onnx["token_type_ids"] = "token_type_ids"
+	}
 	payload := map[string]any{
 		"model_profile": map[string]any{
 			"id": definition.ID,
@@ -146,15 +178,10 @@ func (definition modelDefinition) ConfigurePayload(variant, weightsPath string) 
 				"normalize":         true,
 				"query_prefix":      definition.QueryPrefix,
 				"document_prefix":   "",
-				"pad_token_id":      0,
+				"pad_token_id":      definition.PadTokenID,
 				"pad_to_max_tokens": false,
 			},
-			"onnx": map[string]any{
-				"input_ids":      "input_ids",
-				"attention_mask": "attention_mask",
-				"token_type_ids": "token_type_ids",
-				"output":         "last_hidden_state",
-			},
+			"onnx": onnx,
 			"weights": map[string]any{
 				"path": weightsPath, "size": weights.size, "sha256": weights.sha256,
 			},
@@ -236,9 +263,9 @@ func (m *Manager) ModelConfigure(ctx context.Context, model, variant string) err
 		return err
 	}
 	if variant == "" {
-		variant = "quantized"
+		variant = definition.Variants[0].Name
 	}
-	payload, err := definition.ConfigurePayload(variant, filepath.Join(m.ProfileDir(model), variantFileName(variant)))
+	payload, err := definition.ConfigurePayload(variant, filepath.Join(m.ProfileDir(model), definition.weightPath(variant)))
 	if err != nil {
 		return err
 	}
@@ -251,15 +278,24 @@ func (m *Manager) ModelSwitch(ctx context.Context, model, engine, variant string
 	if err := m.ensureRuntimeFeature(ctx, minProfileRuntimeVersion, "切换模型档案"); err != nil {
 		return err
 	}
-	if _, err := modelDefinitionByID(model); err != nil {
+	definition, err := modelDefinitionByID(model)
+	if err != nil {
 		return err
 	}
 	if variant == "" {
-		variant = "quantized"
+		variant = definition.Variants[0].Name
 	}
-	selection, err := json.Marshal(map[string]any{
+	if _, err := definition.modelFileSpecFor(variant); err != nil {
+		return err
+	}
+	choice := map[string]any{
 		"model": model, "backend": "onnx", "engine": engine, "variant": variant,
-	})
+	}
+	if definition.GraniteWeightsPath != "" {
+		// Runtime takes the exact weights path from the registered profile.
+		delete(choice, "variant")
+	}
+	selection, err := json.Marshal(choice)
 	if err != nil {
 		return err
 	}

@@ -22,6 +22,7 @@ import { recallChecks } from "./recall.js";
 import {
   MIRROR_OPTIONS,
   MODEL_OPTIONS,
+  graniteVariant,
   MODEL_HINTS,
   MODEL_MODES,
   isProfileModel,
@@ -353,10 +354,12 @@ export function models(root, ctx) {
   function modelTaskBusy(task) {
     return (
       Boolean(task?.busy) &&
-      /model_[a-z0-9]+\.onnx|tokenizer\.json/.test(String(task.stage || ""))
+      /model(?:_[a-z0-9_]+)?\.onnx|tokenizer\.json/.test(String(task.stage || ""))
     );
   }
   function currentMode() {
+    const fixed = graniteVariant(modelID);
+    if (fixed) return { ...MODEL_MODES[1], variant: fixed, title: "CPU" };
     return (
       MODEL_MODES.find((mode) => mode.id === selectedMode) || MODEL_MODES[1]
     );
@@ -406,7 +409,8 @@ export function models(root, ctx) {
     const node = $("[data-mode-selector]", root);
     if (!node) return;
     const accel = performanceAvailable(ctx.desktop?.platform);
-    node.innerHTML = MODEL_MODES.map((mode) => {
+    const modes = graniteVariant(modelID) ? [currentMode()] : MODEL_MODES;
+    node.innerHTML = modes.map((mode) => {
       const variant = modeVariant(mode);
       const subtitle = variant?.size ? "≈ " + bytes(variant.size) : mode.subtitle;
       const noAccel = mode.requiresGPU && !accel;
@@ -808,7 +812,7 @@ export function models(root, ctx) {
             }
             engineState = {
               engine: active.engine || "cpu",
-              model: active.variant || "quantized",
+              model: active.variant || graniteVariant(active.model) || "quantized",
             };
           }
         }
@@ -897,7 +901,7 @@ export function models(root, ctx) {
     if (active?.model === modelID) {
       engineState = {
         engine: active.engine || "cpu",
-        model: active.variant || switchingVariant || "quantized",
+        model: active.variant || graniteVariant(active.model) || switchingVariant || "quantized",
       };
     }
     if (root.isConnected) {
