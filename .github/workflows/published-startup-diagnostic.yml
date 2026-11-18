@@ -61,11 +61,11 @@ jobs:
               version = json.load(stream)
           assert version["platform"] == os.environ["TARGET"] and version["version"] == "2.0.0-dev.18"
           system = read("system")
-          assert system["mode"] == "system" and system["source"] in ("direct", "system", "unsupported")
+          assert system["mode"] == "system" and system["source"] in ("direct", "system")
           environment = read("environment")
           assert environment["source"] == "environment" and environment["https"] == os.environ["HTTPS_PROXY"]
           direct = read("direct")
-          assert direct["mode"] == "direct" and direct["source"] == "direct" and not direct.get("https")
+          assert direct["mode"] == "direct" and direct["source"] == "off" and not direct.get("https")
           print("Native candidate proxy outcomes verified for " + os.environ["TARGET"])
           PY
           go test ./internal/host -run 'Proxy|Scutil' -count=1
