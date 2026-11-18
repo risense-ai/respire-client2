@@ -7,8 +7,8 @@
 
 ## 授权和职责
 
-当前已发布基线为 Runtime `v2.0.0-dev.23`。本轮授权发布 `v2.0.0-dev.24`，
-只补核心配置候选验证、运行态应用及真实状态回执；不修改 Core SDK 或数据库格式。
+当前已发布基线为 Runtime `v2.0.0-dev.24`。本轮只补核心配置候选验证、
+运行态应用及真实状态回执，沿用既有 Core SDK 和数据库格式。
 Runtime24 接收宿主传入的候选，不接管宿主配置文件、钥匙串或下载与进程维护。
 
 Core 负责底层存储、加密、模型执行及记忆算法。Runtime 负责核心登录、同步、数据库生命周期、
@@ -39,6 +39,10 @@ recall、remember 及 RPC/MCP。CLI 与 Client2 负责组件和模型下载、�
 格式未变的 DEV 不增加组合。不要求保留历史会话、凭据位置或派生索引。
 
 ## 状态边界
+
+Client2 `v2.0.0-dev.17`、CLI `v2.0.0-dev.19` 已公开。公开 Client2 在
+Windows x64 全新配置下以默认渠道安装 CLI 和 Runtime，已核对安装文件。
+[公开安装验收](https://github.com/risense-ai/respire-client2/actions/runs/44334942943)
 
 Client2 PR50 已合并为诊断设施；它不修复 CLI 插件宿主通道寿命，也不证明真实启动已通过。
 后续启动复验必须使用包含该生产修复的新 CLI 候选。Runtime24 和 Client2 新 DEV 的发布、
