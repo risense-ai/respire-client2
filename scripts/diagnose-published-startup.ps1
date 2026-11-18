@@ -3,13 +3,14 @@ param(
     [Parameter(Mandatory)][string]$Client,
     [Parameter(Mandatory)][string]$RuntimeArchive,
     [Parameter(Mandatory)][string]$ModelDirectory,
-    [ValidateSet('2.0.0-dev.23','2.0.0-dev.24')][string]$RuntimeVersion = '2.0.0-dev.24',
+    [ValidateSet('2.0.0-dev.24')][string]$RuntimeVersion = '2.0.0-dev.24',
     [Parameter(Mandatory)][string]$OutputDirectory
 )
 $ErrorActionPreference = 'Stop'
 if ($env:GITHUB_ACTIONS -cne 'true' -or $env:RUNNER_ENVIRONMENT -cne 'github-hosted' -or -not $IsWindows) {
     throw 'This diagnostic requires a fresh hosted Windows runner'
 }
+if (Test-Path Env:RSRS_CORE_TEST_MODE) { throw 'Core test mode is forbidden for real startup acceptance' }
 $root = [IO.Path]::GetFullPath($OutputDirectory)
 $temporary = [IO.Path]::GetFullPath($env:RUNNER_TEMP).TrimEnd('\') + '\'
 if (-not $root.StartsWith($temporary, [StringComparison]::OrdinalIgnoreCase) -or (Test-Path -LiteralPath $root)) {
@@ -47,10 +48,10 @@ $childEnvironment['RSRS_INSTANCE_ID'] = 'published-startup-' + [Guid]::NewGuid()
 $childEnvironment['RSRS_M3_DIR'] = (Resolve-Path -LiteralPath $ModelDirectory).Path
 $childEnvironment['RSRS_ENGINE'] = 'cpu'
 $childEnvironment['RSRS_CLIENT2_HOST'] = '1'
-$childEnvironment['RSRS_CORE_TEST_MODE'] = '1'
 $childEnvironment['RSRS_NO_AUTOSYNC'] = '1'
 $childEnvironment['RSRS_UPDATE_CHECK'] = '0'
-$report = [ordered]@{schema=1; scope='published Client2 existing-key startup diagnostic; not full GUI acceptance'; status='failed'; phase='prepare';
+$report = [ordered]@{schema=1; scope='sealed Client2 real-SDK existing-key startup diagnostic; not full GUI acceptance'; status='failed'; phase='prepare';
+    core_test_mode=$false;
     runtime_version=$RuntimeVersion; cli_sha256=(Get-FileHash $cliPath -Algorithm SHA256).Hash.ToLowerInvariant();
     client_sha256=(Get-FileHash $clientPath -Algorithm SHA256).Hash.ToLowerInvariant();
     initial_start=$false; normal_stop=$false; automatic_start=$false; automatic_key_handoff=$false; cleanup=$false}
