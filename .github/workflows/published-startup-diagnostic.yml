@@ -2,6 +2,16 @@ name: Sealed Client2 startup diagnostic
 on:
   workflow_dispatch:
     inputs:
+      scope:
+        description: 'Existing-key restart or fresh public default installation; diagnostics only'
+        required: true
+        default: existing-keys
+        type: choice
+        options: [existing-keys, default-online]
+      cli_reader_ref:
+        description: 'Default-online only: exact trusted CLI main reader SHA, separate from product source'
+        required: false
+        type: string
       cli_run_id:
         description: 'Existing Windows CLI artifact run ID (no build is triggered)'
         required: true
@@ -42,6 +52,7 @@ jobs:
       CANDIDATE_SOURCE: ${{ inputs.client2_source_sha }}
       CANDIDATE_VERSION: '2.0.0-dev.17'
       CLIENT2_SOURCE_SHA: ${{ inputs.client2_source_sha }}
+      CLI_READER_REF: ${{ inputs.cli_reader_ref }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -49,12 +60,29 @@ jobs:
       - uses: actions/checkout@v7
         with:
           repository: risense-ai/respire-cli
-          ref: ${{ inputs.cli_source_sha }}
+          ref: ${{ inputs.scope == 'default-online' && inputs.cli_reader_ref || inputs.cli_source_sha }}
+          fetch-depth: 0
           path: .cli
           persist-credentials: false
       - uses: actions/setup-python@v7
         with:
           python-version: '3.12'
+      - uses: actions/setup-node@v7
+        if: inputs.scope == 'default-online'
+        with:
+          node-version: '24'
+      - name: Require a trusted main reader before importing its code
+        if: inputs.scope == 'default-online'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ($env:GITHUB_REF -cne 'refs/heads/main' -or $env:CLI_READER_REF -cnotmatch '^[0-9a-f]{40}$') {
+            throw 'Default-online requires main dispatch and an explicit reader SHA'
+          }
+          $reader = git -C .cli rev-parse HEAD
+          if ($LASTEXITCODE -or $reader -cne $env:CLI_READER_REF) { throw 'Reader checkout differs' }
+          git -C .cli merge-base --is-ancestor $env:CLI_READER_REF origin/main
+          if ($LASTEXITCODE) { throw 'Reader is not a trusted main ancestor' }
       - name: Reuse and verify CLI producer, sealed Client2 and public Runtime24
         shell: pwsh
         env:
@@ -131,7 +159,67 @@ jobs:
               producer=$candidate.producer; artifact_id=$sealed.artifact_id; artifact_zip_digest=$sealed.artifact_zip_digest;
               manifest_sha256=(Get-FileHash "$assets/client/candidate.json" -Algorithm SHA256).Hash.ToLowerInvariant(); six_package_receipts_verified=$true}
           } | ConvertTo-Json -Depth 20 | Set-Content "$assets/input-proof.json" -Encoding utf8NoBOM
+      - name: Verify actual public latest assets with the selected trusted reader
+        if: inputs.scope == 'default-online'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict';
+          import {createHash} from 'node:crypto';
+          import {readFileSync,writeFileSync,mkdirSync} from 'node:fs';
+          import {join} from 'node:path';
+          import {execFileSync} from 'node:child_process';
+          import {parsePublishedAssets,publishedAssetNames,verifyPublishedTarget,downloadPublishedAsset} from './.cli/npm/scripts/extract-artifact.mjs';
+          const e=process.env,sha=b=>createHash('sha256').update(b).digest('hex');
+          const api=p=>JSON.parse(execFileSync('gh',['api',p],{encoding:'utf8'}));
+          const pages=p=>JSON.parse(execFileSync('gh',['api','--paginate','--slurp',p],{encoding:'utf8'}));
+          const assets=join(e.RUNNER_TEMP,'startup-assets'),proof=JSON.parse(readFileSync(join(assets,'input-proof.json')));
+          const target='x86_64-pc-windows-msvc',targets=JSON.parse(readFileSync('.cli/npm/artifact-manifest.json')).targets.map(t=>t.triple);
+          const publicPart=(kind,version,source,producer)=>{
+            const repository=`risense-ai/respire-${kind}`,release=api(`repos/${repository}/releases/tags/v${version}`);
+            assert.equal(release.draft,false);assert.ok(release.published_at);assert.equal(release.tag_name,`v${version}`);
+            const commit=api(`repos/${repository}/commits/v${version}`).sha;assert.equal(commit,source);
+            const inventory=pages(`repos/${repository}/releases/${release.id}/assets?per_page=100`).flat();
+            const selected=targets.flatMap(t=>publishedAssetNames(kind,t)).map(name=>{
+              const matches=inventory.filter(a=>a.name===name);assert.equal(matches.length,1);
+              const a=matches[0];assert.equal(a.state,'uploaded');assert.match(a.digest,/^sha256:[0-9a-f]{64}$/);
+              return {id:a.id,name,size:a.size,sha256:a.digest.slice(7)};
+            });
+            return {repository,release_id:release.id,version,source_sha:source,producer,assets:selected};
+          };
+          const runtimeRuns=pages(`repos/risense-ai/respire-runtime/actions/workflows/release.yml/runs?head_sha=${proof.runtime.source_sha}&per_page=100`)
+            .flatMap(p=>p.workflow_runs).filter(r=>r.head_sha===proof.runtime.source_sha&&r.path==='.github/workflows/release.yml'&&r.status==='completed'&&r.conclusion==='success');
+          assert.equal(runtimeRuns.length,1,'Require the exact public Runtime producer');
+          const spec={schema:2,cli:publicPart('cli','2.0.0-dev.19',proof.cli.git_sha,{run_id:Number(proof.cli.producer.run_id),run_attempt:Number(proof.cli.producer.run_attempt)}),
+            runtime:publicPart('runtime','2.0.0-dev.24',proof.runtime.source_sha,{run_id:runtimeRuns[0].id,run_attempt:runtimeRuns[0].run_attempt})};
+          const text=JSON.stringify(spec),hash=sha(text);parsePublishedAssets(text,hash,targets);
+          const expected=(part,name)=>part.assets.find(a=>a.name===name);
+          assert.equal(expected(spec.cli,proof.cli.binary_file).sha256,proof.cli.binary_sha256);
+          assert.equal(expected(spec.runtime,'rsrs-runtime-'+target+'.exe').sha256,proof.runtime.binary_sha256);
+          assert.equal(expected(spec.runtime,'rsrs-runtime-'+target+'.tar.gz').sha256,proof.runtime.archive_sha256);
+          const root=join(assets,'public-online');mkdirSync(root);
+          writeFileSync(join(root,'published-assets.json'),text);
+          const receipt=await verifyPublishedTarget(spec,target,join(root,'reference'),hash,{token:e.GH_TOKEN});
+          assert.equal(receipt.assets_verified,true);assert.equal(receipt.payloads_verified,true);assert.equal(receipt.full_passed,false);
+          const client=api('repos/risense-ai/respire-client2/releases/tags/v2.0.0-dev.17');
+          assert.equal(client.draft,false);assert.ok(client.published_at);assert.equal(client.tag_name,'v2.0.0-dev.17');
+          assert.equal(api('repos/risense-ai/respire-client2/commits/v2.0.0-dev.17').sha,proof.client2.source_sha);
+          const matches=client.assets.filter(a=>a.name==='respire-windows-amd64.exe');assert.equal(matches.length,1);
+          const clientAsset=matches[0];assert.equal(clientAsset.state,'uploaded');assert.equal(clientAsset.digest,'sha256:'+proof.client2.sha256);
+          mkdirSync(join(root,'client'));
+          await downloadPublishedAsset({repository:'risense-ai/respire-client2'},
+            {id:clientAsset.id,name:clientAsset.name,size:clientAsset.size,sha256:proof.client2.sha256},join(root,'client'),{token:e.GH_TOKEN});
+          const runtimeMetadata=join(root,'reference','runtime',`runtime-build-${target}.json`);
+          const inputs={schema:1,scope:'latest-default-online-install-diagnostic',diagnostic_only:true,full_passed:false,
+            harness_sha:e.GITHUB_SHA,reader_sha:e.CLI_READER_REF,published_assets_sha256:hash,cli:spec.cli,runtime:spec.runtime,
+            client2:{release_id:client.id,version:'2.0.0-dev.17',source_sha:proof.client2.source_sha,asset_id:clientAsset.id,sha256:proof.client2.sha256},
+            payload_identity:receipt.payload_identity,runtime_metadata_path:runtimeMetadata,runtime_metadata_sha256:sha(readFileSync(runtimeMetadata))};
+          writeFileSync(join(root,'online-inputs.json'),JSON.stringify(inputs,null,2));
+          NODE
       - name: Explicitly install the official public model and verify real CPU inference
+        if: inputs.scope != 'default-online'
         shell: pwsh
         env:
           RSRS_ENGINE: cpu
@@ -161,6 +249,7 @@ jobs:
           & $cli --runtime-internal --stop --json
           if ($LASTEXITCODE) { throw 'Model preparation Runtime stop failed' }
       - name: Diagnose sealed desktop real-SDK existing-key restart
+        if: inputs.scope != 'default-online'
         shell: pwsh
         run: |
           $assets = Join-Path $env:RUNNER_TEMP 'startup-assets'
@@ -171,6 +260,18 @@ jobs:
             -ModelDirectory "$env:RUNNER_TEMP/startup-model-preparation/models/bge-m3" `
             -RuntimeVersion $env:RUNTIME_VERSION `
             -OutputDirectory "$env:RUNNER_TEMP/published-startup-diagnostic"
+      - name: Diagnose latest public default installation only
+        if: inputs.scope == 'default-online'
+        shell: pwsh
+        run: |
+          $assets = Join-Path $env:RUNNER_TEMP 'startup-assets'
+          ./scripts/diagnose-published-startup.ps1 `
+            -DefaultOnline -PublicInputs "$assets/public-online/online-inputs.json" `
+            -Cli "$assets/cli/rsrs-x86_64-pc-windows-msvc.exe" `
+            -Client "$assets/public-online/client/respire-windows-amd64.exe" `
+            -RuntimeArchive "$assets/runtime/rsrs-runtime-x86_64-pc-windows-msvc.tar.gz" `
+            -RuntimeVersion $env:RUNTIME_VERSION `
+            -OutputDirectory "$env:RUNNER_TEMP/default-online-diagnostic"
       - uses: actions/upload-artifact@v7
         if: always()
         with:
@@ -182,5 +283,9 @@ jobs:
             ${{ runner.temp }}/startup-assets/model-inference.json
             ${{ runner.temp }}/published-startup-diagnostic/startup-diagnostic.json
             ${{ runner.temp }}/published-startup-diagnostic/client.log
+            ${{ runner.temp }}/startup-assets/public-online/published-assets.json
+            ${{ runner.temp }}/startup-assets/public-online/online-inputs.json
+            ${{ runner.temp }}/startup-assets/public-online/reference/published-assets-receipt.json
+            ${{ runner.temp }}/default-online-diagnostic/startup-diagnostic.json
           if-no-files-found: error
           retention-days: 3
