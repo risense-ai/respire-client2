@@ -1,4 +1,4 @@
-name: Published Client2 startup diagnostic
+name: Sealed Client2 startup diagnostic
 on:
   workflow_dispatch:
     inputs:
@@ -15,19 +15,17 @@ on:
         description: 'Full CLI commit SHA; must match run and schema2 build metadata'
         required: true
         type: string
-      runtime_version:
-        description: 'Published Runtime baseline; dev23 is historical reproduction only'
+      client2_run_id:
+        description: 'Successful sealed dev17 Desktop producer run ID'
         required: true
-        default: '2.0.0-dev.24'
-        type: choice
-        options: ['2.0.0-dev.24', '2.0.0-dev.23']
-      client2_tag:
-        description: 'Published Client2 tag to verify (select the new DEV for final acceptance)'
+        type: string
+      client2_run_attempt:
+        description: 'Attempt that sealed the Desktop candidate'
         required: true
-        default: 'v2.0.0-dev.15'
+        default: '1'
         type: string
       client2_source_sha:
-        description: 'Full commit of the selected public Client2 tag'
+        description: 'Full source SHA of the sealed dev17 candidate'
         required: true
         type: string
 permissions:
@@ -38,8 +36,11 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 25
     env:
-      RUNTIME_VERSION: ${{ inputs.runtime_version }}
-      CLIENT2_TAG: ${{ inputs.client2_tag }}
+      RUNTIME_VERSION: '2.0.0-dev.24'
+      INPUT_RUN_ID: ${{ inputs.client2_run_id }}
+      INPUT_ATTEMPT: ${{ inputs.client2_run_attempt }}
+      CANDIDATE_SOURCE: ${{ inputs.client2_source_sha }}
+      CANDIDATE_VERSION: '2.0.0-dev.17'
       CLIENT2_SOURCE_SHA: ${{ inputs.client2_source_sha }}
     steps:
       - uses: actions/checkout@v7
@@ -48,13 +49,13 @@ jobs:
       - uses: actions/checkout@v7
         with:
           repository: risense-ai/respire-cli
-          ref: 1e6384d213b00975a98998e3331f5b21941da8a1
+          ref: ${{ inputs.cli_source_sha }}
           path: .cli
           persist-credentials: false
       - uses: actions/setup-python@v7
         with:
           python-version: '3.12'
-      - name: Reuse and verify the selected CLI and pinned public releases
+      - name: Reuse and verify CLI producer, sealed Client2 and public Runtime24
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
@@ -65,21 +66,41 @@ jobs:
           $ErrorActionPreference = 'Stop'
           if ($env:CLI_RUN_ID -cnotmatch '^[1-9][0-9]*$' -or $env:CLI_RUN_ATTEMPT -cnotmatch '^[1-9][0-9]*$' -or
               $env:CLI_SOURCE_SHA -cnotmatch '^[0-9a-f]{40}$' -or $env:CLIENT2_SOURCE_SHA -cnotmatch '^[0-9a-f]{40}$' -or
-              $env:CLIENT2_TAG -cnotmatch '^v2\.0\.0-dev\.[1-9][0-9]*$' -or
-              $env:RUNTIME_VERSION -cnotin @('2.0.0-dev.23','2.0.0-dev.24')) { throw 'Require exact run/attempt, commit SHAs and published DEV versions' }
+              $env:INPUT_RUN_ID -cnotmatch '^[1-9][0-9]*$' -or $env:INPUT_ATTEMPT -cnotmatch '^[1-9][0-9]*$') {
+            throw 'Require exact producer runs, attempts and source SHAs'
+          }
+          if (Test-Path Env:RSRS_CORE_TEST_MODE) { throw 'Core test mode is forbidden for real startup acceptance' }
           $assets = Join-Path $env:RUNNER_TEMP 'startup-assets'
           $run = gh api "repos/risense-ai/respire-cli/actions/runs/$env:CLI_RUN_ID/attempts/$env:CLI_RUN_ATTEMPT" | ConvertFrom-Json
           if ($LASTEXITCODE -or $run.id -ne $env:CLI_RUN_ID -or $run.run_attempt -ne $env:CLI_RUN_ATTEMPT -or
-              $run.head_sha -cne $env:CLI_SOURCE_SHA -or $run.repository.full_name -cne 'risense-ai/respire-cli') { throw 'CLI workflow source differs' }
+              $run.head_sha -cne $env:CLI_SOURCE_SHA -or $run.repository.full_name -cne 'risense-ai/respire-cli' -or
+              $run.head_repository.full_name -cne 'risense-ai/respire-cli' -or $run.head_branch -cne 'main' -or
+              $run.event -cne 'workflow_dispatch' -or $run.path -cne '.github/workflows/release.yml') { throw 'CLI workflow source differs' }
+          $pages = gh api --paginate --slurp "repos/risense-ai/respire-cli/actions/runs/$env:CLI_RUN_ID/attempts/$env:CLI_RUN_ATTEMPT/jobs?per_page=100" | ConvertFrom-Json
+          if ($LASTEXITCODE) { throw 'CLI producer job lookup failed' }
+          $jobs = @($pages.jobs | Where-Object name -CEQ 'validate / Release (x86_64-pc-windows-msvc)')
+          if ($jobs.Count -ne 1 -or $jobs[0].status -cne 'completed' -or $jobs[0].conclusion -cne 'success' -or
+              $jobs[0].head_sha -cne $env:CLI_SOURCE_SHA -or $jobs[0].run_id -ne $env:CLI_RUN_ID -or
+              $jobs[0].run_attempt -ne $env:CLI_RUN_ATTEMPT) { throw 'Require one successful exact-attempt Windows CLI build' }
           $inventory = gh api --paginate --slurp "repos/risense-ai/respire-cli/actions/runs/$env:CLI_RUN_ID/artifacts" | ConvertFrom-Json
           if ($LASTEXITCODE) { throw 'CLI artifact inventory failed' }
           $artifact = @($inventory.artifacts | Where-Object name -CEQ 'cli-release-x86_64-pc-windows-msvc')
-          if ($artifact.Count -ne 1 -or $artifact[0].expired -or $artifact[0].workflow_run.head_sha -cne $env:CLI_SOURCE_SHA) { throw 'Require one unexpired Windows CLI artifact from the selected commit' }
-          gh run download $env:CLI_RUN_ID -R risense-ai/respire-cli -n cli-release-x86_64-pc-windows-msvc -D "$assets/cli"
+          if ($artifact.Count -ne 1 -or $artifact[0].expired -or $artifact[0].workflow_run.head_sha -cne $env:CLI_SOURCE_SHA -or
+              $artifact[0].workflow_run.id -ne $env:CLI_RUN_ID -or $artifact[0].digest -cnotmatch '^sha256:[0-9a-f]{64}$' -or
+              [DateTime]$artifact[0].created_at -lt [DateTime]$jobs[0].started_at -or
+              [DateTime]$artifact[0].created_at -gt [DateTime]$jobs[0].completed_at) { throw 'Require one exact-job Windows CLI artifact' }
+          New-Item -ItemType Directory -Path $assets | Out-Null
+          $zip = Join-Path $assets 'cli.zip'
+          gh api "repos/risense-ai/respire-cli/actions/artifacts/$($artifact[0].id)/zip" > $zip
           if ($LASTEXITCODE) { throw 'CLI artifact download failed' }
+          if ((Get-Item $zip).Length -ne $artifact[0].size_in_bytes -or
+              ('sha256:' + (Get-FileHash $zip -Algorithm SHA256).Hash.ToLowerInvariant()) -cne $artifact[0].digest) { throw 'CLI artifact ZIP digest differs' }
+          python -c "import stat,sys,zipfile; z=zipfile.ZipFile(sys.argv[1]); es=z.infolist(); assert len(es)==2 and {e.filename for e in es}=={'cli-build-x86_64-pc-windows-msvc.json','rsrs-x86_64-pc-windows-msvc.exe'} and all(not stat.S_ISLNK(e.external_attr>>16) for e in es); z.extractall(sys.argv[2])" $zip "$assets/cli"
+          if ($LASTEXITCODE) { throw 'CLI artifact inventory differs' }
           $cliBuild = Get-Content "$assets/cli/cli-build-x86_64-pc-windows-msvc.json" -Raw | ConvertFrom-Json
           $cliFile = Get-Item "$assets/cli/rsrs-x86_64-pc-windows-msvc.exe"
           if ($cliBuild.schema_version -ne 2 -or $cliBuild.artifact_layout -cne 'cli-frontend-v2' -or
+              $cliBuild.version -cne '2.0.0-dev.19' -or
               $cliBuild.git_sha -cne $env:CLI_SOURCE_SHA -or $cliBuild.target -cne 'x86_64-pc-windows-msvc' -or
               $cliBuild.binary_file -cne $cliFile.Name -or $cliBuild.binary_size -ne $cliFile.Length -or
               $cliBuild.producer.run_id -ne $env:CLI_RUN_ID -or $cliBuild.producer.run_attempt -ne $env:CLI_RUN_ATTEMPT -or
@@ -95,19 +116,20 @@ jobs:
               $runtimeBuild.source_commit -cnotmatch '^[0-9a-f]{40}$' -or $runtimeBuild.source_commit -cne $runtimeTag.object.sha -or
               $runtimeBuild.binary_sha256 -cnotmatch '^[0-9a-f]{64}$' -or
               (Get-FileHash "$assets/runtime/rsrs-runtime-x86_64-pc-windows-msvc.tar.gz" -Algorithm SHA256).Hash.ToLowerInvariant() -cne $runtimeBuild.archive_sha256) { throw 'Published Runtime source or archive proof differs' }
-          gh release download $env:CLIENT2_TAG -R risense-ai/respire-client2 -p respire-windows-amd64.exe -p SHA256SUMS -D "$assets/client"
-          if ($LASTEXITCODE) { throw 'Client2 release download failed' }
-          $checksums = @(Get-Content "$assets/client/SHA256SUMS" | Where-Object { $_ -cmatch '^[0-9a-f]{64}  respire-windows-amd64\.exe$' })
+          $sealedOutput = python scripts/desktop-candidate.py producer --root "$assets/client"
+          if ($LASTEXITCODE) { throw 'Sealed Client2 producer verification failed' }
+          $sealed = $sealedOutput | ConvertFrom-Json
+          $candidate = Get-Content "$assets/client/candidate.json" -Raw | ConvertFrom-Json
           $clientHash = (Get-FileHash "$assets/client/respire-windows-amd64.exe" -Algorithm SHA256).Hash.ToLowerInvariant()
-          if ($checksums.Count -ne 1 -or $clientHash -cne $checksums[0].Substring(0,64)) { throw 'Published Client2 checksum differs' }
-          $tag = gh api "repos/risense-ai/respire-client2/git/ref/tags/$env:CLIENT2_TAG" | ConvertFrom-Json
-          if ($LASTEXITCODE -or $tag.object.type -cne 'commit' -or $tag.object.sha -cne $env:CLIENT2_SOURCE_SHA) { throw 'Published Client2 tag source differs' }
           [ordered]@{
-            schema = 1; scope = 'published Client2 startup with selected CLI and Runtime release'
-            cli = $cliBuild; cli_artifact = $artifact[0]
+            schema = 1; scope = 'sealed Client2 real-SDK existing-key startup; not full GUI acceptance'
+            core_test_mode = $false
+            cli = $cliBuild; cli_artifact = $artifact[0]; cli_build_job = $jobs[0]
             runtime = @{version=$env:RUNTIME_VERSION; source_sha=$runtimeBuild.source_commit; archive_sha256=$runtimeBuild.archive_sha256;
               binary_sha256=$runtimeBuild.binary_sha256; metadata_sha256=(Get-FileHash "$assets/runtime/runtime-build-x86_64-pc-windows-msvc.json" -Algorithm SHA256).Hash.ToLowerInvariant()}
-            client2 = @{tag=$env:CLIENT2_TAG; source_sha=$tag.object.sha; sha256=$clientHash}
+            client2 = @{version=$candidate.version; source_sha=$candidate.source; sha256=$clientHash;
+              producer=$candidate.producer; artifact_id=$sealed.artifact_id; artifact_zip_digest=$sealed.artifact_zip_digest;
+              manifest_sha256=(Get-FileHash "$assets/client/candidate.json" -Algorithm SHA256).Hash.ToLowerInvariant(); six_package_receipts_verified=$true}
           } | ConvertTo-Json -Depth 20 | Set-Content "$assets/input-proof.json" -Encoding utf8NoBOM
       - name: Explicitly install the official public model and verify real CPU inference
         shell: pwsh
@@ -138,7 +160,7 @@ jobs:
           if ($LASTEXITCODE) { throw 'Public model hash verification failed' }
           & $cli --runtime-internal --stop --json
           if ($LASTEXITCODE) { throw 'Model preparation Runtime stop failed' }
-      - name: Diagnose the published desktop existing-key restart
+      - name: Diagnose sealed desktop real-SDK existing-key restart
         shell: pwsh
         run: |
           $assets = Join-Path $env:RUNNER_TEMP 'startup-assets'
@@ -155,6 +177,8 @@ jobs:
           name: published-client2-startup-diagnostic
           path: |
             ${{ runner.temp }}/startup-assets/input-proof.json
+            ${{ runner.temp }}/startup-assets/client/candidate.json
+            ${{ runner.temp }}/startup-assets/client/package-checks.json
             ${{ runner.temp }}/startup-assets/model-inference.json
             ${{ runner.temp }}/published-startup-diagnostic/startup-diagnostic.json
             ${{ runner.temp }}/published-startup-diagnostic/client.log
