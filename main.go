@@ -63,12 +63,14 @@ func headless(m *host.Manager) {
 		_, result, err = m.LatestRuntime(ctx)
 	case "rpc-status":
 		result, err = m.RPC("status")
+	case "proxy":
+		result = m.ProxyInfo()
 	case "bootstrap-status":
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		result = m.BootstrapStatus(ctx)
 	default:
-		err = errors.New("supported actions: status, start, stop, install-runtime, runtime-release, rpc-status, fonts, bootstrap-status")
+		err = errors.New("supported actions: status, start, stop, install-runtime, runtime-release, rpc-status, proxy, fonts, bootstrap-status")
 	}
 	output := map[string]any{"ok": err == nil, "result": result, "task": m.TaskSnapshot()}
 	if err != nil {

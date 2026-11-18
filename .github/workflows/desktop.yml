@@ -77,6 +77,7 @@ jobs:
           go test -tags production,gtk3 ./...
           node scripts/test-account-session-state.cjs
           node scripts/test-client-refresh.cjs
+          node scripts/test-settings-proxy.cjs
           python3 -m py_compile scripts/desktop-candidate.py scripts/update-manifest.py
           python3 scripts/desktop-candidate.py self-check
           go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12 -shellcheck= -pyflakes= .github/workflows/desktop.yml
