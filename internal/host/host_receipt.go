@@ -134,6 +134,9 @@ func (m *Manager) recoverHost(ctx context.Context, job Operation) (json.RawMessa
 			return nil, &unconfirmedError{job.ID, errors.New("核心配置预绑定身份不匹配")}
 		}
 		raw, err := m.hostOperation(ctx, nil, "", "core_config.result", job.ID)
+		if err != nil && len(raw) == 0 {
+			return nil, &unconfirmedError{job.ID, err}
+		}
 		if !transaction.acceptsCoreResult(transactionFromEnvelope(job.Name, raw)) {
 			return raw, &unconfirmedError{job.ID, errors.New("核心配置查询尚未返回原事务身份")}
 		}

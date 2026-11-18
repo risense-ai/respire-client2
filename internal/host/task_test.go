@@ -21,6 +21,28 @@ func TestMain(m *testing.M) {
 		fmt.Println("rsrs 1.0.18")
 		os.Exit(0)
 	}
+	if len(os.Args) == 3 && os.Args[1] == "--json" && os.Args[2] == "capabilities" {
+		methods := []string{"core_config.set", "core_config.result"}
+		unsupported := os.Getenv("RESPIRE_TEST_CORE_UNSUPPORTED")
+		if unsupported == "once" {
+			marker := os.Getenv("RESPIRE_TEST_RECOVERY_CALLS") + ".capability"
+			if _, err := os.Stat(marker); errors.Is(err, os.ErrNotExist) {
+				if err := os.WriteFile(marker, nil, 0600); err != nil {
+					os.Exit(1)
+				}
+				unsupported = "1"
+			}
+		}
+		if unsupported == "1" {
+			methods = nil
+		} else if unsupported == "result" {
+			methods = methods[:1]
+		}
+		if json.NewEncoder(os.Stdout).Encode(map[string]any{"status": "ok", "summary": map[string]any{"capabilities": map[string]any{"host_rpc": map[string]any{"version": 1, "transport": "stdio", "methods": methods}}}}) != nil {
+			os.Exit(1)
+		}
+		os.Exit(0)
+	}
 	args, err := json.Marshal(os.Args[1:])
 	if err == nil {
 		var log *os.File
@@ -211,6 +233,19 @@ func TestResetMaterialSaveFailureRetainsPendingReceipt(t *testing.T) {
 }
 
 func TestResetMaterialRecoveryPreservesFailuresAndIdentity(t *testing.T) {
+	for _, method := range []string{"core_config.set", "core_config.result"} {
+		t.Run("unsupported_"+method, func(t *testing.T) {
+			m, id, _, calls := recoveryMaterialFixture(t)
+			t.Setenv("RESPIRE_TEST_CORE_UNSUPPORTED", "result")
+			_, err := m.hostOperation(context.Background(), nil, "", method, id)
+			if !errors.Is(err, errHostMethodUnsupported) || !strings.Contains(err.Error(), "core_config.result") {
+				t.Fatal("missing capability was not rejected", err)
+			}
+			if _, err := os.Stat(calls); !errors.Is(err, os.ErrNotExist) {
+				t.Fatal("unsupported method sent a business request", err)
+			}
+		})
+	}
 	t.Run("core_config_entire_reply_lost", func(t *testing.T) {
 		m, id, reply, calls := recoveryMaterialFixture(t)
 		t.Setenv("RESPIRE_TEST_CORE_DROP_REPLY", "1")
@@ -249,6 +284,16 @@ func TestResetMaterialRecoveryPreservesFailuresAndIdentity(t *testing.T) {
 		if err := restarted.loadOperations(); err != nil {
 			t.Fatal(err)
 		}
+		t.Setenv("RESPIRE_TEST_CORE_UNSUPPORTED", "1")
+		job, err = restarted.Recover(id)
+		if err != nil || job.State != "unconfirmed" || job.Transaction == nil || !job.Transaction.RequestBound || !strings.Contains(job.Error, "core_config.result") {
+			t.Fatal("unsupported query did not preserve Unknown and explain capability failure", err, job)
+		}
+		logBefore, err := os.ReadFile(calls)
+		if err != nil || len(strings.Split(strings.TrimSpace(string(logBefore)), "\n")) != 1 {
+			t.Fatal("capability failure sent a query or replayed setter", err)
+		}
+		t.Setenv("RESPIRE_TEST_CORE_UNSUPPORTED", "0")
 		job, err = restarted.Recover(id)
 		full.RequestBound = true
 		if err != nil || job.State != "done" || job.Transaction == nil || *job.Transaction != full {

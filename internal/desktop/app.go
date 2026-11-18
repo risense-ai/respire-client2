@@ -290,22 +290,37 @@ func installRuntimeForStartup(m interface {
 }
 
 func (d *desktop) background() {
-	if d.m.Preferences().AutoRuntime {
-		d.task("连接 Runtime", func() error {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() {
+		select {
+		case <-d.closing:
+			cancel()
+		case <-ctx.Done():
+		}
+	}()
+	d.task("准备 CLI / 连接 Runtime", func() error {
+		if d.m.Preferences().AutoRuntime {
 			if err := d.m.MigrateRuntime(); err != nil {
 				return err
 			}
-			prefs := d.m.Preferences()
-			if info, err := d.m.Installed(); err == nil && prefs.RuntimeAutoUpdate && semver.Compare("v"+info.Version, "v2.0.0-dev.24") < 0 {
-				return installRuntimeForStartup(d.m, prefs.RuntimeAutoRestart)
-			}
-			err := d.m.Start()
-			if errors.Is(err, host.ErrRuntimeNotInstalled) {
-				return installRuntimeForStartup(d.m, d.m.Preferences().RuntimeAutoRestart)
-			}
+		}
+		if err := d.m.EnsureCoreConfigHost(ctx); err != nil {
 			return err
-		})
-	}
+		}
+		if !d.m.Preferences().AutoRuntime {
+			return nil
+		}
+		prefs := d.m.Preferences()
+		if info, err := d.m.Installed(); err == nil && prefs.RuntimeAutoUpdate && semver.Compare("v"+info.Version, "v2.0.0-dev.24") < 0 {
+			return installRuntimeForStartup(d.m, prefs.RuntimeAutoRestart)
+		}
+		err := d.m.Start()
+		if errors.Is(err, host.ErrRuntimeNotInstalled) {
+			return installRuntimeForStartup(d.m, d.m.Preferences().RuntimeAutoRestart)
+		}
+		return err
+	})
 	// Client and Runtime update on their own cadences (update page); a staged
 	// client update re-checks every minute so it applies once operations end.
 	var lastClient, lastRuntime time.Time
