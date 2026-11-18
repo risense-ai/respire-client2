@@ -323,6 +323,7 @@ func (d *desktop) businessRoute(w http.ResponseWriter, r *http.Request) bool {
 			report := map[string]any{
 				"generatedAt": time.Now().UTC(), "clientVersion": version, "platform": host.Platform(),
 				"endpoint": d.m.Endpoint, "root": d.m.Root, "preferences": d.m.Preferences(),
+				"proxy":     d.m.ProxyInfo(),
 				"autostart": auto, "task": d.m.TaskSnapshot(), "connected": healthErr == nil,
 				"installed": info, "health": health, "healthError": errorText(healthErr),
 				"clientUpdate": update, "operations": d.m.Operations(),
@@ -346,7 +347,7 @@ func (d *desktop) businessRoute(w http.ResponseWriter, r *http.Request) bool {
 // carries a matching JSON field for each, so the two lists cannot drift.
 var preferencePatchKeys = []string{
 	"autoRuntime", "autoUpdate", "runtimeChannel", "clientChannel",
-	"layout", "theme", "language", "clientUpdateInterval", "runtimeUpdateInterval",
+	"layout", "theme", "language", "proxyMode", "clientUpdateInterval", "runtimeUpdateInterval",
 	"clientAutoUpdate", "clientAutoRestart", "runtimeAutoUpdate", "runtimeAutoRestart",
 	"sidebarWidth", "memoryIndexWidth",
 	"onboardingVersion", "onboardingCompleted", "onboardingStep", "onboardingSyncChoice",
@@ -363,6 +364,7 @@ func preferencePatchTargets(p *host.Preferences) map[string]any {
 		"layout":                &p.Layout,
 		"theme":                 &p.Theme,
 		"language":              &p.Language,
+		"proxyMode":             &p.ProxyMode,
 		"clientUpdateInterval":  &p.ClientUpdateInterval,
 		"runtimeUpdateInterval": &p.RuntimeUpdateInterval,
 		"clientAutoUpdate":      &p.ClientAutoUpdate,

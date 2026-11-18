@@ -30,6 +30,7 @@ type actionInput struct {
 	Layout         string `json:"layout"`
 	Theme          string `json:"theme"`
 	Language       string `json:"language"`
+	ProxyMode      string `json:"proxyMode"`
 
 	ClientUpdateInterval  string `json:"clientUpdateInterval"`
 	RuntimeUpdateInterval string `json:"runtimeUpdateInterval"`
@@ -103,7 +104,8 @@ func (d *desktop) handler(static http.Handler) http.Handler {
 				"version": version, "platform": host.Platform(), "endpoint": d.m.Endpoint, "root": d.m.Root,
 				"theme":       theme,
 				"preferences": d.m.Preferences(), "autostart": auto,
-				"task": d.m.TaskSnapshot(), "connected": healthErr == nil,
+				"proxy": d.m.ProxyInfo(),
+				"task":  d.m.TaskSnapshot(), "connected": healthErr == nil,
 				"managed":   healthErr == nil && d.m.Owns(h.Exe),
 				"installed": info, "externalRuntime": external, "health": body,
 				"clientUpdate": map[string]any{
