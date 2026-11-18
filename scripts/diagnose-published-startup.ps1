@@ -146,7 +146,7 @@ try {
         if ($public.schema -ne 1 -or $public.scope -cne 'latest-default-online-install-diagnostic' -or
             $public.diagnostic_only -ne $true -or $public.full_passed -ne $false -or
             $public.harness_sha -cne $env:GITHUB_SHA -or $public.reader_sha -cne $env:CLI_READER_REF -or
-            $public.cli.version -cne '2.0.0-dev.19' -or $public.client2.version -cne '2.0.0-dev.17' -or
+            $public.cli.version -cne $env:CLI_VERSION -or $public.client2.version -cne $env:CANDIDATE_VERSION -or
             $public.runtime.version -cne $RuntimeVersion -or $public.client2.sha256 -cne $report.client_sha256 -or
             $public.payload_identity.cli_binary_sha256 -cne $report.cli_sha256 -or
             $public.payload_identity.runtime_bundle_sha256 -cne (Get-FileHash $RuntimeArchive -Algorithm SHA256).Hash.ToLowerInvariant()) {
