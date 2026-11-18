@@ -1157,9 +1157,11 @@ export function models(root, ctx) {
     });
   });
   // Keep an uncertain operation's identity; readback cannot replace its receipt.
-  $("[data-fusion-form]", root).addEventListener("submit", (event) => {
+  $("[data-fusion-form]", root).addEventListener("submit", async (event) => {
     event.preventDefault();
-    action($("[type=submit]", event.target), async () => {
+    const button = $("[type=submit]", event.target);
+    if (button.disabled) return;
+    await action(button, async () => {
       if (!fusion.runtime?.effective)
         throw new Error("请先升级支持五轴融合设置的 CLI");
       if (fusion.requestId)
@@ -1195,6 +1197,7 @@ export function models(root, ctx) {
       const notice = fusionApplicationNotice(saved.core_application);
       notify(notice.text, notice.warning);
     });
+    button.disabled = Boolean(fusion.requestId);
   });
   $("[data-fusion-query]", root).addEventListener("click", (event) => {
     action(event.currentTarget, async () => {

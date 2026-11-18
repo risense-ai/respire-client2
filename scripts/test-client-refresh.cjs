@@ -151,10 +151,21 @@ async function test(name, fn) { await fn(); console.log(`PASS ${++count}: ${name
     const listeners = {}, calls = [], notices = [];
     const fusion = {runtime:{effective:{}}, requestId:null};
     let pending, queriedState = 'unconfirmed';
+    const save = {disabled:false};
+    const nodes = {};
+    const $ = selector => selector === '[type=submit]' ? save : (nodes[selector] ||= {
+      addEventListener:(_, callback) => {listeners[selector] = callback;},
+    });
+    const renderStart = models.indexOf('  function renderFusion()');
+    const renderFusion = new Function('$', 'root', 'fusion', 'FUSION_NUMERIC',
+      models.slice(renderStart, models.indexOf('  // Collect + validate', renderStart)) + '\nreturn renderFusion;')($, {}, fusion, []);
+    const coreSource = read('ui/core.js');
+    const productionAction = new Function('notify', coreSource.slice(coreSource.indexOf('export async function action('),
+      coreSource.indexOf('export function panel(')).replace(/^export /gm, '') + '\nreturn action;')(
+      (...args) => notices.push(args));
     const bindings = {root:{}, fusion, summary:envelope => envelope.summary,
-      $:selector => ({addEventListener:(_, callback) => {listeners[selector] = callback;}}),
-      action:(_, fn) => {pending = Promise.resolve().then(fn);},
-      fusionDraft:() => ({fusion:'legacy'}), renderFusion() {},
+      $, action:(button, fn) => (pending = productionAction(button, fn)),
+      fusionDraft:() => ({fusion:'legacy'}), renderFusion,
       notify:(...args) => notices.push(args),
       async execute(name) {
         calls.push(name);
@@ -169,14 +180,28 @@ async function test(name, fn) { await fn(); console.log(`PASS ${++count}: ${name
     };
     new Function(...Object.keys(bindings), models.slice(start, models.indexOf('  // Restoring defaults', start)))(...Object.values(bindings));
     const submit = {preventDefault() {}, target:{}};
-    listeners['[data-fusion-form]'](submit); await pending;
+    const saving = listeners['[data-fusion-form]'](submit);
+    assert.equal(save.disabled, true);
+    const duplicate = listeners['[data-fusion-form]'](submit);
+    assert.equal(save.disabled, true);
+    await duplicate;
+    await saving;
+    await pending;
     assert.equal(fusion.requestId, 'desktop-original');
-    listeners['[data-fusion-form]'](submit); await assert.rejects(pending, /查询原请求/);
+    assert.equal(save.disabled, true);
+    await listeners['[data-fusion-form]'](submit);
+    assert.equal(save.disabled, true);
+    save.disabled = false; // Even a direct submission cannot bypass the original-request guard.
+    await listeners['[data-fusion-form]'](submit);
+    assert.equal(save.disabled, true);
+    assert.match(notices.at(-1)[0], /查询原请求/);
     listeners['[data-fusion-query]']({currentTarget:{}}); await pending;
     assert.equal(fusion.requestId, 'desktop-original');
+    assert.equal(save.disabled, true);
     queriedState = 'done';
     listeners['[data-fusion-query]']({currentTarget:{}}); await pending;
     assert.equal(fusion.requestId, null);
+    assert.equal(save.disabled, false);
     assert.deepEqual(calls, ['agent_set', ['operation-recover', {id:'desktop-original'}], ['operation-recover', {id:'desktop-original'}]]);
   });
   console.log(`${count} focused refresh tests passed; browser/native UIA not exercised.`);
