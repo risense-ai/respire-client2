@@ -308,6 +308,9 @@ func updateRuntimeForBackground(ctx context.Context, m interface {
 		return nil
 	}
 	return m.RunTask("检查 Runtime 更新", func() error {
+		if err := m.RequireCoreConfigHost(ctx); err != nil {
+			return err
+		}
 		if err := m.InstallRuntime(true, restart); err != nil {
 			return err
 		}
@@ -325,7 +328,7 @@ func (d *desktop) background() {
 		case <-ctx.Done():
 		}
 	}()
-	runtimePreparationErr := d.task("准备 CLI / 连接 Runtime", func() error {
+	startupPreparationErr := d.task("准备 CLI / 连接 Runtime", func() error {
 		if d.m.Preferences().AutoRuntime {
 			if err := d.m.MigrateRuntime(); err != nil {
 				return err
@@ -377,12 +380,11 @@ func (d *desktop) background() {
 				}
 			}
 		}
-		if runtimePreparationErr == nil && prefs.RuntimeAutoUpdate &&
+		if startupPreparationErr == nil && prefs.RuntimeAutoUpdate &&
 			(lastRuntime.IsZero() || now.Sub(lastRuntime) >= updateInterval(prefs.RuntimeUpdateInterval)) {
 			lastRuntime = now
-			runtimePreparationErr = updateRuntimeForBackground(ctx, d.m, runtimePreparationErr, d.m.Preferences().RuntimeAutoRestart)
-			if runtimePreparationErr != nil {
-				log.Printf("Runtime 自动更新停止: %v", runtimePreparationErr)
+			if err := updateRuntimeForBackground(ctx, d.m, startupPreparationErr, d.m.Preferences().RuntimeAutoRestart); err != nil {
+				log.Printf("Runtime 自动更新失败: %v", err)
 			}
 		}
 		delay := 30 * time.Second

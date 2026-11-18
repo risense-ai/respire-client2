@@ -37,6 +37,7 @@ type startupRuntimeFixture struct {
 	probes         int
 	taskErr        error
 	probeErr       error
+	probeFailAt    int
 	healthCalls    int
 }
 
@@ -89,7 +90,10 @@ func (m *startupRuntimeFixture) RequireCoreConfigHost(ctx context.Context) error
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	return m.probeErr
+	if m.probeFailAt == 0 || m.probes >= m.probeFailAt {
+		return m.probeErr
+	}
+	return nil
 }
 
 func TestInstallRuntimeForStartup(t *testing.T) {
@@ -150,7 +154,7 @@ func TestInstallRuntimeForStartup(t *testing.T) {
 			}
 		})
 	}
-	for _, stage := range []string{"preparation", "install", "capabilities", "success"} {
+	for _, stage := range []string{"preparation", "pre-capabilities", "install", "capabilities", "success"} {
 		t.Run("background update "+stage, func(t *testing.T) {
 			want := errors.New(stage + " failed")
 			m := &startupRuntimeFixture{allowAutomatic: true, running: "old", selected: "old"}
@@ -160,28 +164,44 @@ func TestInstallRuntimeForStartup(t *testing.T) {
 				preparationErr, m.taskErr = want, want
 			case "install":
 				m.installErr = want
-			case "capabilities":
+			case "pre-capabilities":
 				m.probeErr = want
+			case "capabilities":
+				m.probeErr, m.probeFailAt = want, 2
 			}
 			err := updateRuntimeForBackground(context.Background(), m, preparationErr, true)
 			if stage == "success" {
-				if err != nil || m.taskErr != nil || m.installs != 1 || m.probes != 1 || m.healthCalls != 1 || m.running != "new" {
-					t.Fatal("background update did not verify capabilities", err, m)
+				if err != nil || m.taskErr != nil || m.installs != 1 || m.probes != 2 || m.healthCalls != 1 || m.running != "new" {
+					t.Fatal("background update did not verify capabilities before and after install", err, m)
 				}
 				return
 			}
 			if !errors.Is(err, want) || !errors.Is(m.taskErr, want) {
 				t.Fatal("background update erased the preparation/probe error", err, m.taskErr)
 			}
-			if stage == "preparation" && (m.tasks != 0 || m.installs != 0 || m.probes != 0 || m.healthCalls != 0 || m.running != "old") {
-				t.Fatal("failed preparation entered Runtime update", m)
+			if stage == "preparation" {
+				if m.tasks != 0 || m.installs != 0 || m.probes != 0 || m.healthCalls != 0 || m.running != "old" {
+					t.Fatal("failed preparation entered Runtime update", m)
+				}
+				if next := updateRuntimeForBackground(context.Background(), m, preparationErr, true); !errors.Is(next, want) || m.tasks != 0 || !errors.Is(m.taskErr, want) {
+					t.Fatal("later tick erased startup failure", next, m)
+				}
+				return
 			}
-			if stage == "install" && m.probes != 0 {
-				t.Fatal("capabilities probed after failed install")
+			if stage == "pre-capabilities" && m.installs != 0 {
+				t.Fatal("missing capabilities allowed Runtime install")
 			}
-			tasks := m.tasks
-			if next := updateRuntimeForBackground(context.Background(), m, err, true); !errors.Is(next, want) || m.tasks != tasks || !errors.Is(m.taskErr, want) {
-				t.Fatal("later background tick cleared failure or retried update", next, m)
+			if stage == "install" && m.probes != 1 {
+				t.Fatal("failed install reached post-install probe")
+			}
+			tasks, installs := m.tasks, m.installs
+			if stage == "install" {
+				m.installErr = nil
+				if next := updateRuntimeForBackground(context.Background(), m, preparationErr, true); next != nil || m.tasks != tasks+1 || m.installs != installs+1 || m.taskErr != nil || m.probes != 3 {
+					t.Fatal("later scheduled tick could not recover from temporary install error", next, m)
+				}
+			} else if next := updateRuntimeForBackground(context.Background(), m, preparationErr, true); !errors.Is(next, want) || m.tasks != tasks+1 || m.installs != installs || !errors.Is(m.taskErr, want) {
+				t.Fatal("later tick installed without capabilities or falsely completed", next, m)
 			}
 		})
 	}
