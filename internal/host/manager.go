@@ -189,6 +189,7 @@ type Manager struct {
 	modelHTTPClient *http.Client
 	localClient     *http.Client
 	mu              sync.Mutex
+	cliInstallMu    sync.RWMutex
 	prefs           Preferences
 	task            TaskState
 	taskCancel      context.CancelFunc

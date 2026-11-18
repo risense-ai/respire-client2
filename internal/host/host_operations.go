@@ -39,6 +39,12 @@ func (m *Manager) hostExecutable(ctx context.Context) (string, error) {
 }
 
 func (m *Manager) hostOperation(ctx context.Context, args []string, secret, method, id string) (json.RawMessage, error) {
+	m.cliInstallMu.RLock()
+	defer m.cliInstallMu.RUnlock()
+	return m.hostOperationLocked(ctx, args, secret, method, id)
+}
+
+func (m *Manager) hostOperationLocked(ctx context.Context, args []string, secret, method, id string) (json.RawMessage, error) {
 	hostRPC := strings.HasPrefix(method, "auth.") || strings.HasPrefix(method, "core_config.")
 	stdin := secret + "\n"
 	if hostRPC {
@@ -46,12 +52,20 @@ func (m *Manager) hostOperation(ctx context.Context, args []string, secret, meth
 			if secret != "" {
 				return nil, errors.New("浏览器授权不接受桌面凭据")
 			}
-			if err := m.requireHostMethod(ctx, method); err != nil {
+			if err := m.requireHostMethodLocked(ctx, method); err != nil {
 				return nil, err
 			}
 		}
 		var params map[string]string
 		if strings.HasPrefix(method, "core_config.") {
+			if err := m.requireHostMethodLocked(ctx, method); err != nil {
+				return nil, err
+			}
+			if method == "core_config.set" {
+				if err := m.requireHostMethodLocked(ctx, "core_config.result"); err != nil {
+					return nil, err
+				}
+			}
 			if secret != "" {
 				return nil, errors.New("核心配置不接受凭据")
 			}
@@ -91,11 +105,17 @@ func (m *Manager) hostOperation(ctx context.Context, args []string, secret, meth
 		}
 		args = append(args, "--key-stdin")
 	}
-	return m.runHostCommand(ctx, args, stdin, secret != "" || hostRPC, hostRPC, method, id)
+	return m.runHostCommandLocked(ctx, args, stdin, secret != "" || hostRPC, hostRPC, method, id)
 }
 
 // Shared process boundary: authentication payloads travel only on stdin.
 func (m *Manager) runHostCommand(ctx context.Context, args []string, stdin string, hasInput, hostRPC bool, method, id string) (json.RawMessage, error) {
+	m.cliInstallMu.RLock()
+	defer m.cliInstallMu.RUnlock()
+	return m.runHostCommandLocked(ctx, args, stdin, hasInput, hostRPC, method, id)
+}
+
+func (m *Manager) runHostCommandLocked(ctx context.Context, args []string, stdin string, hasInput, hostRPC bool, method, id string) (json.RawMessage, error) {
 	executable, err := m.hostExecutable(ctx)
 	if err != nil {
 		return nil, err
@@ -134,6 +154,24 @@ func (m *Manager) runHostCommand(ctx context.Context, args []string, stdin strin
 		return nil, &unconfirmedError{cause: errors.New("宿主回执超过 8 MiB，请刷新当前状态确认结果")}
 	}
 	raw := bytes.TrimSpace(out.Bytes())
+	if method == "capabilities" {
+		if runErr != nil {
+			return nil, fmt.Errorf("CLI 能力探测未正常退出: %w", runErr)
+		}
+		var probe struct {
+			Status string `json:"status"`
+		}
+		if err := json.Unmarshal(raw, &probe); err != nil {
+			return nil, fmt.Errorf("CLI 能力探测回执无效: %w", err)
+		}
+		if probe.Status != "ok" {
+			return nil, errors.New("CLI 能力探测状态不是 ok，未确认协议能力")
+		}
+		if err := hostEnvelopeError(raw); err != nil {
+			return nil, err
+		}
+		return raw, nil
+	}
 	// Browser authorization can print progress before its final JSON envelope.
 	if !json.Valid(raw) {
 		lines := bytes.Split(raw, []byte("\n"))

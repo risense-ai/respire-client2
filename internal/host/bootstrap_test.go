@@ -1300,6 +1300,67 @@ func TestInstallRuntimeWithPayload(t *testing.T) {
 		if hash, err := fileHash(cli); err != nil || hash != cliMeta["binary_sha256"] {
 			t.Fatalf("online CLI bytes wrong: %s %v", hash, err)
 		}
+		t.Run("startup missing CLI downloads only host", func(t *testing.T) {
+			fresh := newInstallTestManager(t)
+			fresh.HTTPClient = m.HTTPClient
+			t.Setenv("RESPIRE_TEST_RECOVERY_CLI", "1")
+			t.Setenv("RESPIRE_TEST_RECOVERY_CALLS", filepath.Join(t.TempDir(), "calls"))
+			if err := fresh.EnsureCoreConfigHost(context.Background()); err != nil {
+				t.Fatal("first CLI preparation failed", err)
+			}
+			if _, err := os.Stat(fresh.runtimeManifest()); !errors.Is(err, os.ErrNotExist) {
+				t.Fatal("CLI preparation selected a Runtime", err)
+			}
+			if _, err := os.Stat(fresh.runtimeDir(meta.RuntimeVersion)); !errors.Is(err, os.ErrNotExist) {
+				t.Fatal("CLI preparation installed a Runtime", err)
+			}
+		})
+		for _, scenario := range []struct{ unsupported, runtimeVersion, wantError string }{
+			{"0", meta.RuntimeVersion, ""},
+			{"once", meta.RuntimeVersion, ""},
+			{"1", meta.RuntimeVersion, "协议"},
+			{"once", retainedMeta.RuntimeVersion, "最低版本"},
+		} {
+			unsupported := scenario.unsupported
+			t.Run("startup CLI-only capabilities "+unsupported+" runtime "+scenario.runtimeVersion, func(t *testing.T) {
+				t.Setenv("RESPIRE_TEST_RECOVERY_CLI", "1")
+				t.Setenv("RESPIRE_TEST_CORE_UNSUPPORTED", unsupported)
+				t.Setenv("RESPIRE_TEST_RECOVERY_CALLS", filepath.Join(t.TempDir(), "calls"))
+				stubCLIProbe(t, cliProbeFixture{tmpVersion: "2.0.0-dev.1", destVer: "1.0.18"})
+				// The Runtime belongs to a CLI supervisor. Preparing CLI capabilities
+				// must neither replace its bytes nor select or restart any Runtime.
+				health := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					if r.URL.Path != "/api/health" || r.Method != "GET" {
+						t.Error("CLI-only preparation attempted a Runtime operation")
+					}
+					_ = json.NewEncoder(w).Encode(HealthInfo{Server: "respire", Protocol: 1, PID: 4242,
+						Version: scenario.runtimeVersion, Exe: filepath.Join(tree, "rsrs-runtime-"+target), ManagedID: "fixture-supervisor"})
+				}))
+				defer health.Close()
+				before, err := os.ReadFile(m.runtimeManifest())
+				if err != nil {
+					t.Fatal(err)
+				}
+				previousEndpoint := m.Endpoint
+				m.Endpoint = health.URL
+				defer func() { m.Endpoint = previousEndpoint }()
+				err = m.EnsureCoreConfigHost(context.Background())
+				if scenario.wantError != "" {
+					if err == nil || !strings.Contains(err.Error(), scenario.wantError) {
+						t.Fatal("incompatible CLI must fail explicitly", err)
+					}
+				} else if err != nil {
+					t.Fatal("compatible CLI could not be prepared", err)
+				}
+				after, err := os.ReadFile(m.runtimeManifest())
+				if err != nil || string(before) != string(after) {
+					t.Fatal("CLI-only preparation changed Runtime selection", err)
+				}
+				if err := m.verifyInstalled(installed); err != nil {
+					t.Fatal("CLI-only preparation changed Runtime bytes", err)
+				}
+			})
+		}
 		t.Run("same version with missing receipt fails without repairing it", func(t *testing.T) {
 			path := m.runtimeReceiptPath(meta.RuntimeVersion)
 			receipt, err := os.ReadFile(path)

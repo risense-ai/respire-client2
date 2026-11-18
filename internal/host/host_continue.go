@@ -150,8 +150,16 @@ func continuationParams(job Operation, input json.RawMessage) (string, map[strin
 	return request.Method, params, nil
 }
 
+var errHostMethodUnsupported = errors.New("CLI 协议能力不兼容")
+
 func (m *Manager) requireHostMethod(ctx context.Context, method string) error {
-	raw, err := m.hostOperation(ctx, []string{"capabilities"}, "", "capabilities", "")
+	m.cliInstallMu.RLock()
+	defer m.cliInstallMu.RUnlock()
+	return m.requireHostMethodLocked(ctx, method)
+}
+
+func (m *Manager) requireHostMethodLocked(ctx context.Context, method string) error {
+	raw, err := m.runHostCommandLocked(ctx, []string{"capabilities"}, "", false, false, "capabilities", "")
 	if err != nil {
 		return err
 	}
@@ -175,7 +183,7 @@ func (m *Manager) requireHostMethod(ctx context.Context, method string) error {
 			return nil
 		}
 	}
-	return fmt.Errorf("CLI 未声明 %s 能力，请更新 CLI；原事务保留，未重新认证", method)
+	return fmt.Errorf("%w: CLI 未声明 %s 能力，请更新 CLI；原事务保留，未重新认证", errHostMethodUnsupported, method)
 }
 
 func (m *Manager) runHostContinuation(job Operation, transportID string, input json.RawMessage) {
