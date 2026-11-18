@@ -179,7 +179,9 @@ try {
         }
         $metadata = Get-Content -LiteralPath $public.runtime_metadata_path -Raw | ConvertFrom-Json
         foreach ($file in @($metadata.files | Where-Object { -not $_.path.StartsWith('core-notices/', [StringComparison]::Ordinal) })) {
-            $installedFile = Join-Path $managed $file.path
+            # The installed tree uses the host binary name instead of the release asset name.
+            $installedName = if ($file.path -ceq $metadata.binary_file) { 'rsrs-runtime.exe' } else { $file.path }
+            $installedFile = Join-Path $managed $installedName
             if ((Get-Item -LiteralPath $installedFile).Length -ne $file.size -or
                 (Get-FileHash $installedFile -Algorithm SHA256).Hash.ToLowerInvariant() -cne $file.sha256) {
                 throw 'Installed Runtime payload differs from the verified public inventory'
