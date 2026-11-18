@@ -24,19 +24,27 @@ func TestDirWritableRejectsMissingDirectory(t *testing.T) {
 }
 
 type startupRuntimeFixture struct {
-	selected    string
-	running     string
-	starts      int
-	unavailable error
-	healthErr   error
-	installErr  error
-	startErr    error
+	selected       string
+	running        string
+	starts         int
+	unavailable    error
+	healthErr      error
+	installErr     error
+	startErr       error
+	allowAutomatic bool
+	installs       int
+	tasks          int
+	probes         int
+	taskErr        error
+	probeErr       error
+	healthCalls    int
 }
 
 func (m *startupRuntimeFixture) InstallRuntime(automatic, restart bool) error {
-	if automatic {
+	if automatic && !m.allowAutomatic {
 		return errors.New("startup install must not be automatic")
 	}
+	m.installs++
 	if m.installErr != nil {
 		return m.installErr
 	}
@@ -48,14 +56,17 @@ func (m *startupRuntimeFixture) InstallRuntime(automatic, restart bool) error {
 }
 
 func (m *startupRuntimeFixture) Health(context.Context) (host.HealthInfo, json.RawMessage, error) {
+	m.healthCalls++
 	if m.healthErr != nil {
 		return host.HealthInfo{}, nil, m.healthErr
 	}
 	if m.running == "" {
 		return host.HealthInfo{}, nil, m.unavailable
 	}
-	return host.HealthInfo{}, nil, nil
+	return host.HealthInfo{Exe: "fixture-owned"}, nil, nil
 }
+
+func (m *startupRuntimeFixture) Owns(exe string) bool { return exe == "fixture-owned" }
 
 func (m *startupRuntimeFixture) Start() error {
 	m.starts++
@@ -64,6 +75,21 @@ func (m *startupRuntimeFixture) Start() error {
 	}
 	m.running = m.selected
 	return nil
+}
+
+func (m *startupRuntimeFixture) RunTask(_ string, action func() error) error {
+	m.tasks++
+	m.taskErr = nil
+	m.taskErr = action()
+	return m.taskErr
+}
+
+func (m *startupRuntimeFixture) RequireCoreConfigHost(ctx context.Context) error {
+	m.probes++
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return m.probeErr
 }
 
 func TestInstallRuntimeForStartup(t *testing.T) {
@@ -121,6 +147,41 @@ func TestInstallRuntimeForStartup(t *testing.T) {
 			}
 			if stage != "start" && m.starts != 0 {
 				t.Fatal("must not start after an earlier failure")
+			}
+		})
+	}
+	for _, stage := range []string{"preparation", "install", "capabilities", "success"} {
+		t.Run("background update "+stage, func(t *testing.T) {
+			want := errors.New(stage + " failed")
+			m := &startupRuntimeFixture{allowAutomatic: true, running: "old", selected: "old"}
+			var preparationErr error
+			switch stage {
+			case "preparation":
+				preparationErr, m.taskErr = want, want
+			case "install":
+				m.installErr = want
+			case "capabilities":
+				m.probeErr = want
+			}
+			err := updateRuntimeForBackground(context.Background(), m, preparationErr, true)
+			if stage == "success" {
+				if err != nil || m.taskErr != nil || m.installs != 1 || m.probes != 1 || m.healthCalls != 1 || m.running != "new" {
+					t.Fatal("background update did not verify capabilities", err, m)
+				}
+				return
+			}
+			if !errors.Is(err, want) || !errors.Is(m.taskErr, want) {
+				t.Fatal("background update erased the preparation/probe error", err, m.taskErr)
+			}
+			if stage == "preparation" && (m.tasks != 0 || m.installs != 0 || m.probes != 0 || m.healthCalls != 0 || m.running != "old") {
+				t.Fatal("failed preparation entered Runtime update", m)
+			}
+			if stage == "install" && m.probes != 0 {
+				t.Fatal("capabilities probed after failed install")
+			}
+			tasks := m.tasks
+			if next := updateRuntimeForBackground(context.Background(), m, err, true); !errors.Is(next, want) || m.tasks != tasks || !errors.Is(m.taskErr, want) {
+				t.Fatal("later background tick cleared failure or retried update", next, m)
 			}
 		})
 	}

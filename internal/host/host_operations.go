@@ -154,6 +154,24 @@ func (m *Manager) runHostCommandLocked(ctx context.Context, args []string, stdin
 		return nil, &unconfirmedError{cause: errors.New("宿主回执超过 8 MiB，请刷新当前状态确认结果")}
 	}
 	raw := bytes.TrimSpace(out.Bytes())
+	if method == "capabilities" {
+		if runErr != nil {
+			return nil, fmt.Errorf("CLI 能力探测未正常退出: %w", runErr)
+		}
+		var probe struct {
+			Status string `json:"status"`
+		}
+		if err := json.Unmarshal(raw, &probe); err != nil {
+			return nil, fmt.Errorf("CLI 能力探测回执无效: %w", err)
+		}
+		if probe.Status != "ok" {
+			return nil, errors.New("CLI 能力探测状态不是 ok，未确认协议能力")
+		}
+		if err := hostEnvelopeError(raw); err != nil {
+			return nil, err
+		}
+		return raw, nil
+	}
 	// Browser authorization can print progress before its final JSON envelope.
 	if !json.Valid(raw) {
 		lines := bytes.Split(raw, []byte("\n"))

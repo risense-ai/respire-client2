@@ -251,21 +251,22 @@ func (m *Manager) installOnlineCLI(ctx context.Context, compat Compat) error {
 	return m.installFrontendCLI(ctx, source, meta.Version, meta.BinaryHash, compat)
 }
 
-// EnsureCoreConfigHost runs only during startup, before business operations.
-// Per-operation capability checks reject unsupported methods without upgrading or replaying.
-func (m *Manager) EnsureCoreConfigHost(ctx context.Context) error {
-	check := func() error {
-		for _, method := range []string{"core_config.set", "core_config.result"} {
-			if err := m.requireHostMethod(ctx, method); err != nil {
-				return err
-			}
+// RequireCoreConfigHost only probes capabilities; it never installs or replays.
+func (m *Manager) RequireCoreConfigHost(ctx context.Context) error {
+	for _, method := range []string{"core_config.set", "core_config.result"} {
+		if err := m.requireHostMethod(ctx, method); err != nil {
+			return err
 		}
-		return nil
 	}
+	return nil
+}
+
+// EnsureCoreConfigHost runs only during startup, before business operations.
+func (m *Manager) EnsureCoreConfigHost(ctx context.Context) error {
 	_, err := m.External(ctx)
 	missing := errors.Is(err, os.ErrNotExist)
 	if err == nil {
-		err = check()
+		err = m.RequireCoreConfigHost(ctx)
 	}
 	if err == nil {
 		return nil
@@ -297,7 +298,7 @@ func (m *Manager) EnsureCoreConfigHost(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("CLI 核心配置能力准备失败，未启动业务: %w", err)
 	}
-	if err = check(); err != nil {
+	if err = m.RequireCoreConfigHost(ctx); err != nil {
 		return fmt.Errorf("当前渠道的 CLI 不满足核心配置协议，未启动业务: %w", err)
 	}
 	return nil

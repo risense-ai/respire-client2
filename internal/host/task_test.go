@@ -38,10 +38,24 @@ func TestMain(m *testing.M) {
 		} else if unsupported == "result" {
 			methods = methods[:1]
 		}
-		if json.NewEncoder(os.Stdout).Encode(map[string]any{"status": "ok", "summary": map[string]any{"capabilities": map[string]any{"host_rpc": map[string]any{"version": 1, "transport": "stdio", "methods": methods}}}}) != nil {
+		status, exit := "ok", 0
+		switch unsupported {
+		case "warn":
+			status, methods = "warn", nil
+		case "warn-supported":
+			status = "warn"
+		case "nonzero":
+			methods, exit = nil, 7
+		case "nonzero-supported":
+			exit = 7
+		case "malformed":
+			fmt.Print("invalid capabilities JSON")
+			os.Exit(0)
+		}
+		if json.NewEncoder(os.Stdout).Encode(map[string]any{"status": status, "summary": map[string]any{"capabilities": map[string]any{"host_rpc": map[string]any{"version": 1, "transport": "stdio", "methods": methods}}}}) != nil {
 			os.Exit(1)
 		}
-		os.Exit(0)
+		os.Exit(exit)
 	}
 	args, err := json.Marshal(os.Args[1:])
 	if err == nil {
@@ -233,6 +247,26 @@ func TestResetMaterialSaveFailureRetainsPendingReceipt(t *testing.T) {
 }
 
 func TestResetMaterialRecoveryPreservesFailuresAndIdentity(t *testing.T) {
+	for _, outcome := range []string{"warn", "warn-supported", "nonzero", "nonzero-supported", "malformed"} {
+		t.Run("capability_probe_"+outcome, func(t *testing.T) {
+			m, id, _, calls := recoveryMaterialFixture(t)
+			t.Setenv("RESPIRE_TEST_CORE_UNSUPPORTED", outcome)
+			if err := m.EnsureCoreConfigHost(context.Background()); err == nil || errors.Is(err, errHostMethodUnsupported) {
+				t.Fatal("failed probe was treated as a missing method", err)
+			}
+			if _, err := os.Stat(filepath.Join(m.DataRoot, "bin", "runtime", ".install.lock")); !errors.Is(err, os.ErrNotExist) {
+				t.Fatal("failed probe entered automatic installation", err)
+			}
+			for _, method := range []string{"core_config.set", "core_config.result"} {
+				if _, err := m.hostOperation(context.Background(), nil, "", method, id); err == nil || errors.Is(err, errHostMethodUnsupported) {
+					t.Fatal("failed probe allowed RPC or reported missing method", method, err)
+				}
+			}
+			if _, err := os.Stat(calls); !errors.Is(err, os.ErrNotExist) {
+				t.Fatal("failed probe sent a business request", err)
+			}
+		})
+	}
 	for _, method := range []string{"core_config.set", "core_config.result"} {
 		t.Run("unsupported_"+method, func(t *testing.T) {
 			m, id, _, calls := recoveryMaterialFixture(t)

@@ -230,10 +230,12 @@ func hasArg(arg string) bool {
 	return false
 }
 
-func (d *desktop) task(stage string, action func() error) {
-	if err := d.m.RunTask(stage, action); err != nil {
+func (d *desktop) task(stage string, action func() error) error {
+	err := d.m.RunTask(stage, action)
+	if err != nil {
 		log.Printf("%s: %v", stage, err)
 	}
+	return err
 }
 
 func (d *desktop) restartClient() error {
@@ -289,6 +291,30 @@ func installRuntimeForStartup(m interface {
 	return err
 }
 
+func updateRuntimeForBackground(ctx context.Context, m interface {
+	RunTask(string, func() error) error
+	InstallRuntime(bool, bool) error
+	RequireCoreConfigHost(context.Context) error
+	Health(context.Context) (host.HealthInfo, json.RawMessage, error)
+	Owns(string) bool
+}, preparationErr error, restart bool) error {
+	if preparationErr != nil {
+		return preparationErr
+	}
+	healthCtx, healthCancel := context.WithTimeout(ctx, 3*time.Second)
+	h, _, err := m.Health(healthCtx)
+	healthCancel()
+	if err != nil || !m.Owns(h.Exe) {
+		return nil
+	}
+	return m.RunTask("检查 Runtime 更新", func() error {
+		if err := m.InstallRuntime(true, restart); err != nil {
+			return err
+		}
+		return m.RequireCoreConfigHost(ctx)
+	})
+}
+
 func (d *desktop) background() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -299,7 +325,7 @@ func (d *desktop) background() {
 		case <-ctx.Done():
 		}
 	}()
-	d.task("准备 CLI / 连接 Runtime", func() error {
+	runtimePreparationErr := d.task("准备 CLI / 连接 Runtime", func() error {
 		if d.m.Preferences().AutoRuntime {
 			if err := d.m.MigrateRuntime(); err != nil {
 				return err
@@ -351,19 +377,12 @@ func (d *desktop) background() {
 				}
 			}
 		}
-		if prefs.RuntimeAutoUpdate &&
+		if runtimePreparationErr == nil && prefs.RuntimeAutoUpdate &&
 			(lastRuntime.IsZero() || now.Sub(lastRuntime) >= updateInterval(prefs.RuntimeUpdateInterval)) {
 			lastRuntime = now
-			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-			h, _, err := d.m.Health(ctx)
-			cancel()
-			if err == nil && d.m.Owns(h.Exe) {
-				d.task("检查 Runtime 更新", func() error {
-					// The restart switch decides whether the running instance
-					// is gracefully rotated onto the new version directory.
-					restart := d.m.Preferences().RuntimeAutoRestart
-					return d.m.InstallRuntime(true, restart)
-				})
+			runtimePreparationErr = updateRuntimeForBackground(ctx, d.m, runtimePreparationErr, d.m.Preferences().RuntimeAutoRestart)
+			if runtimePreparationErr != nil {
+				log.Printf("Runtime 自动更新停止: %v", runtimePreparationErr)
 			}
 		}
 		delay := 30 * time.Second
