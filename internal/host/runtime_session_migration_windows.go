@@ -70,7 +70,7 @@ func (m *Manager) migrateWindowsSession(ctx context.Context, owner HealthInfo, p
 		primary, factor, primarySlot = session.LegacySuper, session.SecretKey, "super"
 	}
 	if primary == nil {
-		account, err := session.windowsCredentialAccount()
+		account, err := session.nativeCredentialAccount()
 		if err != nil {
 			return nil, err
 		}
