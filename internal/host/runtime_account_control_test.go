@@ -442,17 +442,33 @@ func TestPublishedRuntimeRequiresExactClient2Maintenance(t *testing.T) {
 	if err != nil || json.Unmarshal(continuationReceipt, &waiting) != nil {
 		t.Fatal("invalid test continuation receipt")
 	}
-	if _, err := manager.continueRuntimeLoginCode(ctx, image, hash, admission, waiting, "short"); err == nil {
+	invalidCode := "short"
+	if _, err := manager.continueRuntimeLogin(ctx, image, hash, admission, waiting, runtimeLoginSupplement{TOTP: &invalidCode}); err == nil {
 		t.Fatal("invalid code reached the Runtime")
 	}
 	code := "098765"
-	if _, err := manager.continueRuntimeLoginCode(ctx, image, hash, admission, waiting, code); !errors.As(err, &unconfirmed) ||
+	if _, err := manager.continueRuntimeLogin(ctx, image, hash, admission, waiting, runtimeLoginSupplement{TOTP: &code}); !errors.As(err, &unconfirmed) ||
 		unconfirmed.id != operation || !strings.Contains(err.Error(), "account_outcome_unknown") {
 		t.Fatalf("Runtime did not receive the original continuation before rejecting fixture intent: %v", err)
 	}
 	reloaded, err := store.readSlot(params.Material.Backend, "rsrs", slot, false)
 	if err != nil || reloaded == nil || *reloaded != *saved {
 		t.Fatalf("transient verification code was retained in the original private custody: %v", err)
+	}
+	waiting.Login.RequiredInputs = []string{"source_secret", "merge_local"}
+	fixtureSource := "isolated source input"
+	merge := false
+	if _, err := manager.continueRuntimeLogin(ctx, image, hash, admission, waiting,
+		runtimeLoginSupplement{SourceSecret: &fixtureSource, MergeLocal: &merge}); !errors.As(err, &unconfirmed) ||
+		unconfirmed.id != operation || !strings.Contains(err.Error(), "account_outcome_unknown") {
+		t.Fatalf("supplement did not reach the same Runtime operation: %v", err)
+	}
+	reloaded, err = store.readSlot(params.Material.Backend, "rsrs", slot, false)
+	if err != nil || reloaded == nil || json.Unmarshal([]byte(*reloaded), &custody) != nil ||
+		custody.Request.Continuation.SourceSecret == nil || *custody.Request.Continuation.SourceSecret != fixtureSource ||
+		custody.Request.Continuation.MergeLocal == nil || *custody.Request.Continuation.MergeLocal ||
+		custody.Request.Authorization.TOTP != nil {
+		t.Fatalf("private login supplement was not retained with the original input: %v", err)
 	}
 	// Use an actual encrypted v4 vault wrap for the isolated target account.
 	salt, nonce := bytes.Repeat([]byte{0x71}, 16), bytes.Repeat([]byte{0x2f}, 12)

@@ -172,16 +172,15 @@ func (m *Manager) queryRuntimeLoginResult(ctx context.Context, image, digest str
 
 func (m *Manager) continueDesktopRuntimeLogin(ctx context.Context, job Operation, input json.RawMessage) (json.RawMessage, error) {
 	pending := pendingHostInput(job)
-	if pending == nil || len(pending.RequiredInputs) != 1 || pending.RequiredInputs[0] != "totp" {
+	if pending == nil {
 		return nil, &unconfirmedError{id: job.ID, cause: errors.New("原 Runtime 登录需要其请求的输入")}
 	}
-	_, inputs, err := continuationParams(job, input)
-	if err != nil {
+	if _, _, err := continuationParams(job, input); err != nil {
 		return nil, &unconfirmedError{id: job.ID, cause: err}
 	}
-	code, ok := inputs["totp"].(string)
-	if !ok {
-		return nil, &unconfirmedError{id: job.ID, cause: errors.New("原 Runtime 登录需要其请求的输入")}
+	var supplement runtimeLoginSupplement
+	if err := json.Unmarshal(input, &supplement); err != nil {
+		return nil, &unconfirmedError{id: job.ID, cause: errors.New("原 Runtime 登录补充输入无效")}
 	}
 	var envelope struct {
 		Summary runtimeLoginReceipt `json:"summary"`
@@ -190,7 +189,7 @@ func (m *Manager) continueDesktopRuntimeLogin(ctx context.Context, job Operation
 		return nil, &unconfirmedError{id: job.ID, cause: errors.New("原 Runtime 登录输入回执无效")}
 	}
 	raw, err := m.withPendingRuntimeLogin(ctx, job.Transaction, func(image, digest string, admission runtimeAccountAdmission, _ runtimeAccountRecord) (json.RawMessage, error) {
-		result, err := m.continueRuntimeLoginCode(ctx, image, digest, admission, envelope.Summary, code)
+		result, err := m.continueRuntimeLogin(ctx, image, digest, admission, envelope.Summary, supplement)
 		if err != nil {
 			return nil, err
 		}

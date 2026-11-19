@@ -29,6 +29,9 @@ type runtimeLoginContinuation struct {
 	LegacyPassword  *string `json:"legacy_password,omitempty"`
 	AccountSecret   *string `json:"account_secret,omitempty"`
 	SecretKey       *string `json:"secret_key,omitempty"`
+	SourceSecret    *string `json:"source_secret,omitempty"`
+	NewSuper        *string `json:"new_super,omitempty"`
+	MergeLocal      *bool   `json:"merge_local,omitempty"`
 }
 
 type runtimeLoginMaterial struct {
@@ -132,7 +135,7 @@ func loginCustodyPath(record runtimeAccountRecord) string {
 
 // Keep the nonsecret routing record compatible with CLI recovery. The request
 // itself includes credentials and must only be saved in the system keyring.
-func persistInitialRuntimeLogin(ctx context.Context, record runtimeAccountRecord, params runtimeLoginParams, encodedRequest json.RawMessage) error {
+func persistInitialRuntimeLogin(ctx context.Context, record runtimeAccountRecord, params runtimeLoginParams) error {
 	account := "login-" + strings.ReplaceAll(record.OperationID, "-", "")
 	backend := runtimeLoginBackend()
 	if params.Material.Account != account || params.Material.Backend != backend || params.Challenge != nil {
@@ -142,6 +145,12 @@ func persistInitialRuntimeLogin(ctx context.Context, record runtimeAccountRecord
 	if err != nil {
 		return err
 	}
+	params.Authorization.TOTP = nil
+	encodedRequest, err := json.Marshal(params)
+	if err != nil {
+		return err
+	}
+	defer clear(encodedRequest)
 	secrets, err := json.Marshal(runtimeLoginCustody{Request: encodedRequest, Slots: map[string]string{}})
 	if err != nil {
 		return err
@@ -155,6 +164,15 @@ func persistInitialRuntimeLogin(ctx context.Context, record runtimeAccountRecord
 
 func persistRuntimeLoginChallenge(ctx context.Context, record runtimeAccountRecord, params runtimeLoginParams,
 	encodedRequest []byte, handoff runtimeLoginHandoff) error {
+	if params.Authorization.TOTP != nil {
+		params.Authorization.TOTP = nil
+		var err error
+		encodedRequest, err = json.Marshal(params)
+		if err != nil {
+			return err
+		}
+		defer clear(encodedRequest)
+	}
 	if !validRuntimeLoginInputs([]string{"totp"}, &handoff) {
 		return errors.New("Invalid Runtime login challenge")
 	}
@@ -215,7 +233,7 @@ func (m *Manager) sendInitialRuntimeLogin(ctx context.Context, control runtimeAc
 		return runtimeLoginResult{}, err
 	}
 	defer clear(argument)
-	if err := persistInitialRuntimeLogin(ctx, record, params, json.RawMessage(argument)); err != nil {
+	if err := persistInitialRuntimeLogin(ctx, record, params); err != nil {
 		return runtimeLoginResult{}, err
 	}
 	if err := admission.markLoginSent(); err != nil {
