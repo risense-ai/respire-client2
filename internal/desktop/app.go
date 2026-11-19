@@ -64,7 +64,6 @@ func Run(m *host.Manager, buildVersion string) {
 	log.SetOutput(f)
 	d := &desktop{m: m, closing: make(chan struct{})}
 	defer d.native.close()
-	go ensureShellIdentity()
 	files, err := fs.Sub(frontend, "frontend")
 	if err != nil {
 		log.Fatal(err)
@@ -86,6 +85,10 @@ func Run(m *host.Manager, buildVersion string) {
 		if clean != "" {
 			uniqueID += "." + clean
 		}
+	}
+	// A named test instance must not replace the installed app's shell entries.
+	if uniqueID == "ai.risense.respire.client2" {
+		go ensureShellIdentity()
 	}
 	singleInstance := &application.SingleInstanceOptions{UniqueID: uniqueID, OnSecondInstanceLaunch: func(application.SecondInstanceData) {
 		if d.window != nil {
