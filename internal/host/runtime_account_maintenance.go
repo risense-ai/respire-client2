@@ -43,7 +43,6 @@ type runtimeAccountRecord struct {
 type runtimeAccountAdmission struct {
 	Marker, Record []byte
 	Path           string
-	Identity       runtimeAuthIdentity
 }
 
 func runtimeRegistrationCoordinator(root string, registration []byte) (string, error) {
@@ -197,7 +196,7 @@ func (m *Manager) publishPausedRuntimeMaintenance(ctx context.Context, profilePa
 	if err := writeRuntimeAccountRecord(filepath.Join(directory, "maintenance.json"), raw, nil); err != nil {
 		return admission, err
 	}
-	return runtimeAccountAdmission{Marker: raw, Record: record, Path: path, Identity: identity}, nil
+	return runtimeAccountAdmission{Marker: raw, Record: record, Path: path}, nil
 }
 
 // The takeover lock serializes Client2 and CLI record writers.

@@ -10,7 +10,6 @@ import (
 	"net"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 )
@@ -137,39 +136,33 @@ func TestPublishedRuntimeRequiresExactClient2Maintenance(t *testing.T) {
 	if _, err := manager.prepareRuntimeAccountControl(context.Background(), image, hash, root, nil, changed); err == nil {
 		t.Fatal("Client2 accepted stale maintenance bytes")
 	}
-	control, err := manager.prepareRuntimeAccountControl(context.Background(), image, hash, root, nil, marker)
+	password := "isolated fixture"
+	authorization := runtimeLoginAuthorization{Kind: "password", Password: &password}
+	// Contradictory options exercise admission without contacting a server.
+	continuation := runtimeLoginContinuation{MigrateLocal: true, MigrateVault: true}
+	session := filepath.Join(root, "session.json")
+	if err := os.WriteFile(session, []byte(`{"user":"changed-after-admission"}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := manager.prepareInitialRuntimeLogin(ctx, image, hash, admission, authorization, continuation, nil, nil, nil); err == nil {
+		t.Fatal("changed profile admitted the original login")
+	}
+	if err := os.Remove(session); err != nil {
+		t.Fatal(err)
+	}
+	control, params, err := manager.prepareInitialRuntimeLogin(ctx, image, hash, admission, authorization, continuation, nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	backend := "native"
-	if runtime.GOOS == "linux" {
-		// Windows and Darwin use native; Linux uses its Secret Service.
-		backend = "secret_service"
+	changedIntent := params
+	changedIntent.User = "different-user"
+	if _, err := manager.sendInitialRuntimeLogin(ctx, control, changedIntent, &admission); err == nil {
+		t.Fatal("changed account intent was sent")
 	}
-	params, err := json.Marshal(map[string]any{
-		"schema_version": 1, "binding": control.binding, "identity": admission.Identity,
-		"addr": intent.Server, "user": intent.User,
-		"authorization": map[string]any{"kind": "password", "password": "isolated fixture"},
-		"material":      map[string]any{"keyring_account": "login-" + strings.ReplaceAll(operation, "-", ""), "keyring_backend": backend},
-		// Runtime rejects these contradictory options before it can contact a server.
-		"continuation": map[string]any{"migrate_local": true, "migrate_vault": true},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	requestID, err := controlUUID()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := admission.markLoginSent(); err != nil {
-		t.Fatal(err)
-	}
-	if err := admission.markLoginSent(); err == nil {
+	reply, err := manager.sendInitialRuntimeLogin(ctx, control, params, &admission)
+	if _, duplicateErr := manager.sendInitialRuntimeLogin(ctx, control, params, &admission); duplicateErr == nil {
 		t.Fatal("sent operation was readmitted")
 	}
-	reply, err := manager.exchangeRuntimeControl(context.Background(), control.image, control.port, control.grant,
-		runtimeControlRequest{V: 1, ID: requestID, Method: "control.auth.login", Args: []string{string(params)},
-			OperationID: operation, IdempotencyKey: operation})
 	var unconfirmed *unconfirmedError
 	if !errors.As(err, &unconfirmed) || unconfirmed.id != operation ||
 		reply.Code != "account_outcome_unknown" || !strings.Contains(reply.Error, "local import and explicit vault migration are separate operations") {
