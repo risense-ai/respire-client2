@@ -277,24 +277,42 @@ func (m *Manager) installBootstrapCLI(ctx context.Context, p *bootstrapPayload) 
 		Compat{MinCLI: p.Manifest.Runtime.MinCLI, MaxCLI: p.Manifest.Runtime.MaxCLI})
 }
 
+func (m *Manager) canReuseFrontendCLI(ctx context.Context, version, expectedHash string, compat Compat) (bool, error) {
+	dest := filepath.Join(m.DataRoot, "bin", cliBinary())
+	if _, err := os.Stat(dest); err == nil {
+		existing, probeErr := probeCLIVersion(ctx, dest)
+		if probeErr != nil {
+			return false, fmt.Errorf("无法识别已有的 %s，未覆盖；请先手动移除或修复该文件后重试: %w", dest, probeErr)
+		}
+		if semver.Compare("v"+existing, "v"+version) > 0 {
+			return true, CheckCLICompat(existing, compat)
+		}
+		if existing == version {
+			hash, err := fileHash(dest)
+			if err != nil {
+				return false, err
+			}
+			if hash == expectedHash {
+				return true, CheckCLICompat(existing, compat)
+			}
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return false, err
+	}
+	return false, nil
+}
+
 // installFrontendCLI shares verified, atomic CLI publication across both sources.
 func (m *Manager) installFrontendCLI(ctx context.Context, source, version, expectedHash string, compat Compat) error {
+	reuse, err := m.canReuseFrontendCLI(ctx, version, expectedHash, compat)
+	if err != nil || reuse {
+		return err
+	}
 	binDir := filepath.Join(m.DataRoot, "bin")
 	if err := os.MkdirAll(binDir, 0700); err != nil {
 		return err
 	}
 	dest := filepath.Join(binDir, cliBinary())
-	if _, err := os.Stat(dest); err == nil {
-		existing, probeErr := probeCLIVersion(ctx, dest)
-		if probeErr != nil {
-			return fmt.Errorf("无法识别已有的 %s，未覆盖；请先手动移除或修复该文件后重试: %w", dest, probeErr)
-		}
-		if semver.Compare("v"+existing, "v"+version) > 0 {
-			return CheckCLICompat(existing, compat) // keep a newer CLI only if compatible
-		}
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return err
-	}
 	m.progress("安装 CLI", 0, 0)
 	tmp, err := os.CreateTemp(binDir, ".rsrs-payload-*")
 	if err != nil {

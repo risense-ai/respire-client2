@@ -230,6 +230,10 @@ func (m *Manager) installOnlineCLI(ctx context.Context, compat Compat) error {
 	if err != nil {
 		return err
 	}
+	reuse, err := m.canReuseFrontendCLI(ctx, meta.Version, meta.BinaryHash, compat)
+	if err != nil || reuse {
+		return err
+	}
 	stage, err := os.MkdirTemp(m.Root, ".cli-download-*")
 	if err != nil {
 		return err
