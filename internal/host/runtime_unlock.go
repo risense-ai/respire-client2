@@ -26,6 +26,7 @@ type hostCredentialStore struct {
 	backends []string
 	read     func(backend, service, account string) (*string, error)
 	preserve func(service, account, value string) error
+	replace  func(service, account string, expected *string, value string) error
 }
 
 func (s hostCredentialStore) supports(name string) bool {

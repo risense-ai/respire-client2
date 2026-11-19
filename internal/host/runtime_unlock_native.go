@@ -11,5 +11,6 @@ func nativeRuntimeCredentialStore(context.Context) hostCredentialStore {
 			return readSystemCredential(service, account)
 		},
 		preserve: preserveSystemCredential,
+		replace:  replaceSystemCredential,
 	}
 }

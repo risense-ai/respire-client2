@@ -3,6 +3,7 @@
 package host
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -34,6 +35,11 @@ type runtimeLoginMaterial struct {
 	TargetOriginal json.RawMessage `json:"target_original"`
 }
 
+type runtimeLoginChallenge struct {
+	Payload string `json:"payload"`
+	Digest  string `json:"sha256"`
+}
+
 type runtimeLoginParams struct {
 	Version       int                       `json:"schema_version"`
 	Binding       runtimeControlBinding     `json:"binding"`
@@ -44,6 +50,7 @@ type runtimeLoginParams struct {
 	SuperPassword *string                   `json:"super_password,omitempty"`
 	Continuation  runtimeLoginContinuation  `json:"continuation"`
 	Material      runtimeLoginMaterial      `json:"material"`
+	Challenge     *runtimeLoginChallenge    `json:"challenge,omitempty"`
 }
 
 // The coordinator retains takeover. The original session is rechecked before
@@ -94,33 +101,86 @@ func runtimeLoginBackend() string {
 	return "native"
 }
 
+type runtimeLoginCustody struct {
+	Request   json.RawMessage   `json:"request"`
+	Candidate json.RawMessage   `json:"candidate"`
+	Slots     map[string]string `json:"slots"`
+}
+
+func loginCustodyMetadata(record runtimeAccountRecord, account, backend string, digest *string) ([]byte, error) {
+	return json.Marshal(map[string]any{
+		"operation_id": record.OperationID, "root": record.Root, "source": record.Source, "account": account, "backend": backend,
+		"candidate": nil, "challenge_sha256": digest, "rolled_back": false, "slots_removed": false, "retired": false,
+	})
+}
+
+func loginCustodyPath(record runtimeAccountRecord) string {
+	return filepath.Join(record.Root, "runtime", "autostart", "account-login-"+record.OperationID+".json")
+}
+
 // Keep the nonsecret routing record compatible with CLI recovery. The request
 // itself includes credentials and must only be saved in the system keyring.
 func persistInitialRuntimeLogin(ctx context.Context, record runtimeAccountRecord, params runtimeLoginParams, encodedRequest json.RawMessage) error {
 	account := "login-" + strings.ReplaceAll(record.OperationID, "-", "")
 	backend := runtimeLoginBackend()
-	if params.Material.Account != account || params.Material.Backend != backend {
+	if params.Material.Account != account || params.Material.Backend != backend || params.Challenge != nil {
 		return errors.New("Runtime login credential slot differs from its original operation")
 	}
-	metadata, err := json.Marshal(map[string]any{
-		"operation_id": record.OperationID, "root": record.Root, "source": record.Source, "account": account, "backend": backend,
-		"candidate": nil, "challenge_sha256": nil, "rolled_back": false, "slots_removed": false, "retired": false,
-	})
+	metadata, err := loginCustodyMetadata(record, account, backend, nil)
 	if err != nil {
 		return err
 	}
-	secrets, err := json.Marshal(map[string]any{
-		"request": encodedRequest, "candidate": nil, "slots": map[string]string{},
-	})
+	secrets, err := json.Marshal(runtimeLoginCustody{Request: encodedRequest, Slots: map[string]string{}})
 	if err != nil {
 		return err
 	}
 	defer clear(secrets)
-	path := filepath.Join(record.Root, "runtime", "autostart", "account-login-"+record.OperationID+".json")
-	if err := writeRuntimeAccountRecord(path, metadata, nil); err != nil {
+	if err := writeRuntimeAccountRecord(loginCustodyPath(record), metadata, nil); err != nil {
 		return err
 	}
 	return nativeRuntimeCredentialStore(ctx).preserve("rsrs", "login-control:"+account, string(secrets))
+}
+
+func persistRuntimeLoginChallenge(ctx context.Context, record runtimeAccountRecord, params runtimeLoginParams,
+	encodedRequest []byte, handoff runtimeLoginHandoff) error {
+	if !validRuntimeLoginInputs([]string{"totp"}, &handoff) {
+		return errors.New("Invalid Runtime login challenge")
+	}
+	path := loginCustodyPath(record)
+	account, backend := params.Material.Account, params.Material.Backend
+	expectedMetadata, err := loginCustodyMetadata(record, account, backend, nil)
+	if err != nil {
+		return err
+	}
+	store := nativeRuntimeCredentialStore(ctx)
+	slot := "login-control:" + account
+	original, err := store.readSlot(backend, "rsrs", slot, false)
+	if err != nil {
+		return err
+	}
+	var custody runtimeLoginCustody
+	if original == nil || json.Unmarshal([]byte(*original), &custody) != nil || !bytes.Equal(custody.Request, encodedRequest) {
+		return errors.New("Runtime login challenge has no matching original credential record")
+	}
+	params.Challenge = &runtimeLoginChallenge{Payload: *handoff.Challenge, Digest: *handoff.ChallengeDigest}
+	custody.Request, err = json.Marshal(params)
+	if err != nil {
+		return err
+	}
+	defer clear(custody.Request)
+	secrets, err := json.Marshal(custody)
+	if err != nil {
+		return err
+	}
+	defer clear(secrets)
+	metadata, err := loginCustodyMetadata(record, account, backend, handoff.ChallengeDigest)
+	if err != nil {
+		return err
+	}
+	if err := writeRuntimeAccountRecord(path, metadata, expectedMetadata); err != nil {
+		return err
+	}
+	return store.replace("rsrs", slot, original, string(secrets))
 }
 
 // Accept only the original operation. Persist and read back custody before the
@@ -160,6 +220,12 @@ func (m *Manager) sendInitialRuntimeLogin(ctx context.Context, control runtimeAc
 	result, err := readRuntimeLoginResult(reply, record)
 	if err != nil {
 		return runtimeLoginResult{}, &unconfirmedError{id: record.OperationID, cause: err}
+	}
+	if result.Handoff != nil && result.Handoff.Kind == "challenge" {
+		if err := persistRuntimeLoginChallenge(ctx, record, params, argument, *result.Handoff); err != nil {
+			return runtimeLoginResult{}, &unconfirmedError{id: record.OperationID, cause: err}
+		}
+		result.Handoff = nil
 	}
 	return result, nil
 }

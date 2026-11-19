@@ -275,4 +275,29 @@ func TestPublishedRuntimeRequiresExactClient2Maintenance(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(root, ".login-recovery.json")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("invalid intent should not create a login journal: %v", err)
 	}
+
+	// Validate the native checkpoint separately from the rejected Runtime request.
+	challenge := "isolated challenge fixture"
+	challengeDigest := controlDigest([]byte(challenge))
+	handoff := runtimeLoginHandoff{Kind: "challenge", Challenge: &challenge, ChallengeDigest: &challengeDigest}
+	originalRequest, err := json.Marshal(params)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := persistRuntimeLoginChallenge(ctx, record, params, []byte("{}"), handoff); err == nil {
+		t.Fatal("unrelated credential input was allowed to update the checkpoint")
+	}
+	if err := persistRuntimeLoginChallenge(ctx, record, params, originalRequest, handoff); err != nil {
+		t.Fatal(err)
+	}
+	saved, err = store.readSlot(params.Material.Backend, "rsrs", slot, false)
+	if err != nil || saved == nil || json.Unmarshal([]byte(*saved), &custody) != nil ||
+		custody.Request.Challenge == nil || custody.Request.Challenge.Payload != challenge ||
+		custody.Request.Challenge.Digest != challengeDigest {
+		t.Fatalf("original two-step challenge was not recoverable from the credential store: %v", err)
+	}
+	nonsecret, err = readCredentialConfig(metadata, runtimeMaintenanceLimit)
+	if err != nil || !bytes.Contains(nonsecret, []byte(challengeDigest)) || bytes.Contains(nonsecret, []byte(challenge)) {
+		t.Fatalf("challenge metadata did not retain only its digest: %v", err)
+	}
 }
