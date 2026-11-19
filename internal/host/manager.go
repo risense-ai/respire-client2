@@ -196,6 +196,7 @@ type InstalledRuntime struct {
 
 type Manager struct {
 	ClientVersion   string
+	OpenBrowser     func(string) error
 	Root            string
 	DataRoot        string
 	Endpoint        string

@@ -74,7 +74,7 @@ Windows 除便携 EXE 外还提供每用户安装器 `respire-windows-<arch>-set
 - 图谱支持缩放/平移、键盘导航、拖拽、目录筛选、节点链接与符合条件的末次操作撤销。撤销会拒绝已变化的记忆库；它不是原子化的跨客户端事务。
 - 系统字体枚举、界面缩放与阅读排版持久化；默认可执行文件/应用包图标使用亮色图标。
 - 只读子树授权（含直接/继承查看与撤销）、空间成员管理、记忆材料导出与永久密文清除。
-- 密码/TOTP登录、注册、密钥恢复与超级密码重置，经版本化的 CLI 宿主 RPC 完成；需要兼容的 CLI 包。见[传输与验收状态](docs/cli-host-input.md)。
+- Client2 负责浏览器登录和密码／双重验证登录，并把账户事务交给 Runtime。注册、密钥恢复和超级密码重置仍通过 CLI 宿主 RPC 完成。见[认证传输](docs/cli-host-input.md)。
 
 `v0.2.2` 版本可识别 `<root>/bin/rsrs[.exe]` 处已有的外部 CLI，读取并显示其版本，且可在不接管 npm 归属的情况下启动它。更新页提供 GitHub 与国内镜像链接，供手动下载桌面端与 CLI。桌面更新自动下载，下载完成后自动重启应用；业务操作或任务执行期间除外。新安装默认 CLI 与客户端均使用 Stable；既有安装保留所选通道。若只想接收稳定版，请在更新页将两个通道都选为 Stable。[Releases](https://github.com/risense-ai/respire-client2/releases) 列出可用构建。已验证路径与发布门槛见[验证记录](docs/verification.md)与[迁移验收](docs/migration.md)。
 

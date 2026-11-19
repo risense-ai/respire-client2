@@ -1,4 +1,4 @@
-# Required CLI authentication transport
+# Authentication transport
 
 Configuration, credentials and process ownership follow
 [component boundaries](component-boundaries.md). Host configuration reads,
@@ -10,7 +10,7 @@ The transport remains version 1. CLI host continuation support must advertise
 `summary.capabilities.host_rpc.methods`. Pending receipts are not successful
 completion; supplemental inputs always target the original transaction.
 
-The legacy desktop passes passwords/recovery values through CLI process arguments. This client uses bounded standard-input host RPC for registration, password login, key recovery and super-password reset. Classification keys also use redirected standard input. Credentials do not need to appear in process arguments.
+Client2 sends account login and its supplemental inputs directly to Runtime over the private host-control protocol. Client2 uses the system credential store and retains the original operation ID for continuation or recovery. Registration, key recovery and super-password reset still use standard-input CLI host RPC. Classification keys also use redirected standard input. Credentials stay out of process arguments.
 
 ## Implemented transport and compatibility
 
@@ -24,10 +24,12 @@ Stable/Dev selection does not silently change to enable an account operation.
 
 Initial methods are `auth.register`, `auth.login` (including TOTP), `auth.recover` and `auth.reset`. The request is `{v:1,id,method,params}`; a reply contains `{v:1,id,ok,exit,envelope}`. Input is limited to 64 KiB and fields to 16 KiB. Unknown fields, malformed/trailing JSON and client-only invocation are rejected. CLI capabilities advertise transport version 1. The client reports an explicit upgrade error for older packages and never automatically replays authentication after an unknown outcome.
 
-Browser authorization uses the separately advertised `auth.login.browser`
-method. Its string-map params accept only optional `addr` (or `{}`). CLI owns
-OAuth and private custody while returning the structured original account
-receipt. Desktop OAuth tokens, authorization objects and credentials are rejected.
+For browser login, Client2 verifies the expected dashboard, opens the system
+browser, and waits for the device grant issued by the login server. Client2
+passes the resulting authorization to Runtime through the same private
+account transaction used for password login. The browser login command accepts
+an optional server address. The desktop request cannot supply an OAuth token
+or password for this command.
 
 Continuation methods use typed JSON params rather than the original four
 methods' string map. Login params are `{operation_id,source_profile,continuation,

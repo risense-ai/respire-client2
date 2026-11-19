@@ -11,15 +11,18 @@ import (
 	"strings"
 )
 
-func (m *Manager) desktopRuntimePasswordLogin(ctx context.Context, args []string, secret, id string) (envelope json.RawMessage, err error) {
+func (m *Manager) desktopRuntimeAccountLogin(ctx context.Context, args []string, secret, id string, browser bool) (envelope json.RawMessage, err error) {
 	input, err := authParams(args, secret)
 	if err != nil {
 		return nil, err
 	}
 	operation := strings.TrimPrefix(id, "desktop-")
 	user, password := input["user"], input["password"]
-	if !hostOperationID.MatchString(operation) || user == "" || password == "" || m.ClientVersion == "" {
-		return nil, errors.New("登录请求缺少账户、密码或有效的操作身份")
+	if !hostOperationID.MatchString(operation) || m.ClientVersion == "" {
+		return nil, errors.New("登录请求缺少有效的操作身份")
+	}
+	if (browser && secret != "") || (!browser && (user == "" || password == "")) {
+		return nil, errors.New("登录输入与授权方式不匹配")
 	}
 	server := input["addr"]
 	if server == "" {
@@ -32,6 +35,17 @@ func (m *Manager) desktopRuntimePasswordLogin(ctx context.Context, args []string
 	if err != nil || address.Hostname() == "" || (address.Scheme != "https" && address.Scheme != "http") ||
 		address.User != nil || address.RawQuery != "" || address.Fragment != "" {
 		return nil, errors.New("无效的登录服务器地址")
+	}
+	authorization := runtimeLoginAuthorization{Kind: "password", Password: &password}
+	if totp := input["totp"]; totp != "" {
+		authorization.TOTP = &totp
+	}
+	if browser {
+		user, authorization, err = m.runtimeBrowserAuthorization(ctx, strings.TrimSuffix(server, "/"))
+		if err != nil {
+			return nil, err
+		}
+		server = strings.TrimSuffix(server, "/")
 	}
 	takeover, err := m.lockRuntimeTakeover(ctx)
 	if err != nil {
@@ -91,10 +105,6 @@ func (m *Manager) desktopRuntimePasswordLogin(ctx context.Context, args []string
 		receipt := runtimeLoginReceipt{OperationID: operation, SourceProfile: profile, Outcome: "unknown"}
 		raw, err := desktopRuntimeLoginEnvelope(receipt)
 		return raw, &unconfirmedError{id: operation, cause: errors.Join(cause, err)}
-	}
-	authorization := runtimeLoginAuthorization{Kind: "password", Password: &password}
-	if totp := input["totp"]; totp != "" {
-		authorization.TOTP = &totp
 	}
 	var super *string
 	if value := input["super"]; value != "" {

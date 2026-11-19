@@ -82,7 +82,7 @@ func (m *Manager) continueRuntimeLogin(ctx context.Context, imagePath, imageDige
 	var custody runtimeLoginCustody
 	var params runtimeLoginParams
 	if private == nil || json.Unmarshal([]byte(*private), &custody) != nil || json.Unmarshal(custody.Request, &params) != nil ||
-		params.Authorization.Kind != "password" || params.Authorization.Password == nil || params.Authorization.TOTP != nil || params.CustodyAck != nil ||
+		params.Authorization.TOTP != nil || params.CustodyAck != nil ||
 		params.Material.Account != account || params.Material.Backend != backend ||
 		params.User != record.User || params.Server != record.Server ||
 		params.Binding.InstallationRoot != record.Root || params.Binding.Profile != record.Source ||
@@ -90,6 +90,13 @@ func (m *Manager) continueRuntimeLogin(ctx context.Context, imagePath, imageDige
 		return runtimeLoginResult{}, errors.New("Original Runtime login credentials changed")
 	}
 	defer clear(custody.Request)
+	auth := params.Authorization
+	password := auth.Kind == "password" && auth.Password != nil && auth.Token == nil && auth.Session == nil
+	browser := auth.Kind == "browser" && auth.Password == nil && auth.Token != nil && *auth.Token != "" &&
+		params.Challenge == nil && supplement.TOTP == nil
+	if !password && !browser {
+		return runtimeLoginResult{}, errors.New("Original Runtime login authorization changed")
+	}
 	var challengeDigest *string
 	if params.Challenge != nil {
 		if controlDigest([]byte(params.Challenge.Payload)) != params.Challenge.Digest {
