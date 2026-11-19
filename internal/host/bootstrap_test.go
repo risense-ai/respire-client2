@@ -18,6 +18,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync/atomic"
 	"testing"
 )
 
@@ -928,7 +929,7 @@ func TestRuntimeStartInstallationState(t *testing.T) {
 	})
 }
 
-func TestInstallRuntimeRejectsInvalidBootstrapPayload(t *testing.T) {
+func TestBootstrapPayloadRejectsInvalidLocalComponents(t *testing.T) {
 	target, err := runtimeTarget()
 	if err != nil {
 		t.Fatal(err)
@@ -1025,7 +1026,7 @@ func TestInstallRuntimeRejectsInvalidBootstrapPayload(t *testing.T) {
 			defer server.Close()
 			m := newInstallTestManager(t)
 			m.HTTPClient = &http.Client{Transport: fakeGH{server: server.URL}}
-			err := m.InstallRuntime(false, false)
+			_, err := readBootstrapPayload()
 			if err == nil || !strings.Contains(err.Error(), tc.want) {
 				t.Fatalf("invalid payload must expose %q: %v", tc.want, err)
 			}
@@ -1044,117 +1045,7 @@ func TestInstallRuntimeRejectsInvalidBootstrapPayload(t *testing.T) {
 	}
 }
 
-func TestInstallRuntimePayloadChannelAndTarget(t *testing.T) {
-	for _, tc := range []struct {
-		name            string
-		payloadChannel  string
-		selectedChannel string
-		foreignTarget   bool
-	}{
-		{"foreign target", "dev", "dev", true},
-		{"stable payload with stable selected", "stable", "stable", false},
-		{"stable payload with dev selected", "stable", "dev", false},
-		{"dev payload with stable selected", "dev", "stable", false},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			dir := buildPayload(t, "1.2.3")
-			path := filepath.Join(dir, bootstrapManifestFile)
-			data, err := os.ReadFile(path)
-			if err != nil {
-				t.Fatal(err)
-			}
-			var manifest bootstrapManifest
-			if err = json.Unmarshal(data, &manifest); err != nil {
-				t.Fatal(err)
-			}
-			manifest.Channel = tc.payloadChannel
-			want := fmt.Sprintf("嵌入 Runtime 通道 %q 与设置中的通道 %q 不一致", tc.payloadChannel, tc.selectedChannel)
-			if tc.foreignTarget {
-				if manifest.Target == "x86_64-unknown-linux-gnu" {
-					manifest.Target = "aarch64-apple-darwin"
-				} else {
-					manifest.Target = "x86_64-unknown-linux-gnu"
-				}
-				want = "embedded payload targets"
-			}
-			data, err = json.Marshal(manifest)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if err = os.WriteFile(path, data, 0600); err != nil {
-				t.Fatal(err)
-			}
-			requests := make(chan struct{}, 1)
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				select {
-				case requests <- struct{}{}:
-				default:
-				}
-				http.Error(w, "unexpected release request", http.StatusServiceUnavailable)
-			}))
-			defer server.Close()
-			m := newInstallTestManager(t)
-			m.prefs.RuntimeChannel = tc.selectedChannel
-			m.HTTPClient = &http.Client{Transport: fakeGH{server: server.URL}}
-			if !tc.foreignTarget && tc.payloadChannel == tc.selectedChannel {
-				t.Setenv("HOME", t.TempDir())
-				stubCLIProbe(t, cliProbeFixture{tmpVersion: "1.2.3", destAbsent: true})
-				if err = m.InstallRuntime(false, false); err != nil {
-					t.Fatalf("matching channel must use the payload: %v", err)
-				}
-			} else if err = m.InstallRuntime(false, false); err == nil || !strings.Contains(err.Error(), want) {
-				t.Fatalf("payload mismatch must expose %q: %v", want, err)
-			}
-			select {
-			case <-requests:
-				t.Fatal("payload selection must not trigger online release discovery")
-			default:
-			}
-		})
-	}
-}
-
-func TestInstallRuntimeWithPayload(t *testing.T) {
-	t.Run("offline first launch installs CLI, Runtime and PATH", func(t *testing.T) {
-		buildPayload(t, "1.2.3")
-		payload, err := readBootstrapPayload()
-		if err != nil {
-			t.Fatal(err)
-		}
-		m := newInstallTestManager(t)
-		t.Setenv("HOME", t.TempDir())
-		stubCLIProbe(t, cliProbeFixture{tmpVersion: "1.2.3", destAbsent: true})
-		if err = m.InstallRuntime(false, false); err != nil {
-			t.Fatalf("offline first launch failed: %v", err)
-		}
-		installed, err := m.Installed()
-		if err != nil || installed.Version != "1.0.21" || installed.SHA256 != payload.Manifest.Runtime.SHA256 {
-			t.Fatalf("version pointer wrong: %+v err=%v", installed, err)
-		}
-		cli := filepath.Join(m.DataRoot, "bin", cliBinary())
-		if hash, err := fileHash(cli); err != nil || hash != payload.Manifest.CLI.SHA256 {
-			t.Fatalf("CLI not installed from payload: %v", err)
-		}
-		if runtime.GOOS != "windows" {
-			profile, err := os.ReadFile(filepath.Join(os.Getenv("HOME"), ".zprofile"))
-			if err != nil || !strings.Contains(string(profile), shellPathBegin) {
-				t.Fatalf("shell PATH block missing: %v", err)
-			}
-		}
-	})
-	t.Run("external runtime is not taken over", func(t *testing.T) {
-		buildPayload(t, "1.2.3")
-		m := newInstallTestManager(t)
-		m.Endpoint = newFakeRuntimeServer(t, "/Library/OtherCLI/manage/rsrs-runtime", "").URL
-		stubCLIProbe(t, cliProbeFixture{tmpVersion: "1.2.3", destAbsent: true})
-		err := m.InstallRuntime(false, false)
-		if err == nil || !strings.Contains(err.Error(), "未接管") {
-			t.Fatalf("external runtime must not be taken over, got %v", err)
-		}
-		if _, err = os.Stat(filepath.Join(m.Root, "runtime.json")); !errors.Is(err, os.ErrNotExist) {
-			t.Fatal("no version pointer may be written for a foreign runtime")
-		}
-	})
+func TestInstallRuntimeIndependently(t *testing.T) {
 	t.Run("existing higher runtime version is not downgraded", func(t *testing.T) {
 		payload, err := func() (bootstrapPayload, error) {
 			buildPayload(t, "1.2.3")
@@ -1208,32 +1099,6 @@ func TestInstallRuntimeWithPayload(t *testing.T) {
 		}
 		if _, err = os.Stat(filepath.Join(m.DataRoot, "bin", cliBinary())); !errors.Is(err, os.ErrNotExist) {
 			t.Fatal("a failed online update must not replace the CLI from the bundle")
-		}
-	})
-	t.Run("PATH failure keeps components and surfaces guidance", func(t *testing.T) {
-		if runtime.GOOS == "windows" {
-			t.Skip("Windows PATH is configured by the per-user installer")
-		}
-		if os.Geteuid() == 0 {
-			t.Skip("permission-based failure needs a non-root runner")
-		}
-		buildPayload(t, "1.2.3")
-		m := newInstallTestManager(t)
-		home := t.TempDir()
-		t.Setenv("HOME", home)
-		if err := os.Chmod(home, 0555); err != nil {
-			t.Fatal(err)
-		}
-		stubCLIProbe(t, cliProbeFixture{tmpVersion: "1.2.3", destAbsent: true})
-		err := m.InstallRuntime(false, false)
-		if err == nil || !strings.Contains(err.Error(), "zprofile") {
-			t.Fatalf("PATH failure must surface manual guidance, got %v", err)
-		}
-		if installed, readErr := m.Installed(); readErr != nil || installed.Version != "1.0.21" {
-			t.Fatalf("verified runtime must be kept: %+v err=%v", installed, readErr)
-		}
-		if _, err = os.Stat(filepath.Join(m.DataRoot, "bin", cliBinary())); err != nil {
-			t.Fatal("verified CLI must be kept")
 		}
 	})
 	t.Run("without payload the online path still installs", func(t *testing.T) {
@@ -1302,10 +1167,17 @@ func TestInstallRuntimeWithPayload(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		var denyCLI atomic.Bool
+		denyCLI.Store(true)
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			name := r.URL.Path
 			switch {
 			case name == "/repos/risense-ai/respire-cli/releases" && r.URL.Query().Get("per_page") == "20":
+				if denyCLI.Load() {
+					t.Error("Runtime installation queried a CLI release")
+					http.Error(w, "CLI release discovery unavailable", http.StatusServiceUnavailable)
+					return
+				}
 				_, _ = w.Write(cliList)
 			case name == "/repos/risense-ai/respire-runtime/releases" && r.URL.Query().Get("per_page") == "20":
 				_, _ = w.Write(list)
@@ -1329,16 +1201,31 @@ func TestInstallRuntimeWithPayload(t *testing.T) {
 		}))
 		defer srv.Close()
 		m.HTTPClient = &http.Client{Transport: fakeGH{server: srv.URL}}
-		if err = m.InstallRuntime(false, false); err != nil {
-			t.Fatalf("online pair install failed: %v", err)
+		if err := os.MkdirAll(filepath.Dir(m.runtimeManifest()), 0700); err != nil {
+			t.Fatal(err)
 		}
+		if err := os.WriteFile(m.runtimeManifest(), []byte("{broken receipt"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(m.DataRoot, "runtime.json"), []byte("{broken legacy receipt"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		m.Endpoint = newFakeRuntimeServer(t, "/external/rsrs-runtime", "foreign-supervisor").URL
+		if err = m.InstallRuntime(false, false); err != nil {
+			t.Fatalf("online Runtime install was blocked by old state: %v", err)
+		}
+		m.Endpoint = "http://127.0.0.1:1"
 		installed, err := m.Installed()
 		if err != nil || installed.Version != meta.RuntimeVersion || installed.SHA256 != binaryHash {
 			t.Fatalf("online install pointer wrong: %+v err=%v", installed, err)
 		}
 		cli := filepath.Join(m.DataRoot, "bin", cliBinary())
-		if hash, err := fileHash(cli); err != nil || hash != cliMeta["binary_sha256"] {
-			t.Fatalf("online CLI bytes wrong: %s %v", hash, err)
+		if _, err := os.Stat(cli); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("Runtime preparation touched the CLI: %v", err)
+		}
+		denyCLI.Store(false)
+		if err := m.installOnlineCLI(context.Background(), meta.Compat); err != nil {
+			t.Fatalf("separate CLI installation failed: %v", err)
 		}
 		t.Run("startup missing CLI downloads only host", func(t *testing.T) {
 			fresh := newInstallTestManager(t)
@@ -1401,7 +1288,7 @@ func TestInstallRuntimeWithPayload(t *testing.T) {
 				}
 			})
 		}
-		t.Run("same version with missing receipt fails without repairing it", func(t *testing.T) {
+		t.Run("same version verifies against incoming release before repairing receipt", func(t *testing.T) {
 			path := m.runtimeReceiptPath(meta.RuntimeVersion)
 			receipt, err := os.ReadFile(path)
 			if err != nil {
@@ -1416,11 +1303,11 @@ func TestInstallRuntimeWithPayload(t *testing.T) {
 				t.Fatal(err)
 			}
 			err = m.InstallRuntime(false, false)
-			if !errors.Is(err, os.ErrNotExist) || !strings.Contains(err.Error(), "installed Runtime verification failed") {
-				t.Fatalf("missing receipt must expose its verification error: %v", err)
+			if err != nil {
+				t.Fatalf("verified incoming release can repair its missing receipt: %v", err)
 			}
-			if _, err = os.Stat(path); !errors.Is(err, os.ErrNotExist) {
-				t.Fatalf("verification failure must not replace the receipt: %v", err)
+			if err := m.verifyInstalled(installed); err != nil {
+				t.Fatalf("repaired receipt did not verify: %v", err)
 			}
 			if current, err := m.Installed(); err != nil || current != installed {
 				t.Fatalf("verification failure changed the selection: %+v %v", current, err)
@@ -1441,7 +1328,7 @@ func TestInstallRuntimeWithPayload(t *testing.T) {
 				t.Fatal(err)
 			}
 			err = m.InstallRuntime(false, false)
-			if err == nil || !strings.Contains(err.Error(), "installed Runtime verification failed") {
+			if err == nil {
 				t.Fatalf("damaged Runtime must expose its verification error: %v", err)
 			}
 			data, err := os.ReadFile(path)
@@ -1475,7 +1362,7 @@ func TestInstallRuntimeWithPayload(t *testing.T) {
 			t.Fatal(err)
 		}
 		m.Endpoint = newFakeRuntimeServer(t, filepath.Join(m.runtimeDir(meta.RuntimeVersion), runtimeBinary()), "").URL
-		if err = m.InstallRuntime(false, false); err != nil {
+		if err = m.installOnlineCLI(context.Background(), meta.Compat); err != nil {
 			t.Fatalf("online CLI repair with existing Runtime failed: %v", err)
 		}
 		if hash, err := fileHash(cli); err != nil || hash != cliMeta["binary_sha256"] {
@@ -1502,82 +1389,14 @@ func TestInstallRuntimeWithPayload(t *testing.T) {
 		if err = os.Remove(cli); err != nil {
 			t.Fatal(err)
 		}
-		retainedExe := filepath.Join(m.runtimeDir(retained.Version), runtimeBinary())
-		ownedEndpoint := newFakeRuntimeServer(t, retainedExe, "").URL
-		m.Endpoint = ownedEndpoint
-		retainedMeta.BinaryHash = strings.Repeat("0", 64)
-		retainedJSON, err = fixtureReleaseJSON(t, tree, retainedMeta)
-		if err != nil {
-			t.Fatal(err)
+		if err := m.InstallRuntime(false, false); err != nil {
+			t.Fatalf("verified newer Runtime should remain selected: %v", err)
 		}
-		if err = m.InstallRuntime(false, false); err == nil || !strings.Contains(err.Error(), "receipt") {
-			t.Fatalf("retained metadata must match its own receipt: %v", err)
+		if current, err := m.Installed(); err != nil || current != retained {
+			t.Fatalf("staging downgraded the selected Runtime: %+v %v", current, err)
 		}
-		retainedMeta.BinaryHash = binaryHash
-		retainedJSON, err = fixtureReleaseJSON(t, tree, retainedMeta)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err = m.InstallRuntime(false, false); err == nil || !strings.Contains(err.Error(), "低于 Runtime") {
-			t.Fatalf("retained Runtime must enforce its stricter CLI minimum: %v", err)
-		}
-		if _, err = os.Stat(cli); !errors.Is(err, os.ErrNotExist) {
-			t.Fatal("incompatible CLI must not be published for the retained Runtime")
-		}
-		// The older incoming release now rejects this CLI; only the retained
-		// Runtime's own compatibility window permits the repair below.
-		meta.Compat.MinCLI = "2.0.0-dev.2"
-		retainedMeta.Compat.MinCLI = "2.0.0-dev.1"
-		buildJSON, err = fixtureReleaseJSON(t, tree, meta)
-		if err != nil {
-			t.Fatal(err)
-		}
-		retainedJSON, err = fixtureReleaseJSON(t, tree, retainedMeta)
-		if err != nil {
-			t.Fatal(err)
-		}
-		for _, guard := range []struct{ exe, managedID, reason string }{
-			{"/other/rsrs-runtime", "", "未接管"},
-			{retainedExe, "cli-supervisor", "监督器"},
-		} {
-			m.Endpoint = newFakeRuntimeServer(t, guard.exe, guard.managedID).URL
-			if err = m.InstallRuntime(false, false); err == nil || !strings.Contains(err.Error(), guard.reason) {
-				t.Fatalf("retained Runtime ownership guard failed: %v", err)
-			}
-			if _, err = os.Stat(cli); !errors.Is(err, os.ErrNotExist) {
-				t.Fatal("ownership guard must run before CLI publication")
-			}
-		}
-		busy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			w.Header().Set("Content-Type", "application/json")
-			fmt.Fprintf(w, `{"server":"respire","v":1,"pid":4242,"exe":%q,"rpc":{"executing_until_reply":1,"queued_or_cancelled_pending_removal":0}}`, retainedExe)
-		}))
-		defer busy.Close()
-		m.Endpoint = busy.URL
-		if err = m.InstallRuntime(true, false); err == nil || !strings.Contains(err.Error(), "正忙") {
-			t.Fatalf("retained Runtime busy guard failed: %v", err)
-		}
-		if _, err = os.Stat(cli); !errors.Is(err, os.ErrNotExist) {
-			t.Fatal("busy Runtime must defer CLI publication")
-		}
-		m.Endpoint = ownedEndpoint
-		if err = m.InstallRuntime(false, false); err != nil {
-			t.Fatalf("newer retained Runtime must still acquire its missing CLI: %v", err)
-		}
-		if current, readErr := m.Installed(); readErr != nil || current != retained {
-			t.Fatalf("CLI repair must not downgrade Runtime: %+v %v", current, readErr)
-		}
-		if hash, err := fileHash(cli); err != nil || hash != cliMeta["binary_sha256"] {
-			t.Fatalf("missing CLI was not installed for the retained Runtime: %s %v", hash, err)
-		}
-		stubCLIProbe(t, cliProbeFixture{tmpVersion: "2.0.0-dev.1", destVer: "2.0.0-dev.3"})
-		retainedMeta.Compat.MaxCLI = "2.0.0-dev.2"
-		retainedJSON, err = fixtureReleaseJSON(t, tree, retainedMeta)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err = m.InstallRuntime(false, false); err == nil || !strings.Contains(err.Error(), "兼容上限") {
-			t.Fatalf("kept newer CLI must obey the retained Runtime's maximum: %v", err)
+		if _, err := os.Stat(cli); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("retaining Runtime attempted to repair the CLI: %v", err)
 		}
 		for _, failure := range []string{"hash", "size", "compat"} {
 			cliMeta["binary_sha256"] = sha256Hex(t, cliBytes)
@@ -1601,8 +1420,8 @@ func TestInstallRuntimeWithPayload(t *testing.T) {
 			}
 			rejected := newInstallTestManager(t)
 			rejected.HTTPClient = m.HTTPClient
-			if err = rejected.InstallRuntime(false, false); err == nil {
-				t.Fatalf("invalid CLI %s must reject the pair", failure)
+			if err = rejected.installOnlineCLI(context.Background(), meta.Compat); err == nil {
+				t.Fatalf("invalid CLI %s must reject the CLI", failure)
 			}
 			if _, readErr := rejected.Installed(); !errors.Is(readErr, os.ErrNotExist) {
 				t.Fatalf("invalid CLI %s published a Runtime selection: %v", failure, readErr)

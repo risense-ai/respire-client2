@@ -145,7 +145,7 @@ func (d *desktop) handler(static http.Handler) http.Handler {
 					go d.task("停止 Runtime", func() error { return d.m.Stop(false) })
 					result = "已请求停止"
 				case "/api/runtime-update":
-					go d.task("安装 / 更新 Runtime", func() error { return d.m.InstallRuntime(false, d.m.Preferences().RuntimeAutoRestart) })
+					go d.task("安装 / 更新 Runtime", func() error { return d.m.InstallRuntime(false, false) })
 					result = "已请求安装 / 更新"
 				case "/api/runtime-restart":
 					// Restart & apply: gracefully stop the running instance and

@@ -55,7 +55,11 @@ func headless(m *host.Manager) {
 		err = m.RunTask("停止 Runtime", func() error { return m.Stop(false) })
 	case "install-runtime":
 		err = m.RunTask("安装 Runtime", func() error {
-			return m.InstallRuntime(false, m.Preferences().RuntimeAutoRestart)
+			return m.InstallRuntime(false, false)
+		})
+	case "prepare-cli":
+		err = m.RunTask("准备 CLI", func() error {
+			return m.EnsureCoreConfigHost(context.Background())
 		})
 	case "runtime-release":
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)

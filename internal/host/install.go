@@ -10,7 +10,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"time"
 
@@ -375,9 +374,6 @@ func (m *Manager) coreHostCompat(ctx context.Context) (Compat, error) {
 }
 
 func (m *Manager) InstallRuntime(automatic bool, restart bool) error {
-	if err := m.MigrateRuntime(); err != nil {
-		return err
-	}
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
 	defer cancel()
 	lock, err := m.lockRuntime(ctx)
@@ -385,108 +381,47 @@ func (m *Manager) InstallRuntime(automatic bool, restart bool) error {
 		return err
 	}
 	defer lock.Close()
+
 	m.progress("检查 Runtime 发布", 0, 0)
-	previous, prevErr := m.Installed()
-	if prevErr != nil && !errors.Is(prevErr, os.ErrNotExist) {
-		return prevErr
-	}
-	var release ReleaseInfo
-	var meta RuntimeMetadata
-	var payload *bootstrapPayload
-	if errors.Is(prevErr, os.ErrNotExist) {
-		embedded, payloadErr := readBootstrapPayload()
-		if payloadErr != nil && !errors.Is(payloadErr, errBootstrapAbsent) {
-			return fmt.Errorf("bootstrap payload: %w", payloadErr)
-		}
-		if payloadErr == nil {
-			channel := m.Preferences().RuntimeChannel
-			if embedded.Manifest.Channel != channel {
-				return fmt.Errorf("嵌入 Runtime 通道 %q 与设置中的通道 %q 不一致", embedded.Manifest.Channel, channel)
-			}
-			payload = &embedded
-			meta = embedded.Metadata
-		}
-	}
-	if payload == nil {
-		// Installed clients and absent payloads use release discovery.
-		release, meta, err = m.LatestRuntime(ctx)
-		if err != nil {
-			return err
-		}
-	}
-	reuseRuntime := false
-	if prevErr == nil && semver.Compare("v"+previous.Version, "v"+meta.RuntimeVersion) >= 0 {
-		// Verify the selected version against its own receipt. A newer
-		// version cannot share the incoming release's binary hash.
-		if verifyErr := m.verifyInstalled(previous); verifyErr == nil {
-			if previous.Version != meta.RuntimeVersion {
-				// Bind CLI compatibility to the retained Runtime's published metadata.
-				tag := "v" + previous.Version
-				var retainedRelease ReleaseInfo
-				if err := m.fetchJSON(ctx, "https://api.github.com/repos/risense-ai/"+runtimeRepo+"/releases/tags/"+tag, &retainedRelease); err != nil {
-					return err
-				}
-				if retainedRelease.Tag != tag || retainedRelease.Draft {
-					return errors.New("installed Runtime release identity mismatch")
-				}
-				url, err := ReleaseAssetURL(retainedRelease, runtimeRepo, "runtime-build-"+meta.Target+".json")
-				if err != nil {
-					return err
-				}
-				var raw json.RawMessage
-				if err = m.fetchJSON(ctx, url, &raw); err != nil {
-					return err
-				}
-				retainedMeta, err := NormalizeRuntimeMetadata(raw)
-				if err != nil {
-					return err
-				}
-				if err = CheckRuntimeMetadata(retainedMeta, tag, meta.Target); err != nil {
-					return err
-				}
-				if retainedMeta.BinaryHash != previous.SHA256 {
-					return errors.New("installed Runtime metadata does not match its receipt")
-				}
-				meta = retainedMeta
-			}
-			reuseRuntime = true
-		} else {
-			return fmt.Errorf("installed Runtime verification failed: %w", verifyErr)
-		}
-	}
-	h, _, err := m.Health(ctx)
-	if err == nil && !m.Owns(h.Exe) {
-		return errors.New("已连接其他 CLI 管理的 Runtime；未接管或更新它。请先停止现有 Runtime，再安装")
-	}
-	if err == nil && h.ManagedID != "" {
-		return errors.New("Runtime 已由 CLI 的系统监督器管理，请通过 CLI 更新；客户端未停止或替换该实例")
-	}
-	if err != nil && !IsUnavailable(err) {
+	release, meta, err := m.LatestRuntime(ctx)
+	if err != nil {
 		return err
 	}
-	if !reuseRuntime {
-		if payload != nil {
-			err = m.publishRuntime(meta, stageBootstrapRuntime(payload.Dir))
-		} else {
-			err = m.publishRuntime(meta, m.stageDownloadRuntime(ctx, release, meta))
-		}
-		if err != nil {
-			return err
-		}
+
+	previous, previousErr := m.Installed()
+	if previousErr != nil && !errors.Is(previousErr, os.ErrNotExist) && !errors.Is(previousErr, errInvalidRuntimeSelection) {
+		return previousErr
 	}
-	// Check activity after staging; work may have arrived during the copy.
+	selected := InstalledRuntime{Version: meta.RuntimeVersion, SHA256: meta.BinaryHash}
+	if previousErr == nil && semver.Compare("v"+previous.Version, "v"+selected.Version) > 0 {
+		if err := m.verifyInstalled(previous); err != nil {
+			return fmt.Errorf("无法验证较新的已选 Runtime: %w", err)
+		}
+		selected = previous
+	} else if err := m.publishRuntime(meta, m.stageDownloadRuntime(ctx, release, meta)); err != nil {
+		return err
+	}
+
+	if !restart {
+		return m.selectRuntime(selected)
+	}
+
 	h, body, err := m.Health(ctx)
-	if err != nil && !IsUnavailable(err) {
+	if err == nil {
+		if !m.Owns(h.Exe) || !samePath(h.InstallationRoot, m.DataRoot) {
+			return errors.New("RPC 端口由其他 Runtime 实例使用，已保留暂存包")
+		}
+		if h.ManagedID != "" {
+			return errors.New("Runtime 由 CLI 的系统监督器管理，请通过 CLI 切换版本")
+		}
+		if err := verifyHostProcess(h); err != nil {
+			return fmt.Errorf("无法确认当前 Runtime 进程，已保留暂存包: %w", err)
+		}
+	} else if !IsUnavailable(err) {
 		return err
-	}
-	if err == nil && !m.Owns(h.Exe) {
-		return errors.New("Runtime 管理者已改变，未执行版本切换")
-	}
-	if err == nil && h.ManagedID != "" {
-		return errors.New("Runtime 已改由 CLI 的系统监督器管理，未执行版本切换")
 	}
 	if m.HasActiveOperations() {
-		return errors.New("客户端业务操作尚未完成，Runtime 更新已延后；已下载版本会保留")
+		return errors.New("客户端业务操作尚未完成，已保留暂存包")
 	}
 	if automatic && err == nil {
 		var load struct {
@@ -495,71 +430,33 @@ func (m *Manager) InstallRuntime(automatic bool, restart bool) error {
 				Queued  *int `json:"queued_or_cancelled_pending_removal"`
 			} `json:"rpc"`
 		}
-		if err = json.Unmarshal(body, &load); err != nil {
+		if err := json.Unmarshal(body, &load); err != nil {
 			return err
 		}
 		if load.RPC.Running == nil || load.RPC.Queued == nil {
 			return errors.New("Runtime 未报告队列状态，无法确认空闲")
 		}
 		if *load.RPC.Running > 0 || *load.RPC.Queued > 0 {
-			return errors.New("Runtime 正忙，本次自动更新已延后；已下载版本会保留")
+			return errors.New("Runtime 正忙，已保留暂存包")
 		}
 	}
-	if payload != nil {
-		if err := m.installBootstrapCLI(ctx, payload); err != nil {
+	if _, err := m.hostExecutable(ctx); err != nil {
+		return fmt.Errorf("无法通过 CLI 启用已暂存的 Runtime: %w", err)
+	}
+	if h.PID != 0 && !samePath(h.Exe, filepath.Join(m.runtimeDir(selected.Version), runtimeBinary())) {
+		m.progress("等待 Runtime 停止", 0, 0)
+		if err := m.stopManaged(ctx, h); err != nil {
 			return err
 		}
-	} else if err := m.installOnlineCLI(ctx, meta.Compat); err != nil {
+	}
+	if err := m.selectRuntime(selected); err != nil {
 		return err
 	}
-	if reuseRuntime {
-		if restart {
-			if err := m.Start(); err != nil {
-				return err
-			}
-		}
-		return m.finishBootstrapPath(payload)
+	if err := m.Start(); err != nil {
+		return fmt.Errorf("新版 Runtime 启动失败，已保留新版选择和原始错误: %w", err)
 	}
-	// Without restart the new files publish under their own version dir and
-	// the running instance stays on the old one until the next start.
-	if !restart {
-		next := InstalledRuntime{Version: meta.RuntimeVersion, SHA256: meta.BinaryHash}
-		if err = m.selectRuntime(next); err != nil {
-			return err
-		}
-		return m.finishBootstrapPath(payload)
+	if err := m.requireActive(selected); err != nil {
+		return fmt.Errorf("新版 Runtime 未通过启动验证，已保留新版选择和原始错误: %w", err)
 	}
-	m.progress("等待 Runtime 停止", 0, 0)
-	if err = m.Stop(true); err != nil {
-		return err
-	}
-	next := InstalledRuntime{Version: meta.RuntimeVersion, SHA256: meta.BinaryHash}
-	if err = m.selectRuntime(next); err != nil {
-		if prevErr == nil {
-			err = errors.Join(err, m.Start())
-		}
-		return err
-	}
-	err = m.Start()
-	if err == nil {
-		err = m.requireActive(next)
-	}
-	if err == nil {
-		return m.finishBootstrapPath(payload)
-	}
-	if prevErr != nil {
-		return err
-	}
-	return errors.Join(err, m.restoreRuntime(previous, next))
-}
-
-// finishBootstrapPath configures the shell PATH once every component is
-// verified and published; a failure surfaces as manual guidance without ever
-// rolling back the verified components.
-func (m *Manager) finishBootstrapPath(payload *bootstrapPayload) error {
-	if payload == nil || runtime.GOOS == "windows" {
-		return nil
-	}
-	m.progress("配置终端 PATH", 0, 0)
-	return configureUserShellPath()
+	return nil
 }

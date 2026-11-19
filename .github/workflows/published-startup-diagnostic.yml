@@ -57,7 +57,7 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 25
     env:
-      RUNTIME_VERSION: '2.0.0-dev.26'
+      RUNTIME_VERSION: '2.0.0-dev.27'
       RUNTIME_RUN_ID: ${{ inputs.runtime_run_id }}
       INPUT_RUN_ID: ${{ inputs.client2_run_id }}
       INPUT_ATTEMPT: ${{ inputs.client2_run_attempt }}

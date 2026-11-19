@@ -238,11 +238,12 @@ The same EXE supports JSON over redirected stdout for support and automation:
 & .\dist\respire-windows-amd64.exe --headless rpc-status
 & .\dist\respire-windows-amd64.exe --headless runtime-release
 & .\dist\respire-windows-amd64.exe --headless install-runtime
+& .\dist\respire-windows-amd64.exe --headless prepare-cli
 & .\dist\respire-windows-amd64.exe --headless start
 & .\dist\respire-windows-amd64.exe --headless stop
 ```
 
-`status`, `rpc-status` and `runtime-release` do not start or replace a Runtime. Installation/start/stop are explicit host actions; always set an isolated root and port when verifying them. Inspect `client.log` and the diagnostic panel for errors. No fallback mocks are shown in the production UI.
+`status`, `rpc-status` and `runtime-release` do not start or replace a Runtime. The installation command verifies and selects the Runtime package. The prepare-cli command prepares the separate CLI. Start and stop control the running Runtime. Use an isolated root and port when verifying these commands. Inspect `client.log` and the diagnostic panel for errors. No fallback mocks are shown in the production UI.
 
 ## References and license
 
