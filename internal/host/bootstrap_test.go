@@ -817,7 +817,7 @@ func TestRuntimeStartInstallationState(t *testing.T) {
 			t.Fatalf("missing installation must be classified explicitly: %v", err)
 		}
 	})
-	t.Run("invalid external CLI is not missing", func(t *testing.T) {
+	t.Run("missing Runtime does not inspect an external CLI", func(t *testing.T) {
 		m := newInstallTestManager(t)
 		path := filepath.Join(m.DataRoot, "bin", cliBinary())
 		if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
@@ -826,30 +826,8 @@ func TestRuntimeStartInstallationState(t *testing.T) {
 		if err := os.WriteFile(path, []byte("invalid executable"), 0700); err != nil {
 			t.Fatal(err)
 		}
-		if err := m.Start(); err == nil || errors.Is(err, ErrRuntimeNotInstalled) {
-			t.Fatalf("invalid CLI must retain its failure: %v", err)
-		}
-	})
-	t.Run("failed external version command is not missing", func(t *testing.T) {
-		m := newInstallTestManager(t)
-		binary, err := os.Executable()
-		if err != nil {
-			t.Fatal(err)
-		}
-		data, err := os.ReadFile(binary)
-		if err != nil {
-			t.Fatal(err)
-		}
-		path := filepath.Join(m.DataRoot, "bin", cliBinary())
-		if err = os.MkdirAll(filepath.Dir(path), 0700); err != nil {
-			t.Fatal(err)
-		}
-		// A real executable that rejects --version exercises the execution failure.
-		if err = os.WriteFile(path, data, 0700); err != nil {
-			t.Fatal(err)
-		}
-		if err = m.Start(); err == nil || errors.Is(err, ErrRuntimeNotInstalled) {
-			t.Fatalf("CLI execution failure must not authorize install: %v", err)
+		if err := m.Start(); !errors.Is(err, ErrRuntimeNotInstalled) {
+			t.Fatalf("the CLI image must not affect Runtime installation state: %v", err)
 		}
 	})
 	t.Run("corrupt selection is not missing", func(t *testing.T) {
