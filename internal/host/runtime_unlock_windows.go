@@ -28,6 +28,7 @@ type runtimeSession struct {
 	LegacyBackend string  `json:"legacy_secret_backend"`
 	LegacyPass    *string `json:"pass"`
 	LegacySuper   *string `json:"super"`
+	LegacySecret  *string `json:"secret"`
 	SecretKey     *string `json:"secret_key"`
 }
 
@@ -70,6 +71,11 @@ func (m *Manager) unlockAccountRuntime(ctx context.Context, health HealthInfo) e
 		health.Generation == 0 || !validHash(health.AccountID) {
 		return errors.New("Runtime unlock scope is invalid")
 	}
+	takeover, err := m.lockRuntimeTakeover(ctx)
+	if err != nil {
+		return err
+	}
+	defer takeover.Close()
 	info, err := m.Installed()
 	if err != nil {
 		return err
@@ -91,13 +97,28 @@ func (m *Manager) unlockAccountRuntime(ctx context.Context, health HealthInfo) e
 	if err != nil || !filepath.IsLocal(relative) {
 		return errors.New("Runtime unlock profile is outside the installation")
 	}
-	original, err := readCredentialConfig(filepath.Join(profile, "session.json"), 65536)
+	sessionPath := filepath.Join(profile, "session.json")
+	original, err := readCredentialConfig(sessionPath, 65536)
 	if err != nil {
 		return fmt.Errorf("Read original Runtime session: %w", err)
 	}
 	var session runtimeSession
 	if err := json.Unmarshal(original, &session); err != nil {
 		return errors.New("Original Runtime session metadata is invalid")
+	}
+	version := uint64(1)
+	if session.Version != nil {
+		version = *session.Version
+	}
+	if (version == 1 || version == 3) && session.LegacyBackend == "" {
+		original, err = m.migrateWindowsSession(ctx, health, sessionPath, original, session, version)
+		if err != nil {
+			return err
+		}
+		session = runtimeSession{}
+		if err := json.Unmarshal(original, &session); err != nil {
+			return errors.New("Migrated Runtime session metadata is invalid")
+		}
 	}
 	super, pass, legacy, err := session.windowsFactors()
 	if err != nil {
@@ -157,11 +178,7 @@ func (m *Manager) unlockAccountRuntime(ctx context.Context, health HealthInfo) e
 	return nil
 }
 
-func (s runtimeSession) windowsFactors() (super, pass, legacy *string, err error) {
-	version := uint64(1)
-	if s.Version != nil {
-		version = *s.Version
-	}
+func (s runtimeSession) windowsCredentialAccount() (string, error) {
 	account := strings.TrimSpace(s.User)
 	if sessionAlias.MatchString(s.Alias) {
 		account = s.Alias
@@ -171,7 +188,19 @@ func (s runtimeSession) windowsFactors() (super, pass, legacy *string, err error
 	}
 	if len(account) > 512 || strings.ContainsAny(account, "\x00\r\n") ||
 		(s.Backend != "" && s.Backend != "native") {
-		return nil, nil, nil, errors.New("Original session Windows credential metadata is invalid")
+		return "", errors.New("Original session Windows credential metadata is invalid")
+	}
+	return account, nil
+}
+
+func (s runtimeSession) windowsFactors() (super, pass, legacy *string, err error) {
+	version := uint64(1)
+	if s.Version != nil {
+		version = *s.Version
+	}
+	account, err := s.windowsCredentialAccount()
+	if err != nil {
+		return nil, nil, nil, err
 	}
 	if version == 1 || version == 3 {
 		if s.LegacyBackend != "native" || !sessionAlias.MatchString(s.Alias) {

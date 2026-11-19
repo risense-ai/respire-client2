@@ -46,5 +46,15 @@ func TestWindowsCredentialManagerReadsRespireSlots(t *testing.T) {
 		if err != nil || readback == nil || *readback != value {
 			t.Fatalf("credential readback changed the synthetic value: %v", err)
 		}
+		if err := preserveWindowsCredential(service, account, value); err != nil {
+			t.Fatal(err)
+		}
+		if err := preserveWindowsCredential(service, account, "unrelated value"); err == nil {
+			t.Fatal("would overwrite an existing credential with different material")
+		}
+		readback, err = readWindowsCredential(service, account)
+		if err != nil || readback == nil || *readback != value {
+			t.Fatalf("existing credential changed after rejecting a conflict: %v", err)
+		}
 	}
 }

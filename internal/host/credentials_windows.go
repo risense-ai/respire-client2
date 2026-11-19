@@ -32,6 +32,7 @@ type windowsCredential struct {
 var (
 	credentialDLL = windows.NewLazySystemDLL("advapi32.dll")
 	credRead      = credentialDLL.NewProc("CredReadW")
+	credWrite     = credentialDLL.NewProc("CredWriteW")
 	credFree      = credentialDLL.NewProc("CredFree")
 )
 
@@ -73,4 +74,38 @@ func readWindowsCredential(service, account string) (password *string, err error
 	}
 	value := string(utf16.Decode(words))
 	return &value, nil
+}
+
+func preserveWindowsCredential(service, account, value string) error {
+	existing, err := readWindowsCredential(service, account)
+	if err != nil {
+		return err
+	}
+	if existing == nil {
+		target, err := windows.UTF16PtrFromString(account + "." + service)
+		if err != nil {
+			return errors.New("invalid Windows credential target")
+		}
+		words := utf16.Encode([]rune(value))
+		defer clear(words)
+		if len(words)*2 > windowsCredentialLimit {
+			return errors.New("original Windows credential exceeds its storage limit")
+		}
+		record := windowsCredential{kind: windowsGenericCredential, target: target, persist: 3}
+		if len(words) != 0 {
+			record.blob, record.blobSize = &words[0], uint32(len(words)*2)
+		}
+		ok, _, err := credWrite.Call(uintptr(unsafe.Pointer(&record)), 0)
+		if ok == 0 {
+			return fmt.Errorf("Windows credential write: %w", err)
+		}
+		existing, err = readWindowsCredential(service, account)
+		if err != nil {
+			return err
+		}
+	}
+	if existing == nil || *existing != value {
+		return errors.New("Windows credential slot differs; original session retained")
+	}
+	return nil
 }
