@@ -128,25 +128,74 @@ func (m *Manager) prepareRuntimeAccountControl(ctx context.Context, imagePath, i
 	}, nil
 }
 
-func (m *Manager) readRuntimeLoginRecovery(ctx context.Context, owner HealthInfo, path string, original []byte, session runtimeSession) error {
-	identity := map[string]any{"session_sha256": controlDigest(original)}
-	var expectedAccount *string
-	if session.User != "" {
-		account := controlDigest([]byte(session.User))
-		expectedAccount = &account
-		identity["kind"] = "bound"
-		identity["account_id"] = account
-	} else {
-		var unbound struct {
-			OperationID string `json:"auth_operation_id"`
-		}
-		if json.Unmarshal(original, &unbound) != nil || !runtimeInstanceID.MatchString(unbound.OperationID) {
-			return errors.New("Historical session has no identity for Runtime login recovery")
-		}
-		identity["kind"] = "unbound"
-		identity["operation_id"] = unbound.OperationID
+type runtimeAuthIdentity struct {
+	Kind          string  `json:"kind"`
+	AccountID     *string `json:"account_id,omitempty"`
+	OperationID   string  `json:"operation_id,omitempty"`
+	SessionDigest string  `json:"session_sha256,omitempty"`
+}
+
+// Bind account changes to the original bytes. Callers may pass nil only after
+// confirming the session file is absent; malformed files cannot admit a login.
+func runtimeAuthIdentityOf(original []byte) (runtimeAuthIdentity, error) {
+	if original == nil {
+		return runtimeAuthIdentity{Kind: "absent"}, nil
 	}
-	control, err := m.prepareRuntimeAccountControl(ctx, owner.Exe, owner.ImageSHA256, filepath.Dir(path), expectedAccount)
+	var fields map[string]json.RawMessage
+	if json.Unmarshal(original, &fields) != nil || fields == nil {
+		return runtimeAuthIdentity{}, errors.New("Invalid Runtime account session")
+	}
+	text := func(name string) *string {
+		var value *string
+		if json.Unmarshal(fields[name], &value) != nil {
+			return nil
+		}
+		return value
+	}
+	digest := controlDigest(original)
+	if _, present := fields["user"]; present {
+		user := text("user")
+		if user == nil {
+			return runtimeAuthIdentity{}, errors.New("Invalid Runtime session user")
+		}
+		if *user != "" {
+			account := controlDigest([]byte(*user))
+			return runtimeAuthIdentity{Kind: "bound", AccountID: &account, SessionDigest: digest}, nil
+		}
+	}
+
+	for _, field := range []string{"kdf_salt", "wrapped_urk", "urk_nonce", "keyring_account", "keyring_backend", "auth_operation_id"} {
+		if value := text(field); value == nil || *value == "" {
+			return runtimeAuthIdentity{}, errors.New("Invalid unbound Runtime account session")
+		}
+	}
+	var version int
+	if json.Unmarshal(fields["vault_version"], &version) != nil {
+		return runtimeAuthIdentity{}, errors.New("Invalid unbound Runtime vault version")
+	}
+	user, address := text("user"), text("addr")
+	keygen := len(fields) == 7 && user == nil && version == 4
+	offline := user != nil && *user == "" && address != nil && *address == "" && len(fields) == 9 && (version == 2 || version == 4)
+	if version == 1 {
+		secret := text("secret")
+		offline = user != nil && *user == "" && address != nil && *address == "" && len(fields) == 10 && secret != nil && *secret != ""
+	}
+	if !keygen && !offline || *text("keyring_backend") == "kernel" {
+		return runtimeAuthIdentity{}, errors.New("Unbound Runtime session is not a keygen or offline recovery candidate")
+	}
+	operationID := *text("auth_operation_id")
+	if !runtimeInstanceID.MatchString(operationID) || operationID[14] != '4' || !strings.ContainsRune("89ab", rune(operationID[19])) {
+		return runtimeAuthIdentity{}, errors.New("Invalid unbound Runtime account operation ID")
+	}
+	return runtimeAuthIdentity{Kind: "unbound", OperationID: operationID, SessionDigest: digest}, nil
+}
+
+func (m *Manager) readRuntimeLoginRecovery(ctx context.Context, owner HealthInfo, path string, original []byte) error {
+	identity, err := runtimeAuthIdentityOf(original)
+	if err != nil {
+		return err
+	}
+	control, err := m.prepareRuntimeAccountControl(ctx, owner.Exe, owner.ImageSHA256, filepath.Dir(path), identity.AccountID)
 	if err != nil {
 		return err
 	}

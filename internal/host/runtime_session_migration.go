@@ -26,7 +26,7 @@ func (m *Manager) migrateHostSession(ctx context.Context, owner HealthInfo, path
 		if err := verifyHostProcess(current); err != nil {
 			return err
 		}
-		return m.requireClearSessionRecovery(ctx, owner, path, original, session)
+		return m.requireClearSessionRecovery(ctx, owner, path, original)
 	}
 	if err := verifyOwner(); err != nil {
 		return nil, err
@@ -124,7 +124,7 @@ func (m *Manager) migrateHostSession(ctx context.Context, owner HealthInfo, path
 	return published, nil
 }
 
-func (m *Manager) requireClearSessionRecovery(ctx context.Context, owner HealthInfo, path string, original []byte, session runtimeSession) error {
+func (m *Manager) requireClearSessionRecovery(ctx context.Context, owner HealthInfo, path string, original []byte) error {
 	for _, name := range []string{"account-active.json", "key-control.json", "offline-keygen.json", "maintenance.json"} {
 		_, err := os.Lstat(filepath.Join(m.DataRoot, "runtime", "autostart", name))
 		if err == nil {
@@ -155,5 +155,5 @@ func (m *Manager) requireClearSessionRecovery(ctx context.Context, owner HealthI
 			return errors.New("Historical session has an unfinished login operation")
 		}
 	}
-	return m.readRuntimeLoginRecovery(ctx, owner, path, original, session)
+	return m.readRuntimeLoginRecovery(ctx, owner, path, original)
 }
