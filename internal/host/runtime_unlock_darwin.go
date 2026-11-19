@@ -6,6 +6,17 @@ package host
 #cgo LDFLAGS: -framework Security -framework CoreFoundation
 #include <Security/Security.h>
 #include <stdlib.h>
+#include <string.h>
+
+static OSStatus read_password(UInt32 serviceLen, const char *service, UInt32 accountLen,
+    const char *account, UInt32 *length, void **data) {
+    return SecKeychainFindGenericPassword(NULL, serviceLen, service, accountLen, account, length, data, NULL);
+}
+
+static OSStatus add_password(UInt32 serviceLen, const char *service, UInt32 accountLen,
+    const char *account, UInt32 length, void *data) {
+    return SecKeychainAddGenericPassword(NULL, serviceLen, service, accountLen, account, length, data, NULL);
+}
 */
 import "C"
 
@@ -13,22 +24,24 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"unicode/utf8"
 	"unsafe"
 )
 
 func (m *Manager) unlockAccountRuntime(ctx context.Context, health HealthInfo) error {
-	return m.unlockNativeRuntime(ctx, health, readMacCredential, nil)
+	return m.unlockNativeRuntime(ctx, health, readSystemCredential, m.migrateNativeSession)
 }
 
-func readMacCredential(service, account string) (*string, error) {
+func readSystemCredential(service, account string) (*string, error) {
 	serviceName, accountName := C.CString(service), C.CString(account)
 	defer C.free(unsafe.Pointer(serviceName))
 	defer C.free(unsafe.Pointer(accountName))
 	var length C.UInt32
 	var data unsafe.Pointer
-	status := C.SecKeychainFindGenericPassword(0, C.UInt32(len(service)), serviceName,
-		C.UInt32(len(account)), accountName, &length, &data, nil)
+	status := C.read_password(C.UInt32(len(service)), serviceName,
+		C.UInt32(len(account)), accountName, &length, &data)
 	if status == C.errSecItemNotFound {
 		return nil, nil
 	}
@@ -58,4 +71,48 @@ func readMacCredential(service, account string) (*string, error) {
 	}
 	value := string(raw)
 	return &value, nil
+}
+
+func preserveSystemCredential(service, account, value string) error {
+	existing, err := readSystemCredential(service, account)
+	if err != nil {
+		return err
+	}
+	if existing == nil {
+		serviceName, accountName := C.CString(service), C.CString(account)
+		defer C.free(unsafe.Pointer(serviceName))
+		defer C.free(unsafe.Pointer(accountName))
+		password := C.CString(value)
+		defer C.free(unsafe.Pointer(password))
+		defer C.memset(unsafe.Pointer(password), 0, C.size_t(len(value)))
+		status := C.add_password(C.UInt32(len(service)), serviceName, C.UInt32(len(account)),
+			accountName, C.UInt32(len(value)), unsafe.Pointer(password))
+		if status != C.errSecSuccess && status != C.errSecDuplicateItem {
+			return fmt.Errorf("macOS Keychain save: OSStatus %d", status)
+		}
+		existing, err = readSystemCredential(service, account)
+		if err != nil {
+			return err
+		}
+	}
+	if existing == nil || *existing != value {
+		return errors.New("macOS Keychain credential differs from historical session; original session retained")
+	}
+	return nil
+}
+
+func canonicalSessionDirectory(path string) (string, error) {
+	return filepath.EvalSymlinks(path)
+}
+
+func publishSessionFile(from, to string) error {
+	directory, err := os.Open(filepath.Dir(to))
+	if err != nil {
+		return err
+	}
+	defer directory.Close()
+	if err := os.Rename(from, to); err != nil {
+		return err
+	}
+	return directory.Sync()
 }

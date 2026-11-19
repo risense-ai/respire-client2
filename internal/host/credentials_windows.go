@@ -37,7 +37,7 @@ var (
 )
 
 // Keep the same target and UTF-16 blob encoding as Respire's existing keyring entries.
-func readWindowsCredential(service, account string) (password *string, err error) {
+func readSystemCredential(service, account string) (password *string, err error) {
 	target, err := windows.UTF16PtrFromString(account + "." + service)
 	if err != nil {
 		return nil, errors.New("invalid Windows credential target")
@@ -76,8 +76,8 @@ func readWindowsCredential(service, account string) (password *string, err error
 	return &value, nil
 }
 
-func preserveWindowsCredential(service, account, value string) error {
-	existing, err := readWindowsCredential(service, account)
+func preserveSystemCredential(service, account, value string) error {
+	existing, err := readSystemCredential(service, account)
 	if err != nil {
 		return err
 	}
@@ -99,7 +99,7 @@ func preserveWindowsCredential(service, account, value string) error {
 		if ok == 0 {
 			return fmt.Errorf("Windows credential write: %w", err)
 		}
-		existing, err = readWindowsCredential(service, account)
+		existing, err = readSystemCredential(service, account)
 		if err != nil {
 			return err
 		}

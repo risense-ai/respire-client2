@@ -3,5 +3,5 @@ package host
 import "context"
 
 func (m *Manager) unlockAccountRuntime(ctx context.Context, health HealthInfo) error {
-	return m.unlockNativeRuntime(ctx, health, readWindowsCredential, m.migrateWindowsSession)
+	return m.unlockNativeRuntime(ctx, health, readSystemCredential, m.migrateNativeSession)
 }

@@ -21,7 +21,7 @@ func TestWindowsCredentialManagerReadsRespireSlots(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if value, err := readWindowsCredential(service, account); err != nil || value != nil {
+	if value, err := readSystemCredential(service, account); err != nil || value != nil {
 		t.Fatalf("fresh synthetic slot must be absent: %v", err)
 	}
 	deleteEntry := credentialDLL.NewProc("CredDeleteW")
@@ -42,17 +42,17 @@ func TestWindowsCredentialManagerReadsRespireSlots(t *testing.T) {
 		if ok == 0 {
 			t.Fatalf("write synthetic credential: %v", err)
 		}
-		readback, err := readWindowsCredential(service, account)
+		readback, err := readSystemCredential(service, account)
 		if err != nil || readback == nil || *readback != value {
 			t.Fatalf("credential readback changed the synthetic value: %v", err)
 		}
-		if err := preserveWindowsCredential(service, account, value); err != nil {
+		if err := preserveSystemCredential(service, account, value); err != nil {
 			t.Fatal(err)
 		}
-		if err := preserveWindowsCredential(service, account, "unrelated value"); err == nil {
+		if err := preserveSystemCredential(service, account, "unrelated value"); err == nil {
 			t.Fatal("would overwrite an existing credential with different material")
 		}
-		readback, err = readWindowsCredential(service, account)
+		readback, err = readSystemCredential(service, account)
 		if err != nil || readback == nil || *readback != value {
 			t.Fatalf("existing credential changed after rejecting a conflict: %v", err)
 		}
