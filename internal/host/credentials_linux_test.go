@@ -109,4 +109,22 @@ func TestLinuxSecretServiceInteroperability(t *testing.T) {
 			t.Fatalf("native lookup of migrated slot failed: %v", err)
 		}
 	}
+	const custody = "login-control:login-0123456789abcdef0123456789abcdef"
+	original := `{"state":"challenge"}`
+	if _, err := secretServiceCredential(ctx, "rsrs", custody, &original); err != nil {
+		t.Fatal(err)
+	}
+	verified := `{"state":"verified","fixture":"密钥"}`
+	if _, err := updateSecretServiceCredential(ctx, "rsrs", custody, &original, &verified); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := updateSecretServiceCredential(ctx, "rsrs", custody, &original, &original); err == nil {
+		t.Fatal("stale custody update would replace the verified value")
+	}
+	lookup := exec.CommandContext(ctx, "secret-tool", "lookup", "service", "rsrs", "username",
+		custody, "target", "default", "application", "rust-keyring")
+	output, err := lookup.Output()
+	if err != nil || strings.TrimSuffix(string(output), "\n") != verified {
+		t.Fatalf("native lookup of updated custody failed: %v", err)
+	}
 }

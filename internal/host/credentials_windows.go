@@ -1,17 +1,21 @@
 package host
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
+	"strings"
 	"unicode/utf16"
+	"unicode/utf8"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
 )
 
 const (
-	windowsGenericCredential = 1
-	windowsCredentialLimit   = 2560
+	windowsGenericCredential  = 1
+	windowsCredentialLimit    = 2560
+	windowsLoginCustodyPrefix = "rsrs-login-control:utf8:v1\x00"
 )
 
 type windowsCredential struct {
@@ -36,7 +40,11 @@ var (
 	credFree      = credentialDLL.NewProc("CredFree")
 )
 
-// Keep the same target and UTF-16 blob encoding as Respire's existing keyring entries.
+func isWindowsLoginCustody(service, account string) bool {
+	return service == "rsrs" && strings.HasPrefix(account, "login-control:login-")
+}
+
+// Keep existing password slots in UTF-16 and share CLI's encoding for private login state.
 func readSystemCredential(service, account string) (password *string, err error) {
 	target, err := windows.UTF16PtrFromString(account + "." + service)
 	if err != nil {
@@ -56,8 +64,25 @@ func readSystemCredential(service, account string) (password *string, err error)
 	}
 	defer credFree.Call(uintptr(unsafe.Pointer(credential)))
 	if credential.kind != windowsGenericCredential || credential.blobSize > windowsCredentialLimit ||
-		credential.blobSize%2 != 0 || (credential.blobSize != 0 && credential.blob == nil) {
+		(credential.blobSize != 0 && credential.blob == nil) {
 		return nil, errors.New("invalid Windows credential blob")
+	}
+	if isWindowsLoginCustody(service, account) {
+		raw := unsafe.Slice((*byte)(unsafe.Pointer(credential.blob)), int(credential.blobSize))
+		if payload, ok := bytes.CutPrefix(raw, []byte(windowsLoginCustodyPrefix)); ok {
+			if !utf8.Valid(payload) {
+				return nil, errors.New("invalid UTF-8 Windows login custody")
+			}
+			value := string(payload)
+			return &value, nil
+		}
+		// Older CLI operations stored their JSON as a Windows password.
+		if !bytes.HasPrefix(raw, []byte{'{', 0}) {
+			return nil, errors.New("unsupported Windows login custody encoding")
+		}
+	}
+	if credential.blobSize%2 != 0 {
+		return nil, errors.New("invalid UTF-16 Windows credential length")
 	}
 	wordCount := int(credential.blobSize / 2)
 	words := unsafe.Slice(credential.blob, wordCount)
@@ -77,35 +102,56 @@ func readSystemCredential(service, account string) (password *string, err error)
 }
 
 func preserveSystemCredential(service, account, value string) error {
+	return replaceSystemCredential(service, account, nil, value)
+}
+
+// The authentication coordinator holds the installation takeover lock while replacing custody.
+func replaceSystemCredential(service, account string, expected *string, value string) error {
 	existing, err := readSystemCredential(service, account)
 	if err != nil {
 		return err
 	}
-	if existing == nil {
-		target, err := windows.UTF16PtrFromString(account + "." + service)
-		if err != nil {
-			return errors.New("invalid Windows credential target")
+	if existing != nil && *existing == value {
+		return nil
+	}
+	if (existing == nil) != (expected == nil) || existing != nil && *existing != *expected {
+		return errors.New("Windows credential slot differs; original session retained")
+	}
+	target, err := windows.UTF16PtrFromString(account + "." + service)
+	if err != nil {
+		return errors.New("invalid Windows credential target")
+	}
+	record := windowsCredential{kind: windowsGenericCredential, target: target, persist: 3}
+	if isWindowsLoginCustody(service, account) {
+		if !utf8.ValidString(value) {
+			return errors.New("invalid UTF-8 Windows login custody")
 		}
+		if len(windowsLoginCustodyPrefix)+len(value) > windowsCredentialLimit {
+			return errors.New("Windows login custody exceeds its storage limit")
+		}
+		raw := append([]byte(windowsLoginCustodyPrefix), value...)
+		defer clear(raw)
+		record.blob, record.blobSize = (*uint16)(unsafe.Pointer(&raw[0])), uint32(len(raw))
+	} else {
 		words := utf16.Encode([]rune(value))
 		defer clear(words)
 		if len(words)*2 > windowsCredentialLimit {
 			return errors.New("original Windows credential exceeds its storage limit")
 		}
-		record := windowsCredential{kind: windowsGenericCredential, target: target, persist: 3}
 		if len(words) != 0 {
 			record.blob, record.blobSize = &words[0], uint32(len(words)*2)
 		}
-		ok, _, err := credWrite.Call(uintptr(unsafe.Pointer(&record)), 0)
-		if ok == 0 {
-			return fmt.Errorf("Windows credential write: %w", err)
-		}
-		existing, err = readSystemCredential(service, account)
-		if err != nil {
-			return err
-		}
 	}
-	if existing == nil || *existing != value {
-		return errors.New("Windows credential slot differs; original session retained")
+	ok, _, err := credWrite.Call(uintptr(unsafe.Pointer(&record)), 0)
+	if ok == 0 {
+		return fmt.Errorf("Windows credential write: %w", err)
+	}
+	written, err := readSystemCredential(service, account)
+	if err != nil {
+		return err
+	}
+	if written == nil || *written != value {
+		return errors.New("Windows credential readback differs")
 	}
 	return nil
 }

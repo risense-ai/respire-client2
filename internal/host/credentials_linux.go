@@ -64,6 +64,11 @@ func linuxCredentialValue(value []byte) (*string, error) {
 }
 
 func secretServiceCredential(ctx context.Context, service, account string, preserve *string) (*string, error) {
+	return updateSecretServiceCredential(ctx, service, account, nil, preserve)
+}
+
+// Credential replacement is serialized by the installation takeover lock.
+func updateSecretServiceCredential(ctx context.Context, service, account string, expected, replacement *string) (*string, error) {
 	bus, err := dbus.ConnectSessionBus()
 	if err != nil {
 		return nil, fmt.Errorf("Connect Linux Secret Service: %w", err)
@@ -96,8 +101,13 @@ func secretServiceCredential(ctx context.Context, service, account string, prese
 	if len(items) > 1 {
 		return nil, providerCredentialError("ambiguous")
 	}
-	if len(items) == 0 && preserve == nil {
-		return nil, nil
+	if len(items) == 0 {
+		if expected != nil {
+			return nil, errors.New("Linux Secret Service credential disappeared; original operation retained")
+		}
+		if replacement == nil {
+			return nil, nil
+		}
 	}
 	var available []dbus.ObjectPath
 	var prompt dbus.ObjectPath
@@ -130,7 +140,7 @@ func secretServiceCredential(ctx context.Context, service, account string, prese
 			secretAPI + "Item.Attributes": dbus.MakeVariant(attributes),
 			secretAPI + "Item.Label":      dbus.MakeVariant(account + "@" + service),
 		}
-		value := []byte(*preserve)
+		value := []byte(*replacement)
 		defer clear(value)
 		secret := linuxSecret{Session: session, Value: value, Type: "text/plain"}
 		err := bus.Object(secretService, collection).CallWithContext(ctx, secretAPI+"Collection.CreateItem", 0, properties, secret, false).Store(&item, &prompt)
@@ -141,21 +151,37 @@ func secretServiceCredential(ctx context.Context, service, account string, prese
 			return nil, errors.New("Linux Secret Service did not save the credential without interaction")
 		}
 	}
-	var secret linuxSecret
-	err = bus.Object(secretService, item).CallWithContext(ctx, secretAPI+"Item.GetSecret", 0, session).Store(&secret)
-	if err != nil {
-		return nil, fmt.Errorf("Read Linux Secret Service credential: %w", err)
+	entry := bus.Object(secretService, item)
+	read := func() (*string, error) {
+		var secret linuxSecret
+		if err := entry.CallWithContext(ctx, secretAPI+"Item.GetSecret", 0, session).Store(&secret); err != nil {
+			return nil, fmt.Errorf("Read Linux Secret Service credential: %w", err)
+		}
+		defer clear(secret.Value)
+		if secret.Session != session || len(secret.Params) != 0 {
+			return nil, errors.New("Linux Secret Service returned an invalid secret session")
+		}
+		return linuxCredentialValue(secret.Value)
 	}
-	defer clear(secret.Value)
-	if secret.Session != session || len(secret.Params) != 0 {
-		return nil, errors.New("Linux Secret Service returned an invalid secret session")
+	value, err := read()
+	if err != nil || replacement == nil || *replacement == *value {
+		return value, err
 	}
-	value, err := linuxCredentialValue(secret.Value)
+	if expected == nil || *expected != *value {
+		return nil, errors.New("Linux Secret Service credential differs; original session retained")
+	}
+
+	payload := []byte(*replacement)
+	defer clear(payload)
+	if err := entry.CallWithContext(ctx, secretAPI+"Item.SetSecret", 0, linuxSecret{Session: session, Value: payload, Type: "text/plain"}).Err; err != nil {
+		return nil, fmt.Errorf("Replace Linux Secret Service credential: %w", err)
+	}
+	written, err := read()
 	if err != nil {
 		return nil, err
 	}
-	if preserve != nil && *preserve != *value {
-		return nil, errors.New("Linux Secret Service credential differs from historical session; original session retained")
+	if *written != *replacement {
+		return nil, errors.New("Linux Secret Service credential readback differs")
 	}
-	return value, nil
+	return written, nil
 }
