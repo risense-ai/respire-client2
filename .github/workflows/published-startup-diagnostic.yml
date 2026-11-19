@@ -1,309 +1,141 @@
-name: Sealed Client2 startup diagnostic
+name: Sealed dev.18 native proxy diagnostic
 on:
   workflow_dispatch:
-    inputs:
-      scope:
-        description: 'Existing-key restart or fresh public default installation; diagnostics only'
-        required: true
-        default: existing-keys
-        type: choice
-        options: [existing-keys, default-online]
-      cli_reader_ref:
-        description: 'Default-online only: exact trusted CLI main reader SHA, separate from product source'
-        required: false
-        type: string
-      runtime_run_id:
-        description: 'Default-online only: successful public Runtime producer run ID'
-        type: string
-      cli_run_id:
-        description: 'Existing Windows CLI artifact run ID (no build is triggered)'
-        required: true
-        type: string
-      cli_version:
-        description: 'Exact CLI DEV version, without v'
-        default: '2.0.0-dev.19'
-        type: string
-      cli_run_attempt:
-        description: 'Attempt that produced the CLI artifact'
-        required: true
-        default: '1'
-        type: string
-      cli_source_sha:
-        description: 'Full CLI commit SHA; must match run and schema2 build metadata'
-        required: true
-        type: string
-      client2_run_id:
-        description: 'Successful sealed Desktop producer run ID'
-        required: true
-        type: string
-      client2_version:
-        description: 'Exact Client2 DEV version, without v'
-        default: '2.0.0-dev.17'
-        type: string
-      client2_run_attempt:
-        description: 'Attempt that sealed the Desktop candidate'
-        required: true
-        default: '1'
-        type: string
-      client2_source_sha:
-        description: 'Full source SHA of the sealed Desktop candidate'
-        required: true
-        type: string
 permissions:
   contents: read
   actions: read
 jobs:
-  existing-keys:
-    runs-on: windows-latest
-    timeout-minutes: 25
+  native-proxy:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {runner: macos-15, target: darwin-arm64}
+          - {runner: macos-15-intel, target: darwin-amd64}
+          - {runner: windows-latest, target: windows-amd64}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 15
     env:
-      RUNTIME_VERSION: '2.0.0-dev.25'
-      RUNTIME_RUN_ID: ${{ inputs.runtime_run_id }}
-      INPUT_RUN_ID: ${{ inputs.client2_run_id }}
-      INPUT_ATTEMPT: ${{ inputs.client2_run_attempt }}
-      CANDIDATE_SOURCE: ${{ inputs.client2_source_sha }}
-      CANDIDATE_VERSION: ${{ inputs.client2_version }}
-      CLI_VERSION: ${{ inputs.cli_version }}
-      CLIENT2_SOURCE_SHA: ${{ inputs.client2_source_sha }}
-      CLI_READER_REF: ${{ inputs.cli_reader_ref }}
+      INPUT_RUN_ID: '44444713567'
+      INPUT_ATTEMPT: '1'
+      CANDIDATE_SOURCE: c763230b14d652658d3e4db4b434cc42105d1340
+      CANDIDATE_VERSION: 2.0.0-dev.18
+      TARGET: ${{ matrix.target }}
     steps:
       - uses: actions/checkout@v7
         with:
+          ref: c763230b14d652658d3e4db4b434cc42105d1340
           persist-credentials: false
-      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with:
-          repository: risense-ai/respire-cli
-          ref: ${{ inputs.scope == 'default-online' && inputs.cli_reader_ref || inputs.cli_source_sha }}
-          fetch-depth: 0
-          path: .cli
-          persist-credentials: false
+          go-version-file: go.mod
       - uses: actions/setup-python@v7
         with:
           python-version: '3.12'
-      - uses: actions/setup-node@v7
-        if: inputs.scope == 'default-online'
-        with:
-          node-version: '24'
-      - name: Require a trusted main reader before importing its code
-        if: inputs.scope == 'default-online'
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          if ($env:GITHUB_REF -cne 'refs/heads/main' -or $env:CLI_READER_REF -cnotmatch '^[0-9a-f]{40}$') {
-            throw 'Default-online requires main dispatch and an explicit reader SHA'
-          }
-          $reader = git -C .cli rev-parse HEAD
-          if ($LASTEXITCODE -or $reader -cne $env:CLI_READER_REF) { throw 'Reader checkout differs' }
-          git -C .cli merge-base --is-ancestor $env:CLI_READER_REF origin/main
-          if ($LASTEXITCODE) { throw 'Reader is not a trusted main ancestor' }
-      - name: Reuse and verify CLI producer, sealed Client2 and pinned public Runtime
-        shell: pwsh
-        env:
-          GH_TOKEN: ${{ github.token }}
-          CLI_RUN_ID: ${{ inputs.cli_run_id }}
-          CLI_RUN_ATTEMPT: ${{ inputs.cli_run_attempt }}
-          CLI_SOURCE_SHA: ${{ inputs.cli_source_sha }}
-        run: |
-          $ErrorActionPreference = 'Stop'
-          if ($env:CLI_RUN_ID -cnotmatch '^[1-9][0-9]*$' -or $env:CLI_RUN_ATTEMPT -cnotmatch '^[1-9][0-9]*$' -or
-              $env:CLI_SOURCE_SHA -cnotmatch '^[0-9a-f]{40}$' -or $env:CLIENT2_SOURCE_SHA -cnotmatch '^[0-9a-f]{40}$' -or
-              $env:INPUT_RUN_ID -cnotmatch '^[1-9][0-9]*$' -or $env:INPUT_ATTEMPT -cnotmatch '^[1-9][0-9]*$' -or
-              $env:CLI_VERSION -cnotmatch '^2\.0\.0-dev\.[1-9][0-9]*$' -or $env:CANDIDATE_VERSION -cnotmatch '^2\.0\.0-dev\.[1-9][0-9]*$') {
-            throw 'Require exact producer runs, attempts and source SHAs'
-          }
-          if (Test-Path Env:RSRS_CORE_TEST_MODE) { throw 'Core test mode is forbidden for real startup acceptance' }
-          $assets = Join-Path $env:RUNNER_TEMP 'startup-assets'
-          $run = gh api "repos/risense-ai/respire-cli/actions/runs/$env:CLI_RUN_ID/attempts/$env:CLI_RUN_ATTEMPT" | ConvertFrom-Json
-          if ($LASTEXITCODE -or $run.id -ne $env:CLI_RUN_ID -or $run.run_attempt -ne $env:CLI_RUN_ATTEMPT -or
-              $run.head_sha -cne $env:CLI_SOURCE_SHA -or $run.repository.full_name -cne 'risense-ai/respire-cli' -or
-              $run.head_repository.full_name -cne 'risense-ai/respire-cli' -or $run.head_branch -cne 'main' -or
-              $run.event -cne 'workflow_dispatch' -or $run.path -cne '.github/workflows/release.yml') { throw 'CLI workflow source differs' }
-          $pages = gh api --paginate --slurp "repos/risense-ai/respire-cli/actions/runs/$env:CLI_RUN_ID/attempts/$env:CLI_RUN_ATTEMPT/jobs?per_page=100" | ConvertFrom-Json
-          if ($LASTEXITCODE) { throw 'CLI producer job lookup failed' }
-          $jobs = @($pages.jobs | Where-Object name -CEQ 'validate / Release (x86_64-pc-windows-msvc)')
-          if ($jobs.Count -ne 1 -or $jobs[0].status -cne 'completed' -or $jobs[0].conclusion -cne 'success' -or
-              $jobs[0].head_sha -cne $env:CLI_SOURCE_SHA -or $jobs[0].run_id -ne $env:CLI_RUN_ID -or
-              $jobs[0].run_attempt -ne $env:CLI_RUN_ATTEMPT) { throw 'Require one successful exact-attempt Windows CLI build' }
-          $inventory = gh api --paginate --slurp "repos/risense-ai/respire-cli/actions/runs/$env:CLI_RUN_ID/artifacts" | ConvertFrom-Json
-          if ($LASTEXITCODE) { throw 'CLI artifact inventory failed' }
-          $artifact = @($inventory.artifacts | Where-Object name -CEQ 'cli-release-x86_64-pc-windows-msvc')
-          if ($artifact.Count -ne 1 -or $artifact[0].expired -or $artifact[0].workflow_run.head_sha -cne $env:CLI_SOURCE_SHA -or
-              $artifact[0].workflow_run.id -ne $env:CLI_RUN_ID -or $artifact[0].digest -cnotmatch '^sha256:[0-9a-f]{64}$' -or
-              [DateTime]$artifact[0].created_at -lt [DateTime]$jobs[0].started_at -or
-              [DateTime]$artifact[0].created_at -gt [DateTime]$jobs[0].completed_at) { throw 'Require one exact-job Windows CLI artifact' }
-          New-Item -ItemType Directory -Path $assets | Out-Null
-          $zip = Join-Path $assets 'cli.zip'
-          gh api "repos/risense-ai/respire-cli/actions/artifacts/$($artifact[0].id)/zip" > $zip
-          if ($LASTEXITCODE) { throw 'CLI artifact download failed' }
-          if ((Get-Item $zip).Length -ne $artifact[0].size_in_bytes -or
-              ('sha256:' + (Get-FileHash $zip -Algorithm SHA256).Hash.ToLowerInvariant()) -cne $artifact[0].digest) { throw 'CLI artifact ZIP digest differs' }
-          python -c "import stat,sys,zipfile; z=zipfile.ZipFile(sys.argv[1]); es=z.infolist(); assert len(es)==2 and {e.filename for e in es}=={'cli-build-x86_64-pc-windows-msvc.json','rsrs-x86_64-pc-windows-msvc.exe'} and all(not stat.S_ISLNK(e.external_attr>>16) for e in es); z.extractall(sys.argv[2])" $zip "$assets/cli"
-          if ($LASTEXITCODE) { throw 'CLI artifact inventory differs' }
-          $cliBuild = Get-Content "$assets/cli/cli-build-x86_64-pc-windows-msvc.json" -Raw | ConvertFrom-Json
-          $cliFile = Get-Item "$assets/cli/rsrs-x86_64-pc-windows-msvc.exe"
-          if ($cliBuild.schema_version -ne 2 -or $cliBuild.artifact_layout -cne 'cli-frontend-v2' -or
-              $cliBuild.version -cne $env:CLI_VERSION -or
-              $cliBuild.git_sha -cne $env:CLI_SOURCE_SHA -or $cliBuild.target -cne 'x86_64-pc-windows-msvc' -or
-              $cliBuild.binary_file -cne $cliFile.Name -or $cliBuild.binary_size -ne $cliFile.Length -or
-              $cliBuild.producer.run_id -ne $env:CLI_RUN_ID -or $cliBuild.producer.run_attempt -ne $env:CLI_RUN_ATTEMPT -or
-              (Get-FileHash $cliFile.FullName -Algorithm SHA256).Hash.ToLowerInvariant() -cne $cliBuild.binary_sha256) { throw 'CLI schema2 source or binary proof differs' }
-          gh release download "v$env:RUNTIME_VERSION" -R risense-ai/respire-runtime -p rsrs-runtime-x86_64-pc-windows-msvc.tar.gz -p runtime-build-x86_64-pc-windows-msvc.json -D "$assets/runtime"
-          if ($LASTEXITCODE) { throw 'Runtime release download failed' }
-          $runtimeBuild = Get-Content "$assets/runtime/runtime-build-x86_64-pc-windows-msvc.json" -Raw | ConvertFrom-Json
-          $runtimeTag = gh api "repos/risense-ai/respire-runtime/git/ref/tags/v$env:RUNTIME_VERSION" | ConvertFrom-Json
-          if ($LASTEXITCODE -or $runtimeTag.object.type -cne 'commit' -or $runtimeBuild.schema_version -ne 2 -or
-              $runtimeBuild.runtime_version -cne $env:RUNTIME_VERSION -or $runtimeBuild.tag -cne "v$env:RUNTIME_VERSION" -or
-              $runtimeBuild.target_triple -cne 'x86_64-pc-windows-msvc' -or
-              $runtimeBuild.archive_file -cne 'rsrs-runtime-x86_64-pc-windows-msvc.tar.gz' -or
-              $runtimeBuild.source_commit -cnotmatch '^[0-9a-f]{40}$' -or $runtimeBuild.source_commit -cne $runtimeTag.object.sha -or
-              $runtimeBuild.binary_sha256 -cnotmatch '^[0-9a-f]{64}$' -or
-              (Get-FileHash "$assets/runtime/rsrs-runtime-x86_64-pc-windows-msvc.tar.gz" -Algorithm SHA256).Hash.ToLowerInvariant() -cne $runtimeBuild.archive_sha256) { throw 'Published Runtime source or archive proof differs' }
-          $sealedOutput = python scripts/desktop-candidate.py producer --root "$assets/client"
-          if ($LASTEXITCODE) { throw 'Sealed Client2 producer verification failed' }
-          $sealed = $sealedOutput | ConvertFrom-Json
-          $candidate = Get-Content "$assets/client/candidate.json" -Raw | ConvertFrom-Json
-          $clientHash = (Get-FileHash "$assets/client/respire-windows-amd64.exe" -Algorithm SHA256).Hash.ToLowerInvariant()
-          [ordered]@{
-            schema = 1; scope = 'sealed Client2 real-SDK existing-key startup; not full GUI acceptance'
-            core_test_mode = $false
-            cli = $cliBuild; cli_artifact = $artifact[0]; cli_build_job = $jobs[0]
-            runtime = @{version=$env:RUNTIME_VERSION; source_sha=$runtimeBuild.source_commit; archive_sha256=$runtimeBuild.archive_sha256;
-              binary_sha256=$runtimeBuild.binary_sha256; metadata_sha256=(Get-FileHash "$assets/runtime/runtime-build-x86_64-pc-windows-msvc.json" -Algorithm SHA256).Hash.ToLowerInvariant()}
-            client2 = @{version=$candidate.version; source_sha=$candidate.source; sha256=$clientHash;
-              producer=$candidate.producer; artifact_id=$sealed.artifact_id; artifact_zip_digest=$sealed.artifact_zip_digest;
-              manifest_sha256=(Get-FileHash "$assets/client/candidate.json" -Algorithm SHA256).Hash.ToLowerInvariant(); six_package_receipts_verified=$true}
-          } | ConvertTo-Json -Depth 20 | Set-Content "$assets/input-proof.json" -Encoding utf8NoBOM
-      - name: Verify actual public latest assets with the selected trusted reader
-        if: inputs.scope == 'default-online'
+      - name: Verify all six package receipts and the exact sealed artifact
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          node --input-type=module <<'NODE'
-          import assert from 'node:assert/strict';
-          import {createHash} from 'node:crypto';
-          import {readFileSync,writeFileSync,mkdirSync} from 'node:fs';
-          import {join} from 'node:path';
-          import {execFileSync} from 'node:child_process';
-          import {parsePublishedAssets,publishedAssetNames,verifyPublishedTarget,downloadPublishedAsset} from './.cli/npm/scripts/extract-artifact.mjs';
-          const e=process.env,sha=b=>createHash('sha256').update(b).digest('hex');
-          const api=p=>JSON.parse(execFileSync('gh',['api',p],{encoding:'utf8'}));
-          const pages=p=>JSON.parse(execFileSync('gh',['api','--paginate','--slurp',p],{encoding:'utf8'}));
-          const assets=join(e.RUNNER_TEMP,'startup-assets'),proof=JSON.parse(readFileSync(join(assets,'input-proof.json')));
-          const target='x86_64-pc-windows-msvc',targets=JSON.parse(readFileSync('.cli/npm/artifact-manifest.json')).targets.map(t=>t.triple);
-          const publicPart=(kind,version,source,producer)=>{
-            const repository=`risense-ai/respire-${kind}`,release=api(`repos/${repository}/releases/tags/v${version}`);
-            assert.equal(release.draft,false);assert.ok(release.published_at);assert.equal(release.tag_name,`v${version}`);
-            const commit=api(`repos/${repository}/commits/v${version}`).sha;assert.equal(commit,source);
-            const inventory=pages(`repos/${repository}/releases/${release.id}/assets?per_page=100`).flat();
-            const selected=targets.flatMap(t=>publishedAssetNames(kind,t)).map(name=>{
-              const matches=inventory.filter(a=>a.name===name);assert.equal(matches.length,1);
-              const a=matches[0];assert.equal(a.state,'uploaded');assert.match(a.digest,/^sha256:[0-9a-f]{64}$/);
-              return {id:a.id,name,size:a.size,sha256:a.digest.slice(7)};
-            });
-            return {repository,release_id:release.id,version,source_sha:source,producer,assets:selected};
-          };
-          assert.match(e.RUNTIME_RUN_ID||'',/^[1-9]\d*$/,'Require the exact public Runtime producer run ID');
-          const runtimeRun=api(`repos/risense-ai/respire-runtime/actions/runs/${e.RUNTIME_RUN_ID}`);
-          assert.equal(runtimeRun.head_sha,proof.runtime.source_sha);
-          assert.equal(runtimeRun.path,'.github/workflows/release.yml');
-          assert.equal(runtimeRun.status,'completed');
-          assert.equal(runtimeRun.conclusion,'success');
-          const spec={schema:2,cli:publicPart('cli',e.CLI_VERSION,proof.cli.git_sha,{run_id:Number(proof.cli.producer.run_id),run_attempt:Number(proof.cli.producer.run_attempt)}),
-            runtime:publicPart('runtime',e.RUNTIME_VERSION,proof.runtime.source_sha,{run_id:runtimeRun.id,run_attempt:runtimeRun.run_attempt})};
-          const text=JSON.stringify(spec),hash=sha(text);parsePublishedAssets(text,hash,targets);
-          const expected=(part,name)=>part.assets.find(a=>a.name===name);
-          assert.equal(expected(spec.cli,proof.cli.binary_file).sha256,proof.cli.binary_sha256);
-          assert.equal(expected(spec.runtime,'rsrs-runtime-'+target+'.exe').sha256,proof.runtime.binary_sha256);
-          assert.equal(expected(spec.runtime,'rsrs-runtime-'+target+'.tar.gz').sha256,proof.runtime.archive_sha256);
-          const root=join(assets,'public-online');mkdirSync(root);
-          writeFileSync(join(root,'published-assets.json'),text);
-          const receipt=await verifyPublishedTarget(spec,target,join(root,'reference'),hash,{token:e.GH_TOKEN});
-          assert.equal(receipt.assets_verified,true);assert.equal(receipt.payloads_verified,true);assert.equal(receipt.full_passed,false);
-          const clientTag='v'+e.CANDIDATE_VERSION;
-          const client=api('repos/risense-ai/respire-client2/releases/tags/'+clientTag);
-          assert.equal(client.draft,false);assert.ok(client.published_at);assert.equal(client.tag_name,clientTag);
-          assert.equal(api('repos/risense-ai/respire-client2/commits/'+clientTag).sha,proof.client2.source_sha);
-          const matches=client.assets.filter(a=>a.name==='respire-windows-amd64.exe');assert.equal(matches.length,1);
-          const clientAsset=matches[0];assert.equal(clientAsset.state,'uploaded');assert.equal(clientAsset.digest,'sha256:'+proof.client2.sha256);
-          mkdirSync(join(root,'client'));
-          await downloadPublishedAsset({repository:'risense-ai/respire-client2'},
-            {id:clientAsset.id,name:clientAsset.name,size:clientAsset.size,sha256:proof.client2.sha256},join(root,'client'),{token:e.GH_TOKEN});
-          const runtimeMetadata=join(root,'reference','runtime',`runtime-build-${target}.json`);
-          const inputs={schema:1,scope:'latest-default-online-install-diagnostic',diagnostic_only:true,full_passed:false,
-            harness_sha:e.GITHUB_SHA,reader_sha:e.CLI_READER_REF,published_assets_sha256:hash,cli:spec.cli,runtime:spec.runtime,
-            client2:{release_id:client.id,version:e.CANDIDATE_VERSION,source_sha:proof.client2.source_sha,asset_id:clientAsset.id,sha256:proof.client2.sha256},
-            payload_identity:receipt.payload_identity,runtime_metadata_path:runtimeMetadata,runtime_metadata_sha256:sha(readFileSync(runtimeMetadata))};
-          writeFileSync(join(root,'online-inputs.json'),JSON.stringify(inputs,null,2));
-          NODE
-      - name: Explicitly install the official public model and verify real CPU inference
-        if: inputs.scope != 'default-online'
-        shell: pwsh
-        env:
-          RSRS_ENGINE: cpu
-          RSRS_NO_AUTOSYNC: '1'
-          RSRS_UPDATE_CHECK: '0'
+          set -euo pipefail
+          python scripts/desktop-candidate.py producer --root sealed > sealed-input.json
+          python -c 'import json; p=json.load(open("sealed-input.json")); assert p["artifact_id"]==14493445413 and p["artifact_zip_digest"]=="sha256:edc84bdc99f7da52e120dec6b23ae1d88c1cd9df4dd75aef48f23b674a911b98"'
+      - name: Exercise native proxy selection with the sealed executable
+        shell: bash
         run: |
-          $ErrorActionPreference = 'Stop'
-          $assets = Join-Path $env:RUNNER_TEMP 'startup-assets'
-          $env:RSRS_DATA_DIR = Join-Path $env:RUNNER_TEMP 'startup-model-preparation'
-          $env:HOME = Join-Path $env:RSRS_DATA_DIR 'home'
-          $env:USERPROFILE = $env:HOME
-          New-Item -ItemType Directory -Path $env:HOME | Out-Null
-          $env:RSRS_M3_DIR = Join-Path $env:RSRS_DATA_DIR 'models/bge-m3'
-          $cli = "$assets/cli/rsrs-x86_64-pc-windows-msvc.exe"
-          & $cli --json runtime install --file "$assets/runtime/rsrs-runtime-x86_64-pc-windows-msvc.tar.gz" --version $env:RUNTIME_VERSION
-          if ($LASTEXITCODE) { throw 'Official Runtime model preparation install failed' }
-          $env:RSRS_RUNTIME_BIN = Join-Path $env:RSRS_DATA_DIR "bin/runtime/$env:RUNTIME_VERSION/rsrs-runtime.exe"
-          $output = & $cli --direct model install-m3 --json
-          if ($LASTEXITCODE) { throw 'Official model install or inference failed' }
-          $model = $output | ConvertFrom-Json
-          $evidence = $model.details.backend_load.evidence
-          if ($model.status -cne 'ok' -or -not $evidence.ready -or -not $evidence.inference_completed -or
-              -not $evidence.fresh_session -or $evidence.dimensions -ne 1024 -or $evidence.selected -cne 'CPU') { throw 'Real model inference proof differs' }
-          $output | Set-Content "$assets/model-inference.json" -Encoding utf8NoBOM
-          python -c "import importlib.util,os,pathlib; p=pathlib.Path('.cli/scripts/native-model-cache.py'); s=importlib.util.spec_from_file_location('public_models',p); m=importlib.util.module_from_spec(s); s.loader.exec_module(m); root=pathlib.Path(os.environ['RSRS_M3_DIR']); [m.verify_file(root/name,digest) for name,digest in m.FILES.items() if name != 'onnx/model_fp16.onnx']"
-          if ($LASTEXITCODE) { throw 'Public model hash verification failed' }
-          & $cli --runtime-internal --stop --json
-          if ($LASTEXITCODE) { throw 'Model preparation Runtime stop failed' }
-      - name: Diagnose sealed desktop real-SDK existing-key restart
-        if: inputs.scope != 'default-online'
-        shell: pwsh
-        run: |
-          $assets = Join-Path $env:RUNNER_TEMP 'startup-assets'
-          ./scripts/diagnose-published-startup.ps1 `
-            -Cli "$assets/cli/rsrs-x86_64-pc-windows-msvc.exe" `
-            -Client "$assets/client/respire-windows-amd64.exe" `
-            -RuntimeArchive "$assets/runtime/rsrs-runtime-x86_64-pc-windows-msvc.tar.gz" `
-            -ModelDirectory "$env:RUNNER_TEMP/startup-model-preparation/models/bge-m3" `
-            -RuntimeVersion $env:RUNTIME_VERSION `
-            -OutputDirectory "$env:RUNNER_TEMP/published-startup-diagnostic"
-      - name: Diagnose latest public default installation only
-        if: inputs.scope == 'default-online'
-        shell: pwsh
-        run: |
-          $assets = Join-Path $env:RUNNER_TEMP 'startup-assets'
-          ./scripts/diagnose-published-startup.ps1 `
-            -DefaultOnline -PublicInputs "$assets/public-online/online-inputs.json" `
-            -Cli "$assets/cli/rsrs-x86_64-pc-windows-msvc.exe" `
-            -Client "$assets/public-online/client/respire-windows-amd64.exe" `
-            -RuntimeArchive "$assets/runtime/rsrs-runtime-x86_64-pc-windows-msvc.tar.gz" `
-            -RuntimeVersion $env:RUNTIME_VERSION `
-            -OutputDirectory "$env:RUNNER_TEMP/default-online-diagnostic"
-      - uses: actions/upload-artifact@v7
+          set -euo pipefail
+          python - <<'PY'
+          import hashlib, json, os, subprocess
+          from pathlib import Path
+
+          target = os.environ["TARGET"]
+          windows = target.startswith("windows-")
+          asset = Path("sealed") / f"respire-{target}{'.exe' if windows else '.zip'}"
+          exe = asset
+          if not windows:
+              subprocess.run(["ditto", "-x", "-k", str(asset), "unpack"], check=True)
+              exe = Path("unpack/Respire.app/Contents/MacOS/respire")
+          profile = Path(os.environ["RUNNER_TEMP"]) / "respire-proxy"
+          env = {key: value for key, value in os.environ.items()
+                 if key.lower() not in ("http_proxy", "https_proxy", "all_proxy", "no_proxy")}
+          env["RSRS_DATA_DIR"] = str(profile)
+
+          def run(*args):
+              return json.loads(subprocess.check_output([str(exe.resolve()), *args], env=env))
+
+          def proxy():
+              result = run("--headless", "proxy")
+              assert result["ok"], result
+              return result["result"]
+
+          def outcomes():
+              system = proxy()
+              assert system["mode"] == "system"
+              if windows:
+                  assert system["source"] == "system" and system["https"] == "http://127.0.0.1:12381"
+                  assert system["noProxy"] == "example.invalid"
+              else:
+                  assert system["source"] in ("direct", "system"), system
+              env["HTTPS_PROXY"] = "http://127.0.0.1:12380"
+              environment = proxy()
+              assert environment["source"] == "environment" and environment["https"] == env["HTTPS_PROXY"]
+              preferences = profile / "client2/preferences.json"
+              preferences.write_text('{"proxyMode":"direct"}', encoding="utf-8")
+              direct = proxy()
+              assert direct["mode"] == "direct" and direct["source"] == "off" and not direct.get("https")
+              preferences.unlink()
+              del env["HTTPS_PROXY"]
+              return {"system_source": system["source"], "environment_wins": True, "direct_override": True}
+
+          version = run("--version")
+          assert version["platform"] == target and version["version"] == os.environ["CANDIDATE_VERSION"]
+          if windows:
+              import winreg
+              key_path = r"Software\Microsoft\Windows\CurrentVersion\Internet Settings"
+              with winreg.OpenKey(winreg.HKEY_CURRENT_USER, key_path, 0, winreg.KEY_QUERY_VALUE | winreg.KEY_SET_VALUE) as key:
+                  values = {"ProxyEnable": (1, winreg.REG_DWORD),
+                            "ProxyServer": ("https=127.0.0.1:12381", winreg.REG_SZ),
+                            "ProxyOverride": ("example.invalid", winreg.REG_SZ),
+                            "AutoConfigURL": ("", winreg.REG_SZ)}
+                  original = {}
+                  for name in values:
+                      try:
+                          original[name] = winreg.QueryValueEx(key, name)
+                      except FileNotFoundError:
+                          original[name] = None
+                  mutated = []
+                  try:
+                      for name, (value, kind) in values.items():
+                          winreg.SetValueEx(key, name, 0, kind, value)
+                          mutated.append(name)
+                      result = outcomes()
+                      winreg.SetValueEx(key, "AutoConfigURL", 0, winreg.REG_SZ, "http://127.0.0.1:12382/proxy.pac")
+                      pac = proxy()
+                      assert pac["source"] == "unavailable" and "PAC" in pac["note"], pac
+                      result["pac_explicit"] = True
+                  finally:
+                      for name in reversed(mutated):
+                          if original[name] is None:
+                              winreg.DeleteValue(key, name)
+                          else:
+                              value, kind = original[name]
+                              winreg.SetValueEx(key, name, 0, kind, value)
+              result["registry_restored"] = True
+          else:
+              result = outcomes()
+          with asset.open("rb") as stream:
+              result["asset_sha256"] = hashlib.file_digest(stream, "sha256").hexdigest()
+          result["version"] = version
+          Path("proxy-result.json").write_text(json.dumps(result, indent=2), encoding="utf-8")
+          print(json.dumps(result))
+          PY
+      - name: Run proxy policy tests from the exact source
+        run: go test ./internal/host -run 'Proxy|Scutil|PAC' -count=1
+      - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: published-client2-startup-diagnostic
+          name: sealed-proxy-${{ matrix.target }}
           path: |
-            ${{ runner.temp }}/startup-assets/input-proof.json
-            ${{ runner.temp }}/startup-assets/client/candidate.json
-            ${{ runner.temp }}/startup-assets/client/package-checks.json
-            ${{ runner.temp }}/startup-assets/model-inference.json
-            ${{ runner.temp }}/published-startup-diagnostic/startup-diagnostic.json
-            ${{ runner.temp }}/published-startup-diagnostic/client.log
-            ${{ runner.temp }}/startup-assets/public-online/published-assets.json
-            ${{ runner.temp }}/startup-assets/public-online/online-inputs.json
-            ${{ runner.temp }}/startup-assets/public-online/reference/published-assets-receipt.json
-            ${{ runner.temp }}/default-online-diagnostic/startup-diagnostic.json
+            sealed-input.json
+            proxy-result.json
           if-no-files-found: error
-          retention-days: 3
