@@ -58,7 +58,19 @@ type runtimeAccountControl struct {
 	grant   map[string]any
 }
 
-func (m *Manager) prepareRuntimeAccountControl(ctx context.Context, imagePath, imageDigest, profilePath string, expectedAccount *string) (runtimeAccountControl, error) {
+type runtimeMaintenanceMarker struct {
+	Schema          int    `json:"schema"`
+	ID              string `json:"id"`
+	Token           string `json:"token"`
+	Phase           string `json:"phase"`
+	ExpectedProfile string `json:"expected_profile"`
+	ExpectedVersion string `json:"expected_version"`
+	OwnerPID        int    `json:"owner_pid"`
+	OwnerBirth      string `json:"owner_birth"`
+}
+
+func (m *Manager) prepareRuntimeAccountControl(ctx context.Context, imagePath, imageDigest, profilePath string,
+	expectedAccount *string, ownedMaintenance []byte) (runtimeAccountControl, error) {
 	var control runtimeAccountControl
 	root, err := canonicalSessionDirectory(m.DataRoot)
 	if err != nil {
@@ -110,6 +122,46 @@ func (m *Manager) prepareRuntimeAccountControl(ctx context.Context, imagePath, i
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return control, err
 	}
+	maintenancePath := filepath.Join(root, "runtime", "autostart", "maintenance.json")
+	markerBytes, err := readCredentialConfig(maintenancePath, 16*1024)
+	var maintenance any
+	if ownedMaintenance == nil {
+		if !errors.Is(err, os.ErrNotExist) {
+			if err != nil {
+				return control, err
+			}
+			return control, errors.New("Runtime account maintenance already has an owner")
+		}
+	} else {
+		if err != nil {
+			return control, err
+		}
+		if !bytes.Equal(markerBytes, ownedMaintenance) {
+			return control, errors.New("Runtime account maintenance changed")
+		}
+		coordinator := "host-" + controlDigest([]byte(root))
+		if registrationDigest != nil {
+			var record struct {
+				ID string `json:"id"`
+			}
+			if json.Unmarshal(registration, &record) != nil || record.ID == "" {
+				return control, errors.New("Invalid Runtime registration coordinator")
+			}
+			coordinator = record.ID
+		}
+		var marker runtimeMaintenanceMarker
+		if json.Unmarshal(markerBytes, &marker) != nil || marker.Schema != 1 ||
+			marker.ID != coordinator || !runtimeInstanceID.MatchString(marker.Token) || marker.Phase != "Paused" ||
+			marker.ExpectedProfile != profile || marker.ExpectedVersion == "" ||
+			marker.OwnerPID != os.Getpid() || marker.OwnerBirth != birth {
+			return control, errors.New("Runtime account control requires the exact live Paused owner")
+		}
+		maintenance = map[string]any{
+			"marker_sha256": controlDigest(markerBytes), "coordinator_id": coordinator,
+			"controller_pid": marker.OwnerPID, "controller_birth": marker.OwnerBirth,
+			"issuer_cli_version": marker.ExpectedVersion,
+		}
+	}
 	issued := time.Now().UnixMilli()
 	return runtimeAccountControl{
 		binding: runtimeControlBinding{
@@ -122,7 +174,7 @@ func (m *Manager) prepareRuntimeAccountControl(ctx context.Context, imagePath, i
 			"installation_root": root, "installation_id": controlDigest([]byte(root)), "profile": profile,
 			"account_id": grantAccount, "sync_generation": 0, "image_path": image, "image_sha256": imageDigest,
 			"supervisor_pid": os.Getpid(), "supervisor_birth": birth, "managed_id": nil,
-			"registration_sha256": registrationDigest, "maintenance": nil, "port": port,
+			"registration_sha256": registrationDigest, "maintenance": maintenance, "port": port,
 			"issued_at_ms": issued, "expires_at_ms": issued + 60_000,
 		},
 	}, nil
@@ -195,7 +247,7 @@ func (m *Manager) readRuntimeLoginRecovery(ctx context.Context, owner HealthInfo
 	if err != nil {
 		return err
 	}
-	control, err := m.prepareRuntimeAccountControl(ctx, owner.Exe, owner.ImageSHA256, filepath.Dir(path), identity.AccountID)
+	control, err := m.prepareRuntimeAccountControl(ctx, owner.Exe, owner.ImageSHA256, filepath.Dir(path), identity.AccountID, nil)
 	if err != nil {
 		return err
 	}
