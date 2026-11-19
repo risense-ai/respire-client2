@@ -128,7 +128,11 @@ func (m *Manager) unlockVerifiedRuntime(ctx context.Context, health HealthInfo, 
 	if err != nil {
 		return err
 	}
-	relative, err := filepath.Rel(m.DataRoot, profile)
+	root, err := canonicalSessionDirectory(m.DataRoot)
+	if err != nil {
+		return err
+	}
+	relative, err := filepath.Rel(windowsDOSPath(root), windowsDOSPath(profile))
 	if err != nil || !filepath.IsLocal(relative) {
 		return errors.New("Runtime unlock profile is outside the installation")
 	}

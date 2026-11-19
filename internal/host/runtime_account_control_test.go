@@ -526,7 +526,11 @@ func TestPublishedRuntimeRequiresExactClient2Maintenance(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	selected, err := json.Marshal(map[string]string{"data_dir": target})
+	receiptTarget := target
+	if runtime.GOOS == "windows" {
+		receiptTarget = windowsDOSPath(target)
+	}
+	selected, err := json.Marshal(map[string]string{"data_dir": receiptTarget})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -538,7 +542,7 @@ func TestPublishedRuntimeRequiresExactClient2Maintenance(t *testing.T) {
 	}
 	account := controlDigest([]byte(intent.User))
 	applied := runtimeLoginReceipt{OperationID: operation, Outcome: "awaiting_verification", SourceProfile: root,
-		TargetProfile: &target, AccountID: &account, SessionDigest: &digest}
+		TargetProfile: &receiptTarget, AccountID: &account, SessionDigest: &digest}
 	wrongDigest := strings.Repeat("0", 64)
 	changedTarget := applied
 	changedTarget.SessionDigest = &wrongDigest
