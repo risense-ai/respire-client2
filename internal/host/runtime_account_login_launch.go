@@ -66,7 +66,8 @@ func (m *Manager) prepareRuntimeLoginLaunch(ctx context.Context, imagePath, imag
 
 	var marker runtimeMaintenanceMarker
 	if json.Unmarshal(admission.Marker, &marker) != nil || marker.Schema != 1 || marker.Phase != "Paused" ||
-		marker.Token != record.Token || marker.ExpectedProfile != record.Source || marker.OwnerPID != os.Getpid() {
+		marker.Token != record.Token || (marker.ExpectedProfile != record.Source && marker.ExpectedProfile != target) ||
+		marker.OwnerPID != os.Getpid() {
 		return control, errors.New("Runtime target startup requires the original Paused owner")
 	}
 	birth, err := hostControlBirth(ctx)

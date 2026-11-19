@@ -8,6 +8,8 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
+	"strings"
 )
 
 func (m *Manager) withPendingRuntimeLogin(ctx context.Context, transaction *hostTransaction,
@@ -61,17 +63,15 @@ func (m *Manager) withPendingRuntimeLogin(ctx context.Context, transaction *host
 	}
 	var owner runtimeMaintenanceMarker
 	if json.Unmarshal(marker, &owner) != nil || owner.Schema != 1 || owner.Token != record.Token ||
-		owner.Phase != "Paused" || owner.ExpectedProfile != record.Source {
+		owner.Phase != "Paused" {
 		return nil, errors.New("原 Runtime 登录操作需要恢复维护状态")
 	}
-	profile, err := selectedRuntimeLoginProfile(root)
+	profile, _, candidate, err := runtimeLoginQueryScope(ctx, record)
 	if err != nil {
 		return nil, err
 	}
-	if profile != record.Source {
-		return nil, errors.New("当前 Runtime 账户已变化，需要恢复原登录操作")
-	}
-	marker, err = m.claimPausedRuntimeLogin(ctx, record, marker, markerPath)
+	defer clear(candidate)
+	marker, err = m.claimPausedRuntimeLogin(ctx, record, marker, markerPath, profile)
 	if err != nil {
 		return nil, err
 	}
@@ -81,10 +81,10 @@ func (m *Manager) withPendingRuntimeLogin(ctx context.Context, transaction *host
 
 // Retain the original token when a new Client2 process queries the same Paused
 // login. A reused PID is distinct only when its native birth identity differs.
-func (m *Manager) claimPausedRuntimeLogin(ctx context.Context, record runtimeAccountRecord, original []byte, path string) ([]byte, error) {
+func (m *Manager) claimPausedRuntimeLogin(ctx context.Context, record runtimeAccountRecord, original []byte, path, selected string) ([]byte, error) {
 	var owner runtimeMaintenanceMarker
 	if json.Unmarshal(original, &owner) != nil || owner.Schema != 1 || owner.Phase != "Paused" ||
-		owner.Token != record.Token || owner.ExpectedProfile != record.Source ||
+		owner.Token != record.Token || (owner.ExpectedProfile != record.Source && owner.ExpectedProfile != selected) ||
 		owner.OwnerPID <= 0 || uint64(owner.OwnerPID) > uint64(^uint32(0)) || owner.OwnerBirth == "" {
 		return nil, errors.New("原 Runtime 登录维护身份无效")
 	}
@@ -92,15 +92,18 @@ func (m *Manager) claimPausedRuntimeLogin(ctx context.Context, record runtimeAcc
 	if err != nil {
 		return nil, err
 	}
-	if owner.OwnerPID == os.Getpid() && owner.OwnerBirth == birth {
+	sameOwner := owner.OwnerPID == os.Getpid() && owner.OwnerBirth == birth
+	if sameOwner && owner.ExpectedProfile == selected {
 		return original, nil
 	}
-	previous, err := runtimeControlProcessBirth(ctx, owner.OwnerPID)
-	if err != nil {
-		return nil, err
-	}
-	if previous == owner.OwnerBirth {
-		return nil, errors.New("原 Runtime 登录仍由存活的客户端控制")
+	if !sameOwner {
+		previous, err := runtimeControlProcessBirth(ctx, owner.OwnerPID)
+		if err != nil {
+			return nil, err
+		}
+		if previous == owner.OwnerBirth {
+			return nil, errors.New("原 Runtime 登录仍由存活的客户端控制")
+		}
 	}
 	address, _, err := m.runtimeAccountEndpoint()
 	if err != nil {
@@ -109,10 +112,8 @@ func (m *Manager) claimPausedRuntimeLogin(ctx context.Context, record runtimeAcc
 	if err := requireClosedRuntimePort(ctx, address); err != nil {
 		return nil, err
 	}
-	if _, err := verifyRuntimeLoginSource(record); err != nil {
-		return nil, err
-	}
 	owner.OwnerPID, owner.OwnerBirth = os.Getpid(), birth
+	owner.ExpectedProfile = selected
 	next, err := json.Marshal(owner)
 	if err != nil {
 		return nil, err
@@ -129,11 +130,10 @@ func (m *Manager) recoverDesktopRuntimeLogin(ctx context.Context, job Operation)
 		if err != nil {
 			return nil, err
 		}
-		if result.Receipt.Outcome != "awaiting_input" || result.Handoff != nil {
+		if result.Handoff != nil || result.Receipt.Outcome == "committed" {
 			return nil, errors.New("Runtime 登录需要核对原提交状态")
 		}
-		public, err := desktopRuntimeLoginEnvelope(result.Receipt)
-		return public, errors.Join(err, errors.New("登录需要补充输入"))
+		return m.finishDesktopRuntimeLogin(ctx, image, digest, &admission, result.Receipt)
 	})
 	if err != nil {
 		err = &unconfirmedError{id: job.ID, cause: err}
@@ -143,18 +143,22 @@ func (m *Manager) recoverDesktopRuntimeLogin(ctx context.Context, job Operation)
 
 func (m *Manager) queryRuntimeLoginResult(ctx context.Context, image, digest string, admission runtimeAccountAdmission,
 	record runtimeAccountRecord) (runtimeLoginResult, error) {
-	identity, err := verifyRuntimeLoginSource(record)
+	profile, identity, candidate, err := runtimeLoginQueryScope(ctx, record)
 	if err != nil {
 		return runtimeLoginResult{}, err
 	}
-	control, err := m.prepareRuntimeAccountControl(ctx, image, digest, record.Source, identity.AccountID, admission.Marker)
+	defer clear(candidate)
+	control, err := m.prepareRuntimeAccountControl(ctx, image, digest, profile, identity.AccountID, admission.Marker)
 	if err != nil {
 		return runtimeLoginResult{}, err
 	}
-	params, err := json.Marshal(map[string]any{"schema_version": 1, "binding": control.binding, "identity": identity})
+	params, err := json.Marshal(map[string]any{
+		"schema_version": 1, "binding": control.binding, "identity": identity, "candidate": candidate,
+	})
 	if err != nil {
 		return runtimeLoginResult{}, err
 	}
+	defer clear(params)
 	requestID, err := controlUUID()
 	if err != nil {
 		return runtimeLoginResult{}, err
@@ -167,7 +171,60 @@ func (m *Manager) queryRuntimeLoginResult(ctx context.Context, image, digest str
 		return runtimeLoginResult{}, err
 	}
 	defer clear(reply.Envelope)
-	return readRuntimeLoginResult(reply, record)
+	result, err := readRuntimeLoginResult(reply, record)
+	if err != nil {
+		return runtimeLoginResult{}, err
+	}
+	if result.Receipt.Outcome == "awaiting_verification" || result.Receipt.Outcome == "committed" {
+		if _, err := verifyRuntimeLoginTarget(record, result.Receipt); err != nil {
+			return runtimeLoginResult{}, err
+		}
+	}
+	return result, nil
+}
+
+func runtimeLoginQueryScope(ctx context.Context, record runtimeAccountRecord) (string, runtimeAuthIdentity, json.RawMessage, error) {
+	profile, err := selectedRuntimeLoginProfile(record.Root)
+	if err != nil {
+		return "", runtimeAuthIdentity{}, nil, err
+	}
+	raw, err := readCredentialConfig(filepath.Join(profile, "session.json"), controlFrameLimit)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return "", runtimeAuthIdentity{}, nil, err
+	}
+	identity, err := runtimeAuthIdentityOf(raw)
+	clear(raw)
+	if err != nil {
+		return "", runtimeAuthIdentity{}, nil, err
+	}
+	if profile == record.Source && reflect.DeepEqual(identity, record.Original.Identity) {
+		return profile, identity, nil, nil
+	}
+	if identity.Kind != "bound" || identity.AccountID == nil || *identity.AccountID != controlDigest([]byte(record.User)) {
+		return "", runtimeAuthIdentity{}, nil, errors.New("Selected Runtime account does not match the original login")
+	}
+	account := "login-" + strings.ReplaceAll(record.OperationID, "-", "")
+	backend := runtimeLoginBackend()
+	private, err := nativeRuntimeCredentialStore(ctx).readSlot(backend, "rsrs", "login-control:"+account, false)
+	if err != nil {
+		return "", runtimeAuthIdentity{}, nil, err
+	}
+	var custody runtimeLoginCustody
+	var request runtimeLoginParams
+	var material struct {
+		Digest string `json:"session_sha256"`
+	}
+	if private == nil || json.Unmarshal([]byte(*private), &custody) != nil ||
+		json.Unmarshal(custody.Request, &request) != nil || json.Unmarshal(custody.Candidate, &material) != nil ||
+		request.Material.Account != account || request.Material.Backend != backend ||
+		request.User != record.User || request.Server != record.Server ||
+		request.Binding.InstallationRoot != record.Root || request.Binding.Profile != record.Source ||
+		!reflect.DeepEqual(request.Identity, record.Original.Identity) || request.CustodyAck == nil ||
+		request.CustodyAck.CandidateDigest != material.Digest || material.Digest != identity.SessionDigest {
+		return "", runtimeAuthIdentity{}, nil, errors.New("Selected Runtime session does not have the original verified credential custody")
+	}
+	clear(custody.Request)
+	return profile, identity, custody.Candidate, nil
 }
 
 func (m *Manager) continueDesktopRuntimeLogin(ctx context.Context, job Operation, input json.RawMessage) (json.RawMessage, error) {

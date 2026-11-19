@@ -76,7 +76,7 @@ func TestRuntimeLoginOwnerProcess(t *testing.T) {
 		t.Fatal(err)
 	}
 	var manager Manager
-	if _, err := manager.claimPausedRuntimeLogin(ctx, record, original, path); err == nil {
+	if _, err := manager.claimPausedRuntimeLogin(ctx, record, original, path, root); err == nil {
 		t.Fatal("live Client2 maintenance ownership was replaced")
 	}
 	if err := input.Close(); err != nil {
@@ -94,7 +94,7 @@ func TestRuntimeLoginOwnerProcess(t *testing.T) {
 	if err := listener.Close(); err != nil {
 		t.Fatal(err)
 	}
-	recovered, err := manager.claimPausedRuntimeLogin(ctx, record, original, path)
+	recovered, err := manager.claimPausedRuntimeLogin(ctx, record, original, path, root)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -548,6 +548,19 @@ func TestPublishedRuntimeRequiresExactClient2Maintenance(t *testing.T) {
 	}
 	if _, err := manager.startAndCompleteRuntimeLogin(ctx, image, hash, &admission, changedTarget); err == nil {
 		t.Fatal("changed target session was authorized to start")
+	}
+	recoveredProfile, recoveredIdentity, heldCandidate, err := runtimeLoginQueryScope(ctx, record)
+	if err != nil || recoveredProfile != target || recoveredIdentity.SessionDigest != digest || len(heldCandidate) == 0 {
+		t.Fatalf("original login result could not be queried against its applied target: %v", err)
+	}
+	clear(heldCandidate)
+	admission.Marker, err = manager.claimPausedRuntimeLogin(ctx, record, admission.Marker, path, recoveredProfile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := manager.queryRuntimeLoginResult(ctx, image, hash, admission, record); !errors.As(err, &unconfirmed) ||
+		unconfirmed.id != operation || !strings.Contains(err.Error(), "scope_mismatch") {
+		t.Fatalf("published Runtime did not accept the original target query before refusing the absent journal: %v", err)
 	}
 	manager.localClient = &http.Client{Timeout: 15 * time.Second, Transport: &http.Transport{}}
 	t.Setenv("RSRS_NO_AUTOSYNC", "1")
