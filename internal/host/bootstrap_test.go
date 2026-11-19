@@ -290,7 +290,11 @@ func stubCLIProbe(t *testing.T, f cliProbeFixture) {
 
 func newInstallTestManager(t *testing.T) *Manager {
 	t.Helper()
-	root := t.TempDir()
+	// The runner's temporary directory can use an alias for the actual volume path.
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
 	m := &Manager{Root: filepath.Join(root, "client2"), DataRoot: root,
 		Endpoint: "http://127.0.0.1:1", HTTPClient: &http.Client{}, prefs: defaultPreferences(),
 		localClient: &http.Client{Transport: &http.Transport{Proxy: nil}}}
