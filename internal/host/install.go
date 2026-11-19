@@ -264,7 +264,23 @@ func (m *Manager) RequireCoreConfigHost(ctx context.Context) error {
 	return nil
 }
 
-// EnsureCoreConfigHost runs only during startup, before business operations.
+// UpdateInstalledCLI independently refreshes the shared CLI used by external integrations.
+func (m *Manager) UpdateInstalledCLI(ctx context.Context) error {
+	m.cliInstallMu.Lock()
+	defer m.cliInstallMu.Unlock()
+	if _, err := os.Stat(filepath.Join(m.DataRoot, "bin", cliBinary())); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		return err
+	}
+	if m.HasActiveOperations() {
+		return errors.New("业务操作尚未完成，未升级 CLI；原事务保留")
+	}
+	return m.installOnlineCLI(ctx, Compat{MinCLI: "0.0.0", MaxCLI: "*"})
+}
+
+// EnsureCoreConfigHost prepares the legacy CLI capability for explicit host operations.
 func (m *Manager) EnsureCoreConfigHost(ctx context.Context) error {
 	_, err := m.External(ctx)
 	missing := errors.Is(err, os.ErrNotExist)
@@ -439,9 +455,6 @@ func (m *Manager) InstallRuntime(automatic bool, restart bool) error {
 		if *load.RPC.Running > 0 || *load.RPC.Queued > 0 {
 			return errors.New("Runtime 正忙，已保留暂存包")
 		}
-	}
-	if _, err := m.hostExecutable(ctx); err != nil {
-		return fmt.Errorf("无法通过 CLI 启用已暂存的 Runtime: %w", err)
 	}
 	if h.PID != 0 && !samePath(h.Exe, filepath.Join(m.runtimeDir(selected.Version), runtimeBinary())) {
 		m.progress("等待 Runtime 停止", 0, 0)

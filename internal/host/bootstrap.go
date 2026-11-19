@@ -313,7 +313,6 @@ func (m *Manager) installFrontendCLI(ctx context.Context, source, version, expec
 		return err
 	}
 	dest := filepath.Join(binDir, cliBinary())
-	m.progress("安装 CLI", 0, 0)
 	tmp, err := os.CreateTemp(binDir, ".rsrs-payload-*")
 	if err != nil {
 		return err
