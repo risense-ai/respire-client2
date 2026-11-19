@@ -10,7 +10,7 @@ import (
 	"time"
 )
 
-// ErrRuntimeNotInstalled means neither a selected Runtime nor an external CLI exists.
+// ErrRuntimeNotInstalled means there is no selected Runtime to start.
 var ErrRuntimeNotInstalled = errors.New("尚未安装 Runtime，请先下载")
 
 var errInvalidRuntimeSelection = errors.New("invalid installed Runtime metadata")
@@ -69,23 +69,7 @@ func (m *Manager) Start() error {
 	}
 	info, err := m.Installed()
 	if errors.Is(err, os.ErrNotExist) {
-		ctx, cancel = context.WithTimeout(context.Background(), 90*time.Second)
-		defer cancel()
-		_, externalErr := m.External(ctx)
-		if externalErr != nil {
-			// Only a missing CLI path authorizes first-install; execution errors do not.
-			pathErr, missingPath := externalErr.(*os.PathError)
-			if missingPath && errors.Is(pathErr, os.ErrNotExist) &&
-				pathErr.Path == filepath.Join(filepath.Dir(m.Root), "bin", cliBinary()) {
-				return fmt.Errorf("%w: %w", ErrRuntimeNotInstalled, externalErr)
-			}
-			return fmt.Errorf("本机 CLI 无法启动 Runtime: %w", externalErr)
-		}
-		_, err = m.hostOperation(ctx, []string{"runtime", "start"}, "", "runtime.start", "")
-		if err != nil {
-			return err
-		}
-		return m.requireExternalActive()
+		return fmt.Errorf("%w: %w", ErrRuntimeNotInstalled, err)
 	}
 	if err != nil {
 		return fmt.Errorf("读取 Runtime 安装信息失败: %w", err)
@@ -102,26 +86,6 @@ func (m *Manager) Start() error {
 		return err
 	}
 	return m.requireActive(info)
-}
-
-func (m *Manager) requireExternalActive() error {
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-	defer cancel()
-	h, _, err := m.Health(ctx)
-	if err != nil {
-		return err
-	}
-	// The CLI and Runtime have independent images and version trains.
-	if !samePath(h.InstallationRoot, m.DataRoot) {
-		return errors.New("启动后的 Runtime 不属于当前安装目录")
-	}
-	if err = verifyHostProcess(h); err != nil {
-		return err
-	}
-	if err = verifyExecutable(h.Exe); err != nil {
-		return err
-	}
-	return m.unlockIfNeeded(h)
 }
 
 func (m *Manager) requireActive(info InstalledRuntime) error {
