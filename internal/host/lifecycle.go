@@ -13,6 +13,8 @@ import (
 // ErrRuntimeNotInstalled means neither a selected Runtime nor an external CLI exists.
 var ErrRuntimeNotInstalled = errors.New("尚未安装 Runtime，请先下载")
 
+var errInvalidRuntimeSelection = errors.New("invalid installed Runtime metadata")
+
 func (m *Manager) Installed() (InstalledRuntime, error) {
 	var info InstalledRuntime
 	b, err := os.ReadFile(m.runtimeManifest())
@@ -20,10 +22,10 @@ func (m *Manager) Installed() (InstalledRuntime, error) {
 		return info, err
 	}
 	if err = json.Unmarshal(b, &info); err != nil {
-		return info, err
+		return info, fmt.Errorf("%w: %w", errInvalidRuntimeSelection, err)
 	}
 	if !validVersion(info.Version) || !validHash(info.SHA256) {
-		return info, errors.New("invalid installed Runtime metadata")
+		return info, errInvalidRuntimeSelection
 	}
 	return info, nil
 }
@@ -149,29 +151,6 @@ func (m *Manager) unlockIfNeeded(health HealthInfo) error {
 	defer cancel()
 	_, err := m.hostOperation(ctx, []string{"runtime", "unlock"}, "", "runtime.unlock", "")
 	return err
-}
-
-func (m *Manager) restoreRuntime(previous, failed InstalledRuntime) error {
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-	h, _, err := m.Health(ctx)
-	cancel()
-	if err == nil {
-		if !samePath(h.Exe, filepath.Join(m.runtimeDir(failed.Version), runtimeBinary())) {
-			return errors.New("Runtime 管理者已改变，未执行恢复")
-		}
-		if err = m.Stop(true); err != nil {
-			return fmt.Errorf("停止失败版本以便恢复: %w", err)
-		}
-	} else if !IsUnavailable(err) {
-		return fmt.Errorf("无法确认失败版本是否退出: %w", err)
-	}
-	if err = m.selectRuntime(previous); err != nil {
-		return fmt.Errorf("恢复版本选择: %w", err)
-	}
-	if err = m.Start(); err != nil {
-		return fmt.Errorf("重新启动旧版: %w", err)
-	}
-	return m.requireActive(previous)
 }
 
 func (m *Manager) Stop(ownedOnly bool) error {
