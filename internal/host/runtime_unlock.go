@@ -1,3 +1,5 @@
+//go:build linux || windows || (darwin && cgo)
+
 package host
 
 import (
@@ -15,11 +17,37 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 )
 
 type credentialReader func(service, account string) (*string, error)
-type sessionMigrator func(context.Context, HealthInfo, string, []byte, runtimeSession, uint64) ([]byte, error)
+type hostCredentialStore struct {
+	backends []string
+	read     func(backend, service, account string) (*string, error)
+	preserve func(service, account, value string) error
+}
+
+func (s hostCredentialStore) supports(name string) bool {
+	return slices.Contains(s.backends, name)
+}
+
+func (s hostCredentialStore) readSlot(backend, service, account string, emptyOK bool) (*string, error) {
+	if backend != "" {
+		if !s.supports(backend) {
+			return nil, errors.New("Unsupported Runtime credential backend")
+		}
+		return s.read(backend, service, account)
+	}
+	// Match the historical CLI's lookup order for credentials with no recorded backend.
+	for _, candidate := range s.backends {
+		value, err := s.read(candidate, service, account)
+		if err != nil || value != nil && (emptyOK || *value != "") {
+			return value, err
+		}
+	}
+	return nil, nil
+}
 
 var sessionAlias = regexp.MustCompile(`^(legacy|login)-[a-zA-Z0-9-]+$`)
 
@@ -64,7 +92,7 @@ func readCredentialConfig(path string, max int64) ([]byte, error) {
 	return body, nil
 }
 
-func (m *Manager) unlockNativeRuntime(ctx context.Context, health HealthInfo, read credentialReader, migrate sessionMigrator) error {
+func (m *Manager) unlockNativeRuntime(ctx context.Context, health HealthInfo, store hostCredentialStore) error {
 	base, err := url.Parse(m.Endpoint)
 	if err != nil || base.Scheme != "http" || base.Hostname() != "127.0.0.1" || base.Port() == "" ||
 		base.User != nil || base.RawQuery != "" || base.Fragment != "" || base.Path != "" {
@@ -114,10 +142,7 @@ func (m *Manager) unlockNativeRuntime(ctx context.Context, health HealthInfo, re
 		version = *session.Version
 	}
 	if (version == 1 || version == 3) && session.LegacyBackend == "" {
-		if migrate == nil {
-			return errors.New("Historical session requires migration in the host credential store")
-		}
-		original, err = migrate(ctx, health, sessionPath, original, session, version)
+		original, err = m.migrateHostSession(ctx, health, sessionPath, original, session, version, store)
 		if err != nil {
 			return err
 		}
@@ -126,13 +151,25 @@ func (m *Manager) unlockNativeRuntime(ctx context.Context, health HealthInfo, re
 			return errors.New("Migrated Runtime session metadata is invalid")
 		}
 	}
-	super, pass, legacy, err := session.nativeFactors(read)
+	super, pass, legacy, err := session.hostFactors(store)
 	if err != nil {
 		return err
 	}
-	providers, err := m.nativeProviderCredentials(profile, read)
+	providers, err := m.nativeProviderCredentials(profile, func(service, account string) (*string, error) {
+		return store.readSlot("", service, account, false)
+	})
+	providerUpdate := map[string]any{"kind": "replace", "credentials": providers}
+	providerState, providerCode := "ready", ""
 	if err != nil {
-		return fmt.Errorf("Read Runtime provider credentials: %w", err)
+		// An incomplete snapshot must revoke provider access without changing vault authorization.
+		providerState, providerCode = "unavailable", "platform_failure"
+		var credentialError providerCredentialError
+		if errors.As(err, &credentialError) {
+			providerCode = string(credentialError)
+		} else if errors.Is(err, os.ErrPermission) {
+			providerCode = "access_denied"
+		}
+		providerUpdate = map[string]any{"kind": "unavailable", "code": providerCode}
 	}
 	token, err := m.runtimeUnlockToken()
 	if err != nil {
@@ -142,7 +179,7 @@ func (m *Manager) unlockNativeRuntime(ctx context.Context, health HealthInfo, re
 		"schema_version": 2, "profile": profile, "session_sha256": fmt.Sprintf("%x", sha256.Sum256(original)),
 		"instance_id": health.InstanceID, "generation": health.Generation,
 		"super_password": super, "login_password": pass, "legacy_secret": legacy,
-		"provider_update": map[string]any{"kind": "replace", "credentials": providers},
+		"provider_update": providerUpdate,
 	})
 	if err != nil || len(body) > 65536 {
 		return errors.New("Runtime unlock frame exceeds its protocol limit")
@@ -175,16 +212,21 @@ func (m *Manager) unlockNativeRuntime(ctx context.Context, health HealthInfo, re
 		StoreReady bool `json:"store_ready"`
 		Provider   struct {
 			State string `json:"state"`
+			Code  string `json:"code"`
 		} `json:"provider_status"`
 	}
 	if err := json.NewDecoder(io.LimitReader(resp.Body, 65536)).Decode(&receipt); err != nil ||
-		receipt.Schema != 2 || !receipt.StoreReady || receipt.Provider.State != "ready" {
-		return errors.New("Runtime did not confirm library unlock and provider readiness")
+		receipt.Schema != 2 || !receipt.StoreReady || receipt.Provider.State != providerState ||
+		receipt.Provider.Code != providerCode {
+		return errors.New("Runtime did not confirm library unlock and the provider credential status")
+	}
+	if providerCode != "" {
+		fmt.Fprintf(os.Stderr, "Runtime library unlocked; provider credentials unavailable (%s)\n", providerCode)
 	}
 	return nil
 }
 
-func (s runtimeSession) nativeCredentialAccount() (string, error) {
+func (s runtimeSession) credentialAccount() (string, error) {
 	account := strings.TrimSpace(s.User)
 	if sessionAlias.MatchString(s.Alias) {
 		account = s.Alias
@@ -192,27 +234,29 @@ func (s runtimeSession) nativeCredentialAccount() (string, error) {
 	if account == "" {
 		account = "local"
 	}
-	if len(account) > 512 || strings.ContainsAny(account, "\x00\r\n") ||
-		(s.Backend != "" && s.Backend != "native") {
-		return "", errors.New("Original session native credential metadata is invalid")
+	if len(account) > 512 || strings.ContainsAny(account, "\x00\r\n") {
+		return "", errors.New("Original session credential account is invalid")
 	}
 	return account, nil
 }
 
-func (s runtimeSession) nativeFactors(read credentialReader) (super, pass, legacy *string, err error) {
+func (s runtimeSession) hostFactors(store hostCredentialStore) (super, pass, legacy *string, err error) {
 	version := uint64(1)
 	if s.Version != nil {
 		version = *s.Version
 	}
-	account, err := s.nativeCredentialAccount()
+	account, err := s.credentialAccount()
 	if err != nil {
 		return nil, nil, nil, err
 	}
+	if s.Backend != "" && !store.supports(s.Backend) {
+		return nil, nil, nil, errors.New("Unsupported Runtime session credential backend")
+	}
 	if version == 1 || version == 3 {
-		if s.LegacyBackend != "native" || !sessionAlias.MatchString(s.Alias) {
+		if !store.supports(s.LegacyBackend) || !sessionAlias.MatchString(s.Alias) {
 			return nil, nil, nil, errors.New("Original session requires historical credential migration")
 		}
-		legacy, err = read("rsrs", "legacy-secret:"+account)
+		legacy, err = store.readSlot(s.LegacyBackend, "rsrs", "legacy-secret:"+account, false)
 		if err != nil {
 			return
 		}
@@ -223,12 +267,12 @@ func (s runtimeSession) nativeFactors(read credentialReader) (super, pass, legac
 	if version < 2 {
 		pass = s.LegacyPass
 		if pass == nil {
-			pass, err = read("rsrs", "pass:"+account)
+			pass, err = store.readSlot(s.Backend, "rsrs", "pass:"+account, true)
 		}
 	} else if version < 4 && s.LegacySuper != nil && *s.LegacySuper != "" {
 		super = s.LegacySuper
 	} else {
-		super, err = read("rsrs", "super:"+account)
+		super, err = store.readSlot(s.Backend, "rsrs", "super:"+account, false)
 		if err == nil && version >= 4 && (super == nil || *super == "") {
 			super = s.SecretKey
 		}
@@ -282,7 +326,7 @@ func (m *Manager) nativeProviderCredentials(profile string, readSlot credentialR
 	read := func(service, account string) (string, error) {
 		if service == "" || account == "" || len(service) > 512 || len(account) > 512 ||
 			strings.ContainsAny(service+account, "\x00\r\n") {
-			return "", errors.New("invalid Runtime provider credential reference")
+			return "", providerCredentialError("invalid_configuration")
 		}
 		key := [2]string{service, account}
 		if seen[key] {
@@ -314,7 +358,7 @@ func (m *Manager) nativeProviderCredentials(profile string, readSlot credentialR
 			RecallAPIBase string `json:"recall_api_base"`
 		}
 		if json.Unmarshal(agent, &config) != nil {
-			return nil, errors.New("invalid Runtime provider agent configuration")
+			return nil, providerCredentialError("invalid_configuration")
 		}
 		hosts = append(hosts, providerHost(config.RecallAPIBase))
 	} else if !errors.Is(err, os.ErrNotExist) {
@@ -339,7 +383,7 @@ func (m *Manager) nativeProviderCredentials(profile string, readSlot credentialR
 	}
 	var configuration any
 	if json.Unmarshal(file, &configuration) != nil {
-		return nil, errors.New("invalid Runtime embedding credential configuration")
+		return nil, providerCredentialError("invalid_configuration")
 	}
 	var collect func(any) error
 	collect = func(value any) error {
@@ -351,7 +395,7 @@ func (m *Manager) nativeProviderCredentials(profile string, readSlot credentialR
 				s, serviceOK := service.(string)
 				a, accountOK := account.(string)
 				if !serviceOK || !accountOK {
-					return errors.New("invalid Runtime embedding credential reference")
+					return providerCredentialError("invalid_configuration")
 				}
 				if _, err := read(s, a); err != nil {
 					return err
@@ -376,6 +420,10 @@ func (m *Manager) nativeProviderCredentials(profile string, readSlot credentialR
 	}
 	return credentials, nil
 }
+
+type providerCredentialError string
+
+func (e providerCredentialError) Error() string { return "Runtime credential status: " + string(e) }
 
 func providerHost(base string) string {
 	base = strings.TrimSpace(base)

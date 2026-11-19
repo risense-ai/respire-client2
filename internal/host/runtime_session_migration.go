@@ -1,4 +1,4 @@
-//go:build windows || (darwin && cgo)
+//go:build linux || windows || (darwin && cgo)
 
 package host
 
@@ -14,7 +14,7 @@ import (
 	"strconv"
 )
 
-func (m *Manager) migrateNativeSession(ctx context.Context, owner HealthInfo, path string, original []byte, session runtimeSession, version uint64) ([]byte, error) {
+func (m *Manager) migrateHostSession(ctx context.Context, owner HealthInfo, path string, original []byte, session runtimeSession, version uint64, store hostCredentialStore) ([]byte, error) {
 	verifyOwner := func() error {
 		if err := m.requireClearSessionRecovery(); err != nil {
 			return err
@@ -38,7 +38,7 @@ func (m *Manager) migrateNativeSession(ctx context.Context, owner HealthInfo, pa
 	if _, alreadyMigrated := fields["legacy_secret_backend"]; alreadyMigrated {
 		return nil, errors.New("invalid historical credential backend")
 	}
-	if session.Backend != "" && session.Backend != "native" {
+	if session.Backend != "" && !store.supports(session.Backend) {
 		return nil, errors.New("unsupported historical system credential backend")
 	}
 	alias := session.Alias
@@ -61,11 +61,11 @@ func (m *Manager) migrateNativeSession(ctx context.Context, owner HealthInfo, pa
 		primary, factor, primarySlot = session.LegacySuper, session.SecretKey, "super"
 	}
 	if primary == nil {
-		account, err := session.nativeCredentialAccount()
+		account, err := session.credentialAccount()
 		if err != nil {
 			return nil, err
 		}
-		primary, err = readSystemCredential("rsrs", primarySlot+":"+account)
+		primary, err = store.readSlot(session.Backend, "rsrs", primarySlot+":"+account, version == 1)
 		if err != nil {
 			return nil, err
 		}
@@ -78,7 +78,7 @@ func (m *Manager) migrateNativeSession(ctx context.Context, owner HealthInfo, pa
 		slots = append(slots, struct{ slot, value string }{"pass", *session.LegacyPass})
 	}
 	for _, slot := range slots {
-		if err := preserveSystemCredential("rsrs", slot.slot+":"+alias, slot.value); err != nil {
+		if err := store.preserve("rsrs", slot.slot+":"+alias, slot.value); err != nil {
 			return nil, err
 		}
 	}
@@ -86,8 +86,8 @@ func (m *Manager) migrateNativeSession(ctx context.Context, owner HealthInfo, pa
 		delete(fields, field)
 	}
 	fields["keyring_account"] = json.RawMessage(strconv.Quote(alias))
-	fields["keyring_backend"] = json.RawMessage(`"native"`)
-	fields["legacy_secret_backend"] = json.RawMessage(`"native"`)
+	fields["keyring_backend"] = json.RawMessage(strconv.Quote(store.backends[0]))
+	fields["legacy_secret_backend"] = json.RawMessage(strconv.Quote(store.backends[0]))
 	updated, err := json.MarshalIndent(fields, "", "  ")
 	if err != nil || len(updated) > 65536 {
 		return nil, errors.New("migrated session exceeds the Runtime limit")

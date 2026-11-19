@@ -1,10 +1,12 @@
-//go:build linux || (darwin && !cgo)
+//go:build darwin && !cgo
 
 package host
 
-import "context"
+import (
+	"context"
+	"errors"
+)
 
-func (m *Manager) unlockAccountRuntime(ctx context.Context, _ HealthInfo) error {
-	_, err := m.hostOperation(ctx, []string{"runtime", "unlock"}, "", "runtime.unlock", "")
-	return err
+func (m *Manager) unlockAccountRuntime(context.Context, HealthInfo) error {
+	return errors.New("macOS Keychain support requires a native Client2 build")
 }

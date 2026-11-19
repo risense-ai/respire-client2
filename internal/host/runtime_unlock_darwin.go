@@ -24,14 +24,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
 	"unicode/utf8"
 	"unsafe"
 )
 
 func (m *Manager) unlockAccountRuntime(ctx context.Context, health HealthInfo) error {
-	return m.unlockNativeRuntime(ctx, health, readSystemCredential, m.migrateNativeSession)
+	return m.unlockNativeRuntime(ctx, health, nativeHostCredentialStore())
 }
 
 func readSystemCredential(service, account string) (*string, error) {
@@ -99,20 +97,4 @@ func preserveSystemCredential(service, account, value string) error {
 		return errors.New("macOS Keychain credential differs from historical session; original session retained")
 	}
 	return nil
-}
-
-func canonicalSessionDirectory(path string) (string, error) {
-	return filepath.EvalSymlinks(path)
-}
-
-func publishSessionFile(from, to string) error {
-	directory, err := os.Open(filepath.Dir(to))
-	if err != nil {
-		return err
-	}
-	defer directory.Close()
-	if err := os.Rename(from, to); err != nil {
-		return err
-	}
-	return directory.Sync()
 }
