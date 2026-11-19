@@ -23,6 +23,15 @@ import (
 
 const controlFrameLimit = 64 * 1024
 
+type runtimeControlRequest struct {
+	V              int      `json:"v"`
+	ID             string   `json:"id"`
+	Method         string   `json:"method"`
+	Args           []string `json:"args"`
+	OperationID    string   `json:"operation_id,omitempty"`
+	IdempotencyKey string   `json:"idempotency_key,omitempty"`
+}
+
 func controlUUID() (string, error) {
 	var id [16]byte
 	if _, err := rand.Read(id[:]); err != nil {
@@ -116,8 +125,8 @@ func (m *Manager) readRuntimeLoginRecovery(ctx context.Context, owner HealthInfo
 	if err != nil {
 		return err
 	}
-	request := map[string]any{"v": 1, "id": requestID, "method": "control.auth.recovery_status", "args": []string{string(params)}}
-	reply, err := m.exchangeRuntimeControl(ctx, owner.Exe, port, grant, request, requestID)
+	request := runtimeControlRequest{V: 1, ID: requestID, Method: "control.auth.recovery_status", Args: []string{string(params)}}
+	reply, err := m.exchangeRuntimeControl(ctx, owner.Exe, port, grant, request)
 	if err != nil {
 		return err
 	}
@@ -152,7 +161,7 @@ func (m *Manager) readRuntimeLoginRecovery(ctx context.Context, owner HealthInfo
 	return nil
 }
 
-func (m *Manager) exchangeRuntimeControl(ctx context.Context, image string, port uint64, grant, request any, id string) (reply rpcResponse, err error) {
+func (m *Manager) exchangeRuntimeControl(ctx context.Context, image string, port uint64, grant any, request runtimeControlRequest) (reply rpcResponse, err error) {
 	var frames bytes.Buffer
 	for _, value := range []any{grant, request} {
 		raw, err := json.Marshal(value)
@@ -225,9 +234,14 @@ func (m *Manager) exchangeRuntimeControl(ctx context.Context, image string, port
 	waited = true
 	var packet struct {
 		rpcResponse
-		PID int `json:"pid"`
+		PID            int     `json:"pid"`
+		Binary         string  `json:"bin"`
+		IdempotencyKey string  `json:"idempotency_key"`
+		WebURL         *string `json:"web_url"`
 	}
-	if json.Unmarshal(frame, &packet) != nil || packet.V != 1 || packet.ID != id || packet.PID != cmd.Process.Pid ||
+	if json.Unmarshal(frame, &packet) != nil || packet.V != request.V || packet.ID != request.ID ||
+		packet.OperationID != request.OperationID || packet.IdempotencyKey != request.IdempotencyKey ||
+		packet.PID != cmd.Process.Pid || packet.Binary != "rsrs-runtime" || packet.Scope != nil || packet.WebURL != nil ||
 		cmd.ProcessState == nil || cmd.ProcessState.ExitCode() != packet.Exit {
 		return reply, errors.New("Runtime control reply or process exit does not match the request")
 	}
