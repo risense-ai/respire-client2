@@ -138,15 +138,6 @@ func Run(m *host.Manager, buildVersion string) {
 		}
 	})
 	d.notifier = notifier
-	for name, action := range map[string]func(){
-		"CmdOrCtrl+Shift+R": func() { d.window.Show(); d.window.Focus() },
-		"CmdOrCtrl+Shift+H": func() { d.window.Hide() },
-	} {
-		name, action := name, action
-		if err := d.app.GlobalShortcut.Register(name, action); err != nil {
-			log.Printf("global shortcut %s: %v", name, err)
-		}
-	}
 	d.app.Event.On(updater.EventUpdateReady, func(*application.CustomEvent) {
 		d.updateNotification()
 	})
