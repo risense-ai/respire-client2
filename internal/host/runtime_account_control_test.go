@@ -300,4 +300,24 @@ func TestPublishedRuntimeRequiresExactClient2Maintenance(t *testing.T) {
 	if err != nil || !bytes.Contains(nonsecret, []byte(challengeDigest)) || bytes.Contains(nonsecret, []byte(challenge)) {
 		t.Fatalf("challenge metadata did not retain only its digest: %v", err)
 	}
+	continuationReceipt, err := json.Marshal(map[string]any{
+		"operation_id": operation, "source_profile": root, "outcome": "awaiting_input",
+		"login": map[string]any{"user": intent.User, "addr": intent.Server, "required_inputs": []string{"totp"}},
+	})
+	var waiting runtimeLoginReceipt
+	if err != nil || json.Unmarshal(continuationReceipt, &waiting) != nil {
+		t.Fatal("invalid test continuation receipt")
+	}
+	if _, err := manager.continueRuntimeLoginCode(ctx, image, hash, admission, waiting, "short"); err == nil {
+		t.Fatal("invalid code reached the Runtime")
+	}
+	code := "098765"
+	if _, err := manager.continueRuntimeLoginCode(ctx, image, hash, admission, waiting, code); !errors.As(err, &unconfirmed) ||
+		unconfirmed.id != operation || !strings.Contains(err.Error(), "account_outcome_unknown") {
+		t.Fatalf("Runtime did not receive the original continuation before rejecting fixture intent: %v", err)
+	}
+	reloaded, err := store.readSlot(params.Material.Backend, "rsrs", slot, false)
+	if err != nil || reloaded == nil || *reloaded != *saved {
+		t.Fatalf("transient verification code was retained in the original private custody: %v", err)
+	}
 }

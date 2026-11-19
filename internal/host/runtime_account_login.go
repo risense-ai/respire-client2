@@ -65,16 +65,9 @@ func (m *Manager) prepareInitialRuntimeLogin(ctx context.Context, imagePath, ima
 		!hostOperationID.MatchString(record.OperationID) {
 		return control, params, errors.New("Runtime login requires the original unsent account record")
 	}
-	current, err := readCredentialConfig(filepath.Join(record.Source, "session.json"), controlFrameLimit)
-	if err != nil && !errors.Is(err, os.ErrNotExist) {
-		return control, params, err
-	}
-	identity, err := runtimeAuthIdentityOf(current)
+	identity, err := verifyRuntimeLoginSource(record)
 	if err != nil {
 		return control, params, err
-	}
-	if !reflect.DeepEqual(record.Original.Identity, identity) {
-		return control, params, errors.New("Runtime login source session changed before admission")
 	}
 	control, err = m.prepareRuntimeAccountControl(ctx, imagePath, imageDigest, record.Source, identity.AccountID, admission.Marker)
 	if err != nil {
@@ -92,6 +85,21 @@ func (m *Manager) prepareInitialRuntimeLogin(ctx context.Context, imagePath, ima
 		},
 	}
 	return control, params, nil
+}
+
+func verifyRuntimeLoginSource(record runtimeAccountRecord) (runtimeAuthIdentity, error) {
+	current, err := readCredentialConfig(filepath.Join(record.Source, "session.json"), controlFrameLimit)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return runtimeAuthIdentity{}, err
+	}
+	identity, err := runtimeAuthIdentityOf(current)
+	if err != nil {
+		return runtimeAuthIdentity{}, err
+	}
+	if !reflect.DeepEqual(record.Original.Identity, identity) {
+		return runtimeAuthIdentity{}, errors.New("Runtime login source session changed")
+	}
+	return identity, nil
 }
 
 func runtimeLoginBackend() string {
@@ -209,6 +217,21 @@ func (m *Manager) sendInitialRuntimeLogin(ctx context.Context, control runtimeAc
 	if err := admission.markLoginSent(); err != nil {
 		return runtimeLoginResult{}, err
 	}
+	result, err := m.exchangeRuntimeLogin(ctx, control, record, requestID, argument)
+	if err != nil {
+		return runtimeLoginResult{}, err
+	}
+	if result.Handoff != nil && result.Handoff.Kind == "challenge" {
+		if err := persistRuntimeLoginChallenge(ctx, record, params, argument, *result.Handoff); err != nil {
+			return runtimeLoginResult{}, &unconfirmedError{id: record.OperationID, cause: err}
+		}
+		result.Handoff = nil
+	}
+	return result, nil
+}
+
+func (m *Manager) exchangeRuntimeLogin(ctx context.Context, control runtimeAccountControl, record runtimeAccountRecord,
+	requestID string, argument []byte) (runtimeLoginResult, error) {
 	reply, err := m.exchangeRuntimeControl(ctx, control.image, control.port, control.grant, runtimeControlRequest{
 		V: 1, ID: requestID, Method: "control.auth.login", Args: []string{string(argument)},
 		OperationID: record.OperationID, IdempotencyKey: record.OperationID,
@@ -220,12 +243,6 @@ func (m *Manager) sendInitialRuntimeLogin(ctx context.Context, control runtimeAc
 	result, err := readRuntimeLoginResult(reply, record)
 	if err != nil {
 		return runtimeLoginResult{}, &unconfirmedError{id: record.OperationID, cause: err}
-	}
-	if result.Handoff != nil && result.Handoff.Kind == "challenge" {
-		if err := persistRuntimeLoginChallenge(ctx, record, params, argument, *result.Handoff); err != nil {
-			return runtimeLoginResult{}, &unconfirmedError{id: record.OperationID, cause: err}
-		}
-		result.Handoff = nil
 	}
 	return result, nil
 }
