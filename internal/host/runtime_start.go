@@ -46,12 +46,26 @@ func (m *Manager) startDetached(ctx context.Context, info InstalledRuntime) (Hea
 		return HealthInfo{}, err
 	}
 	executable := filepath.Join(m.runtimeDir(info.Version), runtimeBinary())
+	cmd := runtimeServingCommand(executable, m.DataRoot, endpoint.Hostname(), endpoint.Port(), "")
+	health, err := m.launchRuntimeServing(ctx, cmd)
+	if err != nil {
+		return HealthInfo{}, err
+	}
+	if health.ImageSHA256 != info.SHA256 {
+		return HealthInfo{}, errors.New("运行中的 Runtime 与校验后的映像不一致")
+	}
+	return health, m.verifySelectedHealth(health, info)
+}
+
+func (m *Manager) launchRuntimeServing(ctx context.Context, cmd *exec.Cmd) (HealthInfo, error) {
+	if err := ctx.Err(); err != nil {
+		return HealthInfo{}, err
+	}
 	log, err := os.CreateTemp(m.Root, "runtime-start-*.log")
 	if err != nil {
 		return HealthInfo{}, err
 	}
 	defer log.Close()
-	cmd := runtimeServingCommand(executable, m.DataRoot, endpoint.Hostname(), endpoint.Port(), "")
 	cmd.Stdout, cmd.Stderr = log, log
 	if err := cmd.Start(); err != nil {
 		return HealthInfo{}, err
@@ -68,10 +82,7 @@ func (m *Manager) startDetached(ctx context.Context, info InstalledRuntime) (Hea
 				return HealthInfo{}, errors.New("Runtime 端口报告了其他进程")
 			}
 			if h.StartupComplete {
-				if h.ImageSHA256 != info.SHA256 {
-					return HealthInfo{}, errors.New("运行中的 Runtime 与校验后的映像不一致")
-				}
-				return h, m.verifySelectedHealth(h, info)
+				return h, nil
 			}
 		} else if !IsUnavailable(err) && ctx.Err() == nil {
 			return HealthInfo{}, err

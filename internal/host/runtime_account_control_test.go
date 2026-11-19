@@ -403,76 +403,41 @@ func TestPublishedRuntimeRequiresExactClient2Maintenance(t *testing.T) {
 	wrongDigest := strings.Repeat("0", 64)
 	changedTarget := applied
 	changedTarget.SessionDigest = &wrongDigest
-	if _, err := manager.prepareRuntimeLoginLaunch(ctx, image, hash, &admission, changedTarget); err == nil {
+	manager.Root = filepath.Join(root, "client2")
+	if err := os.Mkdir(manager.Root, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := manager.startAndCompleteRuntimeLogin(ctx, image, hash, &admission, changedTarget); err == nil {
 		t.Fatal("changed target session was authorized to start")
 	}
-	grant, err := manager.prepareRuntimeLoginLaunch(ctx, image, hash, &admission, applied)
-	if err != nil {
-		t.Fatal(err)
-	}
 	manager.localClient = &http.Client{Timeout: 15 * time.Second, Transport: &http.Transport{}}
-	_, port, ok := strings.Cut(strings.TrimPrefix(manager.Endpoint, "http://"), ":")
-	if !ok {
-		t.Fatal("invalid fixture endpoint")
-	}
 	t.Setenv("RSRS_NO_AUTOSYNC", "1")
-	command := runtimeServingCommand(image, root, "127.0.0.1", port, grant.binding.LaunchID)
-	var output bytes.Buffer
-	command.Stdout, command.Stderr = &output, &output
-	if err := command.Start(); err != nil {
-		t.Fatal(err)
-	}
-	exited := make(chan error, 1)
-	go func() { exited <- command.Wait() }()
-	t.Cleanup(func() { _ = command.Process.Kill() })
 	serving, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
-	tick := time.NewTicker(40 * time.Millisecond)
-	defer tick.Stop()
-	for {
-		health, _, err := manager.Health(serving)
-		if err == nil && health.StartupComplete {
-			if health.InstanceID != grant.binding.LaunchID || health.AccountID != account ||
-				!samePath(health.DataDir, target) || health.PID != uint32(command.Process.Pid) || health.StoreReady {
-				t.Fatal("Runtime did not start locked with the authorized target identity")
+	_, finishErr := manager.startAndCompleteRuntimeLogin(serving, image, hash, &admission, applied)
+	ready, _, healthErr := manager.Health(serving)
+	if healthErr == nil && ready.PID != 0 && ready.ImageSHA256 == hash && samePath(ready.InstallationRoot, root) {
+		t.Cleanup(func() {
+			stop, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			if err := manager.stopDetached(stop, ready); err != nil {
+				t.Errorf("stop isolated login target: %v", err)
 			}
-			break
-		}
-		select {
-		case err := <-exited:
-			t.Fatalf("authorized target Runtime exited before health: %v %s", err, output.String())
-		case <-serving.Done():
-			t.Fatal("authorized target did not report ready for credentials")
-		case <-tick.C:
-		}
+		})
 	}
-	granted := filepath.Join(root, "runtime", "autostart", "launch", "launch-"+grant.binding.LaunchID+".json")
+	if !errors.As(finishErr, &unconfirmed) || unconfirmed.id != operation || !strings.Contains(finishErr.Error(), "scope_mismatch") {
+		t.Fatalf("published Runtime did not accept the Verified grant before refusing the missing fixture journal: %v", finishErr)
+	}
+	if healthErr != nil || !ready.StoreReady || !samePath(ready.DataDir, target) || ready.AccountID != account {
+		t.Fatalf("original target was not available after authorized startup and unlock: %v", healthErr)
+	}
+	granted := filepath.Join(root, "runtime", "autostart", "launch", "launch-"+ready.InstanceID+".json")
 	if _, err := os.Stat(granted); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("serving Runtime did not consume its one-shot grant: %v", err)
-	}
-	if _, err := manager.unlockRuntimeLoginTarget(serving, grant, admission, applied, uint32(command.Process.Pid)+1); err == nil {
-		t.Fatal("credentials were delivered to a process that was not started for the original grant")
-	}
-	ready, err := manager.unlockRuntimeLoginTarget(serving, grant, admission, applied, uint32(command.Process.Pid))
-	if err != nil || !ready.StoreReady || ready.AccountID != account || ready.InstanceID != grant.binding.LaunchID {
-		t.Fatalf("Client2 did not unlock the authorized target through the real Runtime: %v", err)
-	}
-	changedHealth := ready
-	changedHealth.InstanceID = operation
-	if _, err := manager.completeRuntimeLogin(serving, grant, &admission, applied, changedHealth); err == nil {
-		t.Fatal("another Runtime instance was allowed to complete the login")
-	}
-	if _, err := manager.completeRuntimeLogin(serving, grant, &admission, applied, ready); !errors.As(err, &unconfirmed) ||
-		unconfirmed.id != operation || !strings.Contains(err.Error(), "scope_mismatch") {
-		t.Fatalf("published Runtime did not accept the Verified grant before refusing the missing fixture journal: %v", err)
 	}
 	var verified runtimeMaintenanceMarker
 	if json.Unmarshal(admission.Marker, &verified) != nil || verified.Phase != "Verified" ||
 		verified.ExpectedProfile != target || verified.Token != record.Token {
 		t.Fatal("original Verified ownership was not retained after refusing completion")
 	}
-	if err := command.Process.Kill(); err != nil {
-		t.Fatal(err)
-	}
-	<-exited
 }

@@ -9,7 +9,31 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strconv"
 )
+
+// Keep the caller's installation lock through launch, explicit credential
+// delivery and terminal Runtime verification.
+func (m *Manager) startAndCompleteRuntimeLogin(ctx context.Context, imagePath, imageDigest string,
+	admission *runtimeAccountAdmission, receipt runtimeLoginReceipt) (runtimeLoginReceipt, error) {
+	unknown := func(err error) (runtimeLoginReceipt, error) {
+		return runtimeLoginReceipt{}, &unconfirmedError{id: receipt.OperationID, cause: err}
+	}
+	grant, err := m.prepareRuntimeLoginLaunch(ctx, imagePath, imageDigest, admission, receipt)
+	if err != nil {
+		return unknown(err)
+	}
+	cmd := runtimeServingCommand(grant.image, m.DataRoot, "127.0.0.1", strconv.FormatUint(grant.port, 10), grant.binding.LaunchID)
+	health, err := m.launchRuntimeServing(ctx, cmd)
+	if err != nil {
+		return unknown(err)
+	}
+	ready, err := m.unlockRuntimeLoginTarget(ctx, grant, *admission, receipt, health.PID)
+	if err != nil {
+		return unknown(err)
+	}
+	return m.completeRuntimeLogin(ctx, grant, admission, receipt, ready)
+}
 
 // The coordinator holds the same takeover lock as the admission.
 func (m *Manager) prepareRuntimeLoginLaunch(ctx context.Context, imagePath, imageDigest string,

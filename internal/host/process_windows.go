@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
@@ -76,7 +77,13 @@ func runtimeProcess(h HealthInfo) (windows.Handle, error) {
 		return 0, err
 	}
 	actual := windows.UTF16ToString(buf[:size])
-	if !samePath(actual, h.Exe) || !acceptsRuntimeBinary(filepath.Base(actual)) {
+	actualFile, actualErr := os.Stat(actual)
+	reportedFile, reportedErr := os.Stat(h.Exe)
+	if err := errors.Join(actualErr, reportedErr); err != nil {
+		windows.CloseHandle(handle)
+		return 0, err
+	}
+	if !os.SameFile(actualFile, reportedFile) || !acceptsRuntimeBinary(filepath.Base(actual)) {
 		windows.CloseHandle(handle)
 		return 0, errors.New("Runtime process identity mismatch")
 	}
