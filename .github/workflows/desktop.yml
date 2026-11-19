@@ -81,6 +81,21 @@ jobs:
           python3 -m py_compile scripts/desktop-candidate.py scripts/update-manifest.py
           python3 scripts/desktop-candidate.py self-check
           go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12 -shellcheck= -pyflakes= .github/workflows/desktop.yml
+  macos-host-compile:
+    if: github.event_name == 'pull_request'
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Compile the macOS host with Security.framework
+        env:
+          CGO_ENABLED: '1'
+        run: go test -c -o "$RUNNER_TEMP/client2-host.test" -tags production ./internal/host
   native:
     name: ${{ matrix.os }}-${{ matrix.arch }}
     needs: [prepare]
@@ -203,7 +218,7 @@ jobs:
           cache: true
       - name: Linux native libraries
         if: matrix.os == 'linux'
-        run: sudo apt-get update -qq && sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev libx11-dev fontconfig
+        run: sudo apt-get update -qq && sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev libx11-dev fontconfig gnome-keyring libsecret-tools
       - uses: actions/download-artifact@v8
         with:
           name: desktop-candidate-${{ github.run_attempt }}
@@ -218,6 +233,9 @@ jobs:
           tags=production
           if [[ '${{ matrix.os }}' == linux ]]; then tags=production,gtk3; fi
           go test -tags "$tags" ./...
+      - name: Check real Linux Secret Service interoperability
+        if: matrix.os == 'linux'
+        run: dbus-run-session -- env RESPIRE_NATIVE_SECRET_SERVICE_CHECK=1 go test -count=1 -tags production -run '^TestLinuxSecretServiceInteroperability$' ./internal/host
       - name: Verify candidate Windows executable identity and fonts
         if: matrix.os == 'windows'
         shell: pwsh

@@ -142,11 +142,12 @@ func (m *Manager) ModelVariants(ctx context.Context, model string) (map[string]a
 		}
 		variants = append(variants, entry)
 	}
-	_, tokenizerErr := os.Stat(filepath.Join(dir, "tokenizer.json"))
 	return map[string]any{
 		"model":               definition.ID,
 		"model_dir":           dir,
-		"tokenizer_installed": tokenizerErr == nil,
+		"tokenizer_installed": modelFileValid(filepath.Join(dir, "tokenizer.json"), definition.Tokenizer),
+		"cpu_container_ready": !definition.Legacy || m.cpuContainerPresent(dir),
+		"cpu_container_size":  m3CPUContainer.size,
 		"variants":            variants,
 	}, nil
 }

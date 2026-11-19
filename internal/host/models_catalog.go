@@ -57,7 +57,7 @@ var modelCatalog = []modelDefinition{
 		ID: "m3", Label: "BGE-M3 · 1024 维 · 多语",
 		Repo: "Xenova/bge-m3", Revision: modelRevision,
 		Dimensions: 1024, MaxTokens: 512, Legacy: true,
-		Tokenizer: modelFileSpec{rel: "tokenizer.json", sha256: tokenizerSHA, size: 17433231},
+		Tokenizer: modelFileSpecs["tokenizer"],
 		Variants:  modelVariantFiles,
 		Hashes: map[string]string{
 			"quantized": "0826f8c1ab9edf1801db86c61919d4d108e8bfc0b809ec823ad366882ff0b77d",

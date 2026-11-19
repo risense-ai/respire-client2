@@ -647,7 +647,13 @@ export function createWizard(ctx) {
     const variant = inventory.variants.find(
       (item) => item.name === state.variant,
     );
-    return variant?.installed ? 0 : variant?.size || 0;
+    const weights = variant?.installed ? 0 : variant?.size || 0;
+    const cpuContainer = needsCPUContainer() && !inventory.cpu_container_ready ? inventory.cpu_container_size : 0;
+    return weights + cpuContainer;
+  }
+
+  function needsCPUContainer() {
+    return state.model === "m3" && state.device === "cpu" && state.variant === "quantized";
   }
 
   function updateEstimate(body, inventory) {
@@ -799,7 +805,10 @@ export function createWizard(ctx) {
           return;
         }
       }
-      await runIndexStage();
+      if (!(await runIndexStage())) {
+        if (state) state.executing = false;
+        return;
+      }
       if (state) {
         state.executing = false;
         renderExecuteSuccess();
@@ -823,7 +832,9 @@ export function createWizard(ctx) {
     const variant = inventory.variants.find(
       (item) => item.name === state.variant,
     );
-    const needed = !inventory.tokenizer_installed || !variant?.installed;
+    const cpuBaseline = needsCPUContainer();
+    const needed = !inventory.tokenizer_installed || !variant?.installed ||
+      (cpuBaseline && !inventory.cpu_container_ready);
     if (!needed) {
       // Existing verified weights: skip straight to enabling.
       setStage("download", "done", "文件已存在，跳过下载");
@@ -833,7 +844,7 @@ export function createWizard(ctx) {
     executeStatus("正在下载模型文件…");
     const { done } = openDownloadModal({
       model: state.model,
-      variant: state.variant,
+      variant: cpuBaseline ? "baseline" : state.variant,
       label: modelLabel(state.model),
       getMirror: () => "auto",
     });
@@ -858,7 +869,8 @@ export function createWizard(ctx) {
     const installed = inventory.variants.find(
       (item) => item.name === state.variant,
     );
-    if (!inventory.tokenizer_installed || !installed?.installed) {
+    if (!inventory.tokenizer_installed || !installed?.installed ||
+        (cpuBaseline && !inventory.cpu_container_ready)) {
       failure("verify", "模型文件校验未通过。");
       return false;
     }

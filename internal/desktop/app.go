@@ -64,7 +64,6 @@ func Run(m *host.Manager, buildVersion string) {
 	log.SetOutput(f)
 	d := &desktop{m: m, closing: make(chan struct{})}
 	defer d.native.close()
-	go ensureShellIdentity()
 	files, err := fs.Sub(frontend, "frontend")
 	if err != nil {
 		log.Fatal(err)
@@ -86,6 +85,10 @@ func Run(m *host.Manager, buildVersion string) {
 		if clean != "" {
 			uniqueID += "." + clean
 		}
+	}
+	// A named test instance must not replace the installed app's shell entries.
+	if uniqueID == "ai.risense.respire.client2" {
+		go ensureShellIdentity()
 	}
 	singleInstance := &application.SingleInstanceOptions{UniqueID: uniqueID, OnSecondInstanceLaunch: func(application.SecondInstanceData) {
 		if d.window != nil {
@@ -285,7 +288,6 @@ func installRuntimeForStartup(m interface {
 func updateRuntimeForBackground(ctx context.Context, m interface {
 	RunTask(string, func() error) error
 	InstallRuntime(bool, bool) error
-	RequireCoreConfigHost(context.Context) error
 	Health(context.Context) (host.HealthInfo, json.RawMessage, error)
 	Owns(string) bool
 }, preparationErr error, restart bool) error {
@@ -295,17 +297,17 @@ func updateRuntimeForBackground(ctx context.Context, m interface {
 	healthCtx, healthCancel := context.WithTimeout(ctx, 3*time.Second)
 	h, _, err := m.Health(healthCtx)
 	healthCancel()
-	if err != nil || !m.Owns(h.Exe) {
+	if host.IsUnavailable(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if !m.Owns(h.Exe) {
 		return nil
 	}
 	return m.RunTask("检查 Runtime 更新", func() error {
-		if err := m.RequireCoreConfigHost(ctx); err != nil {
-			return err
-		}
-		if err := m.InstallRuntime(true, restart); err != nil {
-			return err
-		}
-		return m.RequireCoreConfigHost(ctx)
+		return m.InstallRuntime(true, restart)
 	})
 }
 
@@ -319,21 +321,24 @@ func (d *desktop) background() {
 		case <-ctx.Done():
 		}
 	}()
-	startupPreparationErr := d.task("准备 CLI / 连接 Runtime", func() error {
-		if d.m.Preferences().AutoRuntime {
-			if err := d.m.MigrateRuntime(); err != nil {
-				return err
-			}
+	go func() {
+		if err := d.m.UpdateInstalledCLI(ctx); err != nil {
+			log.Printf("CLI 自动更新失败: %v", err)
 		}
-		if err := d.m.EnsureCoreConfigHost(ctx); err != nil {
-			return err
-		}
-		if !d.m.Preferences().AutoRuntime {
+	}()
+	startupPreparationErr := d.task("连接 Runtime", func() error {
+		prefs := d.m.Preferences()
+		if !prefs.AutoRuntime {
 			return nil
 		}
-		prefs := d.m.Preferences()
-		if info, err := d.m.Installed(); err == nil && prefs.RuntimeAutoUpdate && semver.Compare("v"+info.Version, "v2.0.0-dev.27") < 0 {
-			return installRuntimeForStartup(d.m, prefs.RuntimeAutoRestart)
+		if prefs.RuntimeAutoUpdate {
+			info, err := d.m.Installed()
+			if errors.Is(err, os.ErrNotExist) || err == nil && semver.Compare("v"+info.Version, "v2.0.0-dev.27") < 0 {
+				return installRuntimeForStartup(d.m, prefs.RuntimeAutoRestart)
+			}
+			if err != nil {
+				return err
+			}
 		}
 		err := d.m.Start()
 		if errors.Is(err, host.ErrRuntimeNotInstalled) {

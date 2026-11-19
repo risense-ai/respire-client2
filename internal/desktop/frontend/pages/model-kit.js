@@ -228,7 +228,7 @@ export function openDownloadModal({
 } = {}) {
   const element = document.createElement("dialog");
   element.className = "dialog";
-  const subject = variant === "baseline" ? "基础文件（quantized + 分词器）" : variant;
+  const subject = variant === "baseline" ? "基础模型文件" : variant;
   element.innerHTML = `<form method="dialog"><div class="dialog-heading"><h2>下载权重文件</h2><button type="button" class="icon-button" data-close aria-label="关闭">×</button></div><div class="dialog-body"><p class="hint">${h(label)} · ${h(subject)}</p><div class="progress-label"><span data-dl-stage>正在连接下载源…</span><span data-dl-bytes></span></div><progress data-dl-bar style="width:100%"></progress><p class="form-error" role="alert" hidden data-dl-error></p></div><footer><button type="button" data-dl="pause" hidden>暂停</button><button type="button" data-dl="resume" class="primary" hidden>继续下载</button><button type="button" data-dl="cancel" hidden>取消下载</button><button type="button" data-dl="retry" class="primary" hidden>重新下载</button><button type="button" data-dl="dismiss" class="primary" hidden>关闭</button></footer></form>`;
   document.body.append(element);
   element.showModal();

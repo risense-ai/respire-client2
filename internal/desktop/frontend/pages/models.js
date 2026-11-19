@@ -498,7 +498,8 @@ export function models(root, ctx) {
       mode.engine === "auto"
         ? detectBestEngine(ctx.desktop?.platform)
         : mode.engine;
-    if (!isProfileModel(modelID) && !inventory?.tokenizer_installed) {
+    const cpuBaseline = modelID === "m3" && engine === "cpu" && mode.variant === "quantized";
+    if (!cpuBaseline && !isProfileModel(modelID) && !inventory?.tokenizer_installed) {
       const completed = await openDownloadModal({
         model: modelID,
         variant: "tokenizer",
@@ -509,21 +510,23 @@ export function models(root, ctx) {
       inventory = await fetchInventory(modelID);
     }
     const variant = modeVariant(mode);
-    if (!variant?.installed || !inventory?.tokenizer_installed) {
+    if (!variant?.installed || !inventory?.tokenizer_installed ||
+        (cpuBaseline && !inventory?.cpu_container_ready)) {
       stateOverride = null;
       renderDynamic(true);
       // The modal resolves `done` true only when the download completed;
       // closing or cancelling never enables the mode on its own.
       await openDownloadModal({
         model: modelID,
-        variant: mode.variant,
+        variant: cpuBaseline ? "baseline" : mode.variant,
         label: mode.title,
         getMirror: currentMirror,
       }).done;
       const fresh = await fetchInventory(modelID).catch(() => null);
       if (fresh) inventory = fresh;
       if (!root.isConnected) return;
-      if (inventory?.tokenizer_installed && modeVariant(mode)?.installed)
+      if (inventory?.tokenizer_installed && modeVariant(mode)?.installed &&
+          (!cpuBaseline || inventory.cpu_container_ready))
         await applyEngineAfterDownload(mode, engine);
       else renderDynamic(true);
       return;
@@ -728,10 +731,11 @@ export function models(root, ctx) {
     updateVariantsProgress();
     renderDynamic();
     renderEngineHint();
-    // The client downloaded the baseline files: have the Runtime build the
-    // index once, right after the tokenizer shows up.
-    if (inventory) {
-      if (!inventory.tokenizer_installed) sawMissingBaseline = true;
+    // Ask Runtime to verify and index after all CPU baseline files arrive.
+    if (inventory && modelID === "m3") {
+      const baselineReady = inventory.tokenizer_installed && inventory.cpu_container_ready &&
+        inventory.variants.some((variant) => variant.name === "quantized" && variant.installed);
+      if (!baselineReady) sawMissingBaseline = true;
       else if (sawMissingBaseline && !baselinePrepared) {
         baselinePrepared = true;
         const mirror = currentMirror();
@@ -1030,7 +1034,7 @@ export function models(root, ctx) {
         if (
           !(await confirm(
             "下载基础模型",
-            "将多线程并行下载 quantized 权重与分词器（约 543 MiB）到本机模型目录；完成后自动构建索引。已校验的文件会跳过。",
+            "将下载量化权重、分词器和所需的 CPU 容器到本机模型目录。已校验的文件会跳过。",
             "开始下载",
           ))
         )

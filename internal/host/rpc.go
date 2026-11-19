@@ -27,6 +27,7 @@ type HealthInfo struct {
 	ProcessStartID   string `json:"process_start_id"`
 	RuntimeVersion   string `json:"runtime_version"`
 	StoreReady       bool   `json:"store_ready"`
+	StartupComplete  bool   `json:"startup_complete"`
 	CredentialState  string `json:"credential_state"`
 	AccountID        string `json:"account_id"`
 	InstanceID       string `json:"instance_id"`
