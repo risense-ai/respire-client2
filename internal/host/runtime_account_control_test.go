@@ -12,6 +12,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"io"
 	"net"
 	"net/http"
 	"os"
@@ -22,6 +23,86 @@ import (
 	"testing"
 	"time"
 )
+
+func TestRuntimeLoginOwnerProcess(t *testing.T) {
+	if os.Getenv("RESPIRE_TEST_LOGIN_OWNER") == "1" {
+		if _, err := io.Copy(io.Discard, os.Stdin); err != nil {
+			t.Fatal(err)
+		}
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	child := exec.CommandContext(ctx, exe, "-test.run=^TestRuntimeLoginOwnerProcess$")
+	child.Env = append(os.Environ(), "RESPIRE_TEST_LOGIN_OWNER=1")
+	configureCommand(child)
+	input, err := child.StdinPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := child.Start(); err != nil {
+		t.Fatal(err)
+	}
+	waited := false
+	defer func() {
+		if !waited {
+			_ = child.Process.Kill()
+			_ = child.Wait()
+		}
+	}()
+	birth, err := runtimeControlProcessBirth(ctx, child.Process.Pid)
+	if err != nil || birth == "" {
+		t.Fatalf("live maintenance owner identity is missing: %v", err)
+	}
+	root, err := canonicalSessionDirectory(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	const operation = "00000000-0000-4000-8000-000000000001"
+	record := runtimeAccountRecord{Root: root, Source: root, Token: operation}
+	record.Original.Identity = runtimeAuthIdentity{Kind: "absent"}
+	owner := runtimeMaintenanceMarker{Schema: 1, Phase: "Paused", Token: operation, ExpectedProfile: root,
+		OwnerPID: child.Process.Pid, OwnerBirth: birth}
+	original, err := json.Marshal(owner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(root, "maintenance.json")
+	if err := os.WriteFile(path, original, 0600); err != nil {
+		t.Fatal(err)
+	}
+	var manager Manager
+	if _, err := manager.claimPausedRuntimeLogin(ctx, record, original, path); err == nil {
+		t.Fatal("live Client2 maintenance ownership was replaced")
+	}
+	if err := input.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := child.Wait(); err != nil {
+		t.Fatal(err)
+	}
+	waited = true
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager.Endpoint = "http://" + listener.Addr().String()
+	if err := listener.Close(); err != nil {
+		t.Fatal(err)
+	}
+	recovered, err := manager.claimPausedRuntimeLogin(ctx, record, original, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if json.Unmarshal(recovered, &owner) != nil || owner.OwnerPID != os.Getpid() ||
+		owner.Token != record.Token || owner.Phase != "Paused" {
+		t.Fatal("recovery did not retain the original paused operation")
+	}
+}
 
 func TestDesktopPasswordLoginUsesRuntimeInstallation(t *testing.T) {
 	root, err := filepath.EvalSymlinks(t.TempDir())

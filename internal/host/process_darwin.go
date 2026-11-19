@@ -15,10 +15,22 @@ import (
 )
 
 func hostControlBirth(ctx context.Context) (string, error) {
-	cmd := exec.CommandContext(ctx, "/bin/ps", "-p", strconv.Itoa(os.Getpid()), "-o", "lstart=")
+	birth, err := runtimeControlProcessBirth(ctx, os.Getpid())
+	if err == nil && birth == "" {
+		err = errors.New("macOS control parent start time is missing")
+	}
+	return birth, err
+}
+
+func runtimeControlProcessBirth(ctx context.Context, pid int) (string, error) {
+	cmd := exec.CommandContext(ctx, "/bin/ps", "-p", strconv.Itoa(pid), "-o", "lstart=")
 	cmd.Env = append(os.Environ(), "LC_ALL=C")
 	out, err := cmd.Output()
 	if err != nil {
+		var exit *exec.ExitError
+		if ctx.Err() == nil && errors.As(err, &exit) && exit.ExitCode() == 1 && len(out) == 0 && len(exit.Stderr) == 0 {
+			return "", nil
+		}
 		return "", err
 	}
 	birth := strings.TrimSpace(string(out))

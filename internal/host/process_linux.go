@@ -13,8 +13,19 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-func hostControlBirth(context.Context) (string, error) {
-	stat, err := os.ReadFile("/proc/self/stat")
+func hostControlBirth(ctx context.Context) (string, error) {
+	birth, err := runtimeControlProcessBirth(ctx, os.Getpid())
+	if err == nil && birth == "" {
+		err = errors.New("Linux control parent start time is missing")
+	}
+	return birth, err
+}
+
+func runtimeControlProcessBirth(_ context.Context, pid int) (string, error) {
+	stat, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", pid))
+	if errors.Is(err, os.ErrNotExist) {
+		return "", nil
+	}
 	if err != nil {
 		return "", err
 	}
@@ -22,6 +33,9 @@ func hostControlBirth(context.Context) (string, error) {
 	fields := strings.Fields(string(stat[end+1:]))
 	if end < 0 || len(fields) <= 19 {
 		return "", errors.New("Linux control parent start time is missing")
+	}
+	if fields[0] == "Z" || fields[0] == "X" {
+		return "", nil
 	}
 	ticks, err := strconv.ParseUint(fields[19], 10, 64)
 	if err != nil || ticks == 0 {

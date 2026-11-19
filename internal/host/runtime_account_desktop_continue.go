@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
 	"path/filepath"
 )
 
@@ -53,7 +54,8 @@ func (m *Manager) withPendingRuntimeLogin(ctx context.Context, transaction *host
 	if json.Unmarshal(active, &route) != nil || route.Schema != 1 || route.OperationID != record.OperationID {
 		return nil, errors.New("原 Runtime 登录操作已不再持有当前路由")
 	}
-	marker, err := readCredentialConfig(filepath.Join(directory, "maintenance.json"), runtimeMaintenanceLimit)
+	markerPath := filepath.Join(directory, "maintenance.json")
+	marker, err := readCredentialConfig(markerPath, runtimeMaintenanceLimit)
 	if err != nil {
 		return nil, err
 	}
@@ -69,8 +71,56 @@ func (m *Manager) withPendingRuntimeLogin(ctx context.Context, transaction *host
 	if profile != record.Source {
 		return nil, errors.New("当前 Runtime 账户已变化，需要恢复原登录操作")
 	}
+	marker, err = m.claimPausedRuntimeLogin(ctx, record, marker, markerPath)
+	if err != nil {
+		return nil, err
+	}
 	image := filepath.Join(m.runtimeDir(info.Version), runtimeBinary())
 	return run(image, info.SHA256, runtimeAccountAdmission{Marker: marker, Record: recordBytes, Path: path}, record)
+}
+
+// Retain the original token when a new Client2 process queries the same Paused
+// login. A reused PID is distinct only when its native birth identity differs.
+func (m *Manager) claimPausedRuntimeLogin(ctx context.Context, record runtimeAccountRecord, original []byte, path string) ([]byte, error) {
+	var owner runtimeMaintenanceMarker
+	if json.Unmarshal(original, &owner) != nil || owner.Schema != 1 || owner.Phase != "Paused" ||
+		owner.Token != record.Token || owner.ExpectedProfile != record.Source ||
+		owner.OwnerPID <= 0 || uint64(owner.OwnerPID) > uint64(^uint32(0)) || owner.OwnerBirth == "" {
+		return nil, errors.New("原 Runtime 登录维护身份无效")
+	}
+	birth, err := hostControlBirth(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if owner.OwnerPID == os.Getpid() && owner.OwnerBirth == birth {
+		return original, nil
+	}
+	previous, err := runtimeControlProcessBirth(ctx, owner.OwnerPID)
+	if err != nil {
+		return nil, err
+	}
+	if previous == owner.OwnerBirth {
+		return nil, errors.New("原 Runtime 登录仍由存活的客户端控制")
+	}
+	address, _, err := m.runtimeAccountEndpoint()
+	if err != nil {
+		return nil, err
+	}
+	if err := requireClosedRuntimePort(ctx, address); err != nil {
+		return nil, err
+	}
+	if _, err := verifyRuntimeLoginSource(record); err != nil {
+		return nil, err
+	}
+	owner.OwnerPID, owner.OwnerBirth = os.Getpid(), birth
+	next, err := json.Marshal(owner)
+	if err != nil {
+		return nil, err
+	}
+	if err := writeRuntimeAccountRecord(path, next, original); err != nil {
+		return nil, err
+	}
+	return next, nil
 }
 
 func (m *Manager) recoverDesktopRuntimeLogin(ctx context.Context, job Operation) (json.RawMessage, error) {

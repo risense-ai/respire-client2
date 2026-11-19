@@ -14,8 +14,34 @@ import (
 )
 
 func hostControlBirth(context.Context) (string, error) {
+	return windowsControlBirth(windows.CurrentProcess())
+}
+
+func runtimeControlProcessBirth(_ context.Context, pid int) (string, error) {
+	handle, err := windows.OpenProcess(windows.PROCESS_QUERY_LIMITED_INFORMATION|windows.SYNCHRONIZE, false, uint32(pid))
+	if errors.Is(err, windows.ERROR_INVALID_PARAMETER) {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	defer windows.CloseHandle(handle)
+	status, err := windows.WaitForSingleObject(handle, 0)
+	if err != nil {
+		return "", err
+	}
+	if status == windows.WAIT_OBJECT_0 {
+		return "", nil
+	}
+	if status != uint32(windows.WAIT_TIMEOUT) {
+		return "", errors.New("Windows control process status is unknown")
+	}
+	return windowsControlBirth(handle)
+}
+
+func windowsControlBirth(process windows.Handle) (string, error) {
 	var created, exited, kernel, user windows.Filetime
-	if err := windows.GetProcessTimes(windows.CurrentProcess(), &created, &exited, &kernel, &user); err != nil {
+	if err := windows.GetProcessTimes(process, &created, &exited, &kernel, &user); err != nil {
 		return "", err
 	}
 	birth := uint64(created.HighDateTime)<<32 | uint64(created.LowDateTime)
