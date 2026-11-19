@@ -86,8 +86,10 @@ func TestPublishedRuntimeRequiresExactClient2Maintenance(t *testing.T) {
 	defer endpoint.Close()
 	ctx := context.Background()
 	const issuer = "2.0.0-dev.20"
+	const operation = "00000000-0000-4000-8000-000000000001"
+	intent := runtimeLoginIntent{OperationID: operation, User: "isolated-client2", Server: "https://respire.example.invalid"}
 	path := filepath.Join(root, "runtime", "autostart", "maintenance.json")
-	if _, lock, err := manager.beginOfflineRuntimeAccountMaintenance(ctx, root, issuer); err == nil {
+	if _, lock, err := manager.beginOfflineRuntimeAccountMaintenance(ctx, root, issuer, intent); err == nil {
 		lock.Close()
 		t.Fatal("maintenance started while the Runtime port was in use")
 	}
@@ -101,7 +103,7 @@ func TestPublishedRuntimeRequiresExactClient2Maintenance(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, second, beginErr := manager.beginOfflineRuntimeAccountMaintenance(ctx, root, issuer)
+	_, second, beginErr := manager.beginOfflineRuntimeAccountMaintenance(ctx, root, issuer, intent)
 	if err := library.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -112,22 +114,22 @@ func TestPublishedRuntimeRequiresExactClient2Maintenance(t *testing.T) {
 	if _, err := os.Lstat(path); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("failed library lock check left a maintenance record: %v", err)
 	}
-	marker, lock, err := manager.beginOfflineRuntimeAccountMaintenance(ctx, root, issuer)
+	admission, lock, err := manager.beginOfflineRuntimeAccountMaintenance(ctx, root, issuer, intent)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer lock.Close()
-	if _, second, err := manager.beginOfflineRuntimeAccountMaintenance(ctx, root, issuer); err == nil {
+	if _, second, err := manager.beginOfflineRuntimeAccountMaintenance(ctx, root, issuer, intent); err == nil {
 		second.Close()
 		t.Fatal("second coordinator acquired the installation takeover lock")
 	}
-	if _, err := manager.publishPausedRuntimeMaintenance(ctx, root, issuer); err == nil {
+	if _, err := manager.publishPausedRuntimeMaintenance(ctx, root, issuer, intent); err == nil {
 		t.Fatal("an existing maintenance record was overwritten")
 	}
+	marker := admission.Marker
 	if current, err := os.ReadFile(path); err != nil || !bytes.Equal(current, marker) {
 		t.Fatalf("original maintenance record was not retained: %v", err)
 	}
-	const operation = "00000000-0000-4000-8000-000000000001"
 	if _, err := manager.prepareRuntimeAccountControl(ctx, image, hash, root, nil, nil); err == nil {
 		t.Fatal("Client2 accepted a maintenance marker without the original ownership bytes")
 	}
@@ -145,8 +147,8 @@ func TestPublishedRuntimeRequiresExactClient2Maintenance(t *testing.T) {
 		backend = "secret_service"
 	}
 	params, err := json.Marshal(map[string]any{
-		"schema_version": 1, "binding": control.binding, "identity": runtimeAuthIdentity{Kind: "absent"},
-		"addr": "https://respire.example.invalid", "user": "isolated-client2",
+		"schema_version": 1, "binding": control.binding, "identity": admission.Identity,
+		"addr": intent.Server, "user": intent.User,
 		"authorization": map[string]any{"kind": "password", "password": "isolated fixture"},
 		"material":      map[string]any{"keyring_account": "login-" + strings.ReplaceAll(operation, "-", ""), "keyring_backend": backend},
 		// Runtime rejects these contradictory options before it can contact a server.
@@ -159,6 +161,12 @@ func TestPublishedRuntimeRequiresExactClient2Maintenance(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if err := admission.markLoginSent(); err != nil {
+		t.Fatal(err)
+	}
+	if err := admission.markLoginSent(); err == nil {
+		t.Fatal("sent operation was readmitted")
+	}
 	reply, err := manager.exchangeRuntimeControl(context.Background(), control.image, control.port, control.grant,
 		runtimeControlRequest{V: 1, ID: requestID, Method: "control.auth.login", Args: []string{string(params)},
 			OperationID: operation, IdempotencyKey: operation})
@@ -166,6 +174,14 @@ func TestPublishedRuntimeRequiresExactClient2Maintenance(t *testing.T) {
 	if !errors.As(err, &unconfirmed) || unconfirmed.id != operation ||
 		reply.Code != "account_outcome_unknown" || !strings.Contains(reply.Error, "local import and explicit vault migration are separate operations") {
 		t.Fatalf("Runtime did not accept the exact Paused authorization and reject invalid login intent: %v (%s)", err, reply.Error)
+	}
+	rawRecord, err := readCredentialConfig(admission.Path, runtimeMaintenanceLimit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var record runtimeAccountRecord
+	if json.Unmarshal(rawRecord, &record) != nil || record.OperationID != operation || !record.Sent {
+		t.Fatal("Runtime exchange did not retain the original sent operation")
 	}
 	if _, err := os.Stat(filepath.Join(root, ".login-recovery.json")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("invalid intent should not create a login journal: %v", err)
