@@ -604,4 +604,8 @@ func TestPublishedRuntimeRequiresExactClient2Maintenance(t *testing.T) {
 		verified.ExpectedProfile != target || verified.Token != record.Token {
 		t.Fatal("original Verified ownership was not retained after refusing completion")
 	}
+	if _, err := manager.recoverVerifiedRuntimeLogin(serving, image, hash, target, recoveredIdentity, record, admission, path); !errors.As(err, &unconfirmed) ||
+		unconfirmed.id != operation || !strings.Contains(err.Error(), "scope_mismatch") {
+		t.Fatalf("published Runtime did not receive the original completion after its response was lost: %v", err)
+	}
 }

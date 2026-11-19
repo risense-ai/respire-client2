@@ -26,13 +26,6 @@ func (m *Manager) completeRuntimeLogin(ctx context.Context, launched runtimeAcco
 	unknown := func(cause error) (runtimeLoginReceipt, error) {
 		return runtimeLoginReceipt{}, &unconfirmedError{id: record.OperationID, cause: cause}
 	}
-	sent, err := readCredentialConfig(admission.Path, runtimeMaintenanceLimit)
-	if err != nil {
-		return unknown(err)
-	}
-	if !bytes.Equal(sent, admission.Record) {
-		return unknown(errors.New("Runtime login completion record changed"))
-	}
 	target, err := verifyRuntimeLoginTarget(record, applied)
 	if err != nil {
 		return unknown(err)
@@ -56,6 +49,22 @@ func (m *Manager) completeRuntimeLogin(ctx context.Context, launched runtimeAcco
 		return unknown(err)
 	}
 
+	identity := runtimeAuthIdentity{Kind: "bound", AccountID: applied.AccountID, SessionDigest: *applied.SessionDigest}
+	return m.finalizeRuntimeLogin(ctx, launched.image, imageDigest, admission, record, target, identity)
+}
+
+func (m *Manager) finalizeRuntimeLogin(ctx context.Context, image, imageDigest string, admission *runtimeAccountAdmission,
+	record runtimeAccountRecord, target string, identity runtimeAuthIdentity) (runtimeLoginReceipt, error) {
+	unknown := func(cause error) (runtimeLoginReceipt, error) {
+		return runtimeLoginReceipt{}, &unconfirmedError{id: record.OperationID, cause: cause}
+	}
+	sent, err := readCredentialConfig(admission.Path, runtimeMaintenanceLimit)
+	if err != nil {
+		return unknown(err)
+	}
+	if !bytes.Equal(sent, admission.Record) {
+		return unknown(errors.New("Runtime login completion record changed"))
+	}
 	account := "login-" + strings.ReplaceAll(record.OperationID, "-", "")
 	backend := runtimeLoginBackend()
 	store := nativeRuntimeCredentialStore(ctx)
@@ -76,16 +85,16 @@ func (m *Manager) completeRuntimeLogin(ctx context.Context, launched runtimeAcco
 		request.Binding.InstallationRoot != record.Root || request.Binding.Profile != record.Source ||
 		!reflect.DeepEqual(request.Identity, record.Original.Identity) ||
 		json.Unmarshal(custody.Candidate, &candidate) != nil || len(candidate.Factors) == 0 ||
-		candidate.Digest != *applied.SessionDigest || request.CustodyAck.CandidateDigest != candidate.Digest {
+		candidate.Digest != identity.SessionDigest || request.CustodyAck.CandidateDigest != candidate.Digest {
 		return unknown(errors.New("Original Runtime login credential custody does not match the applied session"))
 	}
 	defer clear(custody.Request)
 	defer clear(custody.Candidate)
 
 	var marker runtimeMaintenanceMarker
-	if json.Unmarshal(admission.Marker, &marker) != nil || marker.Schema != 1 || marker.Phase != "Starting" ||
+	if json.Unmarshal(admission.Marker, &marker) != nil || marker.Schema != 1 || (marker.Phase != "Starting" && marker.Phase != "Verified") ||
 		marker.Token != record.Token || marker.ExpectedProfile != target || marker.OwnerPID != os.Getpid() {
-		return unknown(errors.New("Runtime login completion requires the original Starting owner"))
+		return unknown(errors.New("Runtime login completion requires the original maintenance owner"))
 	}
 	birth, err := hostControlBirth(ctx)
 	if err != nil {
@@ -94,17 +103,19 @@ func (m *Manager) completeRuntimeLogin(ctx context.Context, launched runtimeAcco
 	if marker.OwnerBirth != birth {
 		return unknown(errors.New("Runtime login completion owner changed"))
 	}
-	marker.Phase = "Verified"
-	verified, err := json.Marshal(marker)
-	if err != nil {
-		return unknown(err)
+	if marker.Phase == "Starting" {
+		marker.Phase = "Verified"
+		verified, err := json.Marshal(marker)
+		if err != nil {
+			return unknown(err)
+		}
+		path := filepath.Join(record.Root, "runtime", "autostart", "maintenance.json")
+		if err := writeRuntimeAccountRecord(path, verified, admission.Marker); err != nil {
+			return unknown(err)
+		}
+		admission.Marker = verified
 	}
-	path := filepath.Join(record.Root, "runtime", "autostart", "maintenance.json")
-	if err := writeRuntimeAccountRecord(path, verified, admission.Marker); err != nil {
-		return unknown(err)
-	}
-	admission.Marker = verified
-	control, err := m.prepareRuntimeControlGrant(ctx, launched.image, imageDigest, target, applied.AccountID, verified, "Verified")
+	control, err := m.prepareRuntimeControlGrant(ctx, image, imageDigest, target, identity.AccountID, admission.Marker, "Verified")
 	if err != nil {
 		return unknown(err)
 	}
@@ -112,7 +123,6 @@ func (m *Manager) completeRuntimeLogin(ctx context.Context, launched runtimeAcco
 	if password == nil && request.Authorization.Kind == "password" {
 		password = request.Authorization.Password
 	}
-	identity := runtimeAuthIdentity{Kind: "bound", AccountID: applied.AccountID, SessionDigest: *applied.SessionDigest}
 	params, err := json.Marshal(map[string]any{
 		"schema_version": 1, "binding": control.binding, "identity": identity,
 		"candidate": custody.Candidate, "migration_password": password,
@@ -138,8 +148,9 @@ func (m *Manager) completeRuntimeLogin(ctx context.Context, launched runtimeAcco
 		return unknown(err)
 	}
 	if result.Handoff != nil || result.Receipt.Outcome != "committed" ||
-		!reflect.DeepEqual(result.Receipt.AccountID, applied.AccountID) ||
-		!reflect.DeepEqual(result.Receipt.TargetProfile, applied.TargetProfile) {
+		!reflect.DeepEqual(result.Receipt.AccountID, identity.AccountID) ||
+		result.Receipt.TargetProfile == nil || !samePath(*result.Receipt.TargetProfile, target) ||
+		result.Receipt.SessionDigest == nil || *result.Receipt.SessionDigest != identity.SessionDigest {
 		return unknown(errors.New("Runtime did not commit the original login target"))
 	}
 	if _, err := verifyRuntimeLoginTarget(record, result.Receipt); err != nil {

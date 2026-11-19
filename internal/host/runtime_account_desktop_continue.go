@@ -12,7 +12,7 @@ import (
 	"strings"
 )
 
-func (m *Manager) withPendingRuntimeLogin(ctx context.Context, transaction *hostTransaction, recoverStarting bool,
+func (m *Manager) withPendingRuntimeLogin(ctx context.Context, transaction *hostTransaction, recoverLogin bool,
 	run func(string, string, runtimeAccountAdmission, runtimeAccountRecord) (json.RawMessage, error)) (raw json.RawMessage, err error) {
 	if transaction == nil || !transaction.RuntimeLogin || !hostOperationID.MatchString(transaction.OperationID) {
 		return nil, errors.New("原 Runtime 登录事务身份无效")
@@ -63,22 +63,30 @@ func (m *Manager) withPendingRuntimeLogin(ctx context.Context, transaction *host
 	}
 	var owner runtimeMaintenanceMarker
 	if json.Unmarshal(marker, &owner) != nil || owner.Schema != 1 || owner.Token != record.Token ||
-		(owner.Phase != "Paused" && !(recoverStarting && owner.Phase == "Starting")) {
+		(owner.Phase != "Paused" && !(recoverLogin && (owner.Phase == "Starting" || owner.Phase == "Verified"))) {
 		return nil, errors.New("原 Runtime 登录操作需要恢复维护状态")
 	}
-	profile, _, candidate, err := runtimeLoginQueryScope(ctx, record)
+	profile, identity, candidate, err := runtimeLoginQueryScope(ctx, record)
 	if err != nil {
 		return nil, err
 	}
 	defer clear(candidate)
-	if owner.Phase == "Starting" && (len(candidate) == 0 || owner.ExpectedProfile != profile) {
+	if owner.Phase != "Paused" && (len(candidate) == 0 || owner.ExpectedProfile != profile) {
 		return nil, errors.New("原 Runtime 启动记录与已选账户的密钥不匹配")
+	}
+	image := filepath.Join(m.runtimeDir(info.Version), runtimeBinary())
+	if owner.Phase == "Verified" {
+		receipt, err := m.recoverVerifiedRuntimeLogin(ctx, image, info.SHA256, profile, identity, record,
+			runtimeAccountAdmission{Marker: marker, Record: recordBytes, Path: path}, markerPath)
+		if err != nil {
+			return nil, err
+		}
+		return desktopRuntimeLoginEnvelope(receipt)
 	}
 	marker, err = m.claimRuntimeLogin(ctx, record, marker, markerPath, profile)
 	if err != nil {
 		return nil, err
 	}
-	image := filepath.Join(m.runtimeDir(info.Version), runtimeBinary())
 	return run(image, info.SHA256, runtimeAccountAdmission{Marker: marker, Record: recordBytes, Path: path}, record)
 }
 
@@ -86,7 +94,7 @@ func (m *Manager) withPendingRuntimeLogin(ctx context.Context, transaction *host
 // interrupted Starting marker invalidates the unused startup grant.
 func (m *Manager) claimRuntimeLogin(ctx context.Context, record runtimeAccountRecord, original []byte, path, selected string) ([]byte, error) {
 	var owner runtimeMaintenanceMarker
-	if json.Unmarshal(original, &owner) != nil || owner.Schema != 1 || (owner.Phase != "Paused" && owner.Phase != "Starting") ||
+	if json.Unmarshal(original, &owner) != nil || owner.Schema != 1 || (owner.Phase != "Paused" && owner.Phase != "Starting" && owner.Phase != "Verified") ||
 		owner.Token != record.Token || (owner.ExpectedProfile != record.Source && owner.ExpectedProfile != selected) ||
 		owner.OwnerPID <= 0 || uint64(owner.OwnerPID) > uint64(^uint32(0)) || owner.OwnerBirth == "" {
 		return nil, errors.New("原 Runtime 登录维护身份无效")
@@ -96,7 +104,7 @@ func (m *Manager) claimRuntimeLogin(ctx context.Context, record runtimeAccountRe
 		return nil, err
 	}
 	sameOwner := owner.OwnerPID == os.Getpid() && owner.OwnerBirth == birth
-	if sameOwner && owner.Phase == "Paused" && owner.ExpectedProfile == selected {
+	if sameOwner && owner.Phase != "Starting" && owner.ExpectedProfile == selected {
 		return original, nil
 	}
 	if !sameOwner {
@@ -108,15 +116,18 @@ func (m *Manager) claimRuntimeLogin(ctx context.Context, record runtimeAccountRe
 			return nil, errors.New("原 Runtime 登录仍由存活的客户端控制")
 		}
 	}
-	address, _, err := m.runtimeAccountEndpoint()
-	if err != nil {
-		return nil, err
-	}
-	if err := requireClosedRuntimePort(ctx, address); err != nil {
-		return nil, err
+	if owner.Phase != "Verified" {
+		address, _, err := m.runtimeAccountEndpoint()
+		if err != nil {
+			return nil, err
+		}
+		if err := requireClosedRuntimePort(ctx, address); err != nil {
+			return nil, err
+		}
+		owner.Phase = "Paused"
 	}
 	owner.OwnerPID, owner.OwnerBirth = os.Getpid(), birth
-	owner.Phase, owner.ExpectedProfile = "Paused", selected
+	owner.ExpectedProfile = selected
 	next, err := json.Marshal(owner)
 	if err != nil {
 		return nil, err
@@ -125,6 +136,32 @@ func (m *Manager) claimRuntimeLogin(ctx context.Context, record runtimeAccountRe
 		return nil, err
 	}
 	return next, nil
+}
+
+func (m *Manager) recoverVerifiedRuntimeLogin(ctx context.Context, image, digest, profile string, identity runtimeAuthIdentity,
+	record runtimeAccountRecord, admission runtimeAccountAdmission, markerPath string) (runtimeLoginReceipt, error) {
+	image, err := canonicalSessionDirectory(image)
+	if err != nil {
+		return runtimeLoginReceipt{}, err
+	}
+	ready, _, err := m.Health(ctx)
+	if err != nil {
+		return runtimeLoginReceipt{}, err
+	}
+	if identity.AccountID == nil || ready.AccountID != *identity.AccountID ||
+		!ready.StartupComplete || !ready.StoreReady || ready.CredentialState != "available" ||
+		!samePath(ready.InstallationRoot, record.Root) || !samePath(ready.DataDir, profile) ||
+		!samePath(ready.ImagePath, image) || ready.ImageSHA256 != digest {
+		return runtimeLoginReceipt{}, errors.New("原 Runtime 登录账户的数据库未由预期实例解锁")
+	}
+	if err := verifyHostProcess(ready); err != nil {
+		return runtimeLoginReceipt{}, err
+	}
+	admission.Marker, err = m.claimRuntimeLogin(ctx, record, admission.Marker, markerPath, profile)
+	if err != nil {
+		return runtimeLoginReceipt{}, err
+	}
+	return m.finalizeRuntimeLogin(ctx, image, digest, &admission, record, profile, identity)
 }
 
 func (m *Manager) recoverDesktopRuntimeLogin(ctx context.Context, job Operation) (json.RawMessage, error) {
