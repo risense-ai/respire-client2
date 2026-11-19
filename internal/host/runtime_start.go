@@ -51,21 +51,8 @@ func (m *Manager) startDetached(ctx context.Context, info InstalledRuntime) (Hea
 		return HealthInfo{}, err
 	}
 	defer log.Close()
-	cmd := exec.Command(executable, "serve", "--host", endpoint.Hostname(),
-		"--port", endpoint.Port(), "--data-dir", m.DataRoot)
-	cmd.Dir = filepath.Dir(executable)
+	cmd := runtimeServingCommand(executable, m.DataRoot, endpoint.Hostname(), endpoint.Port(), "")
 	cmd.Stdout, cmd.Stderr = log, log
-	for _, variable := range os.Environ() {
-		key, _, _ := strings.Cut(variable, "=")
-		switch strings.ToUpper(key) {
-		case "RSRS_RUNTIME_BOOT_TOKEN", "RSRS_SUPER", "RSRS_PASS", "RSRS_SECRET", "RSRS_SECRET_KEY",
-			"ONEMEMORY_SUPER", "ONEMEMORY_PASS", "ONEMEMORY_SECRET", "ONEMEMORY_SECRET_KEY",
-			"RESPIRE_SUPER", "RESPIRE_PASS", "RESPIRE_SECRET", "RESPIRE_SECRET_KEY":
-			continue
-		}
-		cmd.Env = append(cmd.Env, variable)
-	}
-	configureRuntimeCommand(cmd)
 	if err := cmd.Start(); err != nil {
 		return HealthInfo{}, err
 	}
@@ -97,4 +84,24 @@ func (m *Manager) startDetached(ctx context.Context, info InstalledRuntime) (Hea
 		case <-ticker.C:
 		}
 	}
+}
+
+func runtimeServingCommand(executable, installation, host, port, launchID string) *exec.Cmd {
+	cmd := exec.Command(executable, "serve", "--host", host, "--port", port, "--data-dir", installation)
+	cmd.Dir = filepath.Dir(executable)
+	for _, variable := range os.Environ() {
+		key, _, _ := strings.Cut(variable, "=")
+		switch strings.ToUpper(key) {
+		case "RSRS_RUNTIME_BOOT_TOKEN", "RSRS_SUPER", "RSRS_PASS", "RSRS_SECRET", "RSRS_SECRET_KEY",
+			"ONEMEMORY_SUPER", "ONEMEMORY_PASS", "ONEMEMORY_SECRET", "ONEMEMORY_SECRET_KEY",
+			"RESPIRE_SUPER", "RESPIRE_PASS", "RESPIRE_SECRET", "RESPIRE_SECRET_KEY":
+			continue
+		}
+		cmd.Env = append(cmd.Env, variable)
+	}
+	if launchID != "" {
+		cmd.Env = append(cmd.Env, "RSRS_RUNTIME_BOOT_TOKEN=launch-v1:"+launchID)
+	}
+	configureRuntimeCommand(cmd)
+	return cmd
 }

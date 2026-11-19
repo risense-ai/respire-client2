@@ -5,9 +5,69 @@ package host
 import (
 	"encoding/json"
 	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 )
+
+// The Runtime must have selected the same target it reports before Client2
+// attempts to serve the new account. An applied receipt is still pending until
+// the new Runtime opens that database and confirms the account.
+func verifyRuntimeLoginTarget(record runtimeAccountRecord, receipt runtimeLoginReceipt) (string, error) {
+	if receipt.TargetProfile == nil || receipt.AccountID == nil || receipt.SessionDigest == nil {
+		return "", errors.New("Runtime login target is missing")
+	}
+	target := *receipt.TargetProfile
+	actual, err := canonicalSessionDirectory(target)
+	if err != nil {
+		return "", err
+	}
+	relative, err := filepath.Rel(record.Root, actual)
+	if err != nil || !filepath.IsLocal(relative) || !samePath(actual, target) {
+		return "", errors.New("Runtime login target is outside its installation or was redirected")
+	}
+	selected := record.Root
+	raw, err := readCredentialConfig(filepath.Join(record.Root, "client.json"), 1<<20)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return "", err
+	}
+	if err == nil {
+		var fields map[string]json.RawMessage
+		if json.Unmarshal(raw, &fields) != nil || fields == nil {
+			return "", errors.New("Cannot verify the selected Runtime account in client.json")
+		}
+		if field, present := fields["data_dir"]; present {
+			var directory *string
+			if json.Unmarshal(field, &directory) != nil || directory == nil ||
+				(*directory != "" && !filepath.IsAbs(*directory)) {
+				return "", errors.New("Invalid selected Runtime account path")
+			}
+			if *directory != "" {
+				selected = *directory
+			}
+		}
+	}
+	chosen, err := canonicalSessionDirectory(selected)
+	if err != nil {
+		return "", err
+	}
+	if !samePath(actual, chosen) || !samePath(chosen, selected) {
+		return "", errors.New("Runtime login receipt does not match the selected account")
+	}
+	session, err := readCredentialConfig(filepath.Join(actual, "session.json"), controlFrameLimit)
+	if err != nil {
+		return "", err
+	}
+	identity, err := runtimeAuthIdentityOf(session)
+	if err != nil {
+		return "", err
+	}
+	if identity.Kind != "bound" || identity.AccountID == nil || *identity.AccountID != *receipt.AccountID ||
+		identity.SessionDigest != *receipt.SessionDigest || *identity.AccountID != controlDigest([]byte(record.User)) {
+		return "", errors.New("Runtime login target session identity differs from its receipt")
+	}
+	return actual, nil
+}
 
 type runtimeLoginReceipt struct {
 	OperationID   string  `json:"operation_id"`

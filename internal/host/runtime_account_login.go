@@ -251,5 +251,10 @@ func (m *Manager) exchangeRuntimeLogin(ctx context.Context, control runtimeAccou
 	if err != nil {
 		return runtimeLoginResult{}, &unconfirmedError{id: record.OperationID, cause: err}
 	}
+	if result.Receipt.Outcome == "awaiting_verification" || result.Receipt.Outcome == "committed" {
+		if _, err := verifyRuntimeLoginTarget(record, result.Receipt); err != nil {
+			return runtimeLoginResult{}, &unconfirmedError{id: record.OperationID, cause: err}
+		}
+	}
 	return result, nil
 }

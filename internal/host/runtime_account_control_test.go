@@ -8,12 +8,14 @@ import (
 	"encoding/json"
 	"errors"
 	"net"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestRuntimeAuthSessionIdentity(t *testing.T) {
@@ -353,4 +355,81 @@ func TestPublishedRuntimeRequiresExactClient2Maintenance(t *testing.T) {
 			t.Fatalf("verified native slot %s was not retained: %v", name, err)
 		}
 	}
+
+	// Test authorized target startup independently of the rejected offline login.
+	target := filepath.Join(root, "target-account")
+	if err := os.Mkdir(target, 0700); err != nil {
+		t.Fatal(err)
+	}
+	target, err = canonicalSessionDirectory(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	selected, err := json.Marshal(map[string]string{"data_dir": target})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "client.json"), selected, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(target, "session.json"), pretty.Bytes(), 0600); err != nil {
+		t.Fatal(err)
+	}
+	account := controlDigest([]byte(intent.User))
+	applied := runtimeLoginReceipt{OperationID: operation, Outcome: "awaiting_verification", SourceProfile: root,
+		TargetProfile: &target, AccountID: &account, SessionDigest: &digest}
+	wrongDigest := strings.Repeat("0", 64)
+	changedTarget := applied
+	changedTarget.SessionDigest = &wrongDigest
+	if _, err := manager.prepareRuntimeLoginLaunch(ctx, image, hash, &admission, changedTarget); err == nil {
+		t.Fatal("changed target session was authorized to start")
+	}
+	grant, err := manager.prepareRuntimeLoginLaunch(ctx, image, hash, &admission, applied)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager.localClient = &http.Client{Timeout: time.Second, Transport: &http.Transport{}}
+	_, port, ok := strings.Cut(strings.TrimPrefix(manager.Endpoint, "http://"), ":")
+	if !ok {
+		t.Fatal("invalid fixture endpoint")
+	}
+	t.Setenv("RSRS_NO_AUTOSYNC", "1")
+	command := runtimeServingCommand(image, root, "127.0.0.1", port, grant.binding.LaunchID)
+	var output bytes.Buffer
+	command.Stdout, command.Stderr = &output, &output
+	if err := command.Start(); err != nil {
+		t.Fatal(err)
+	}
+	exited := make(chan error, 1)
+	go func() { exited <- command.Wait() }()
+	t.Cleanup(func() { _ = command.Process.Kill() })
+	serving, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	tick := time.NewTicker(40 * time.Millisecond)
+	defer tick.Stop()
+	for {
+		health, _, err := manager.Health(serving)
+		if err == nil && health.StartupComplete {
+			if health.InstanceID != grant.binding.LaunchID || health.AccountID != account ||
+				!samePath(health.DataDir, target) || health.PID != uint32(command.Process.Pid) || health.StoreReady {
+				t.Fatal("Runtime did not start locked with the authorized target identity")
+			}
+			break
+		}
+		select {
+		case err := <-exited:
+			t.Fatalf("authorized target Runtime exited before health: %v %s", err, output.String())
+		case <-serving.Done():
+			t.Fatal("authorized target did not report ready for credentials")
+		case <-tick.C:
+		}
+	}
+	granted := filepath.Join(root, "runtime", "autostart", "launch", "launch-"+grant.binding.LaunchID+".json")
+	if _, err := os.Stat(granted); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("serving Runtime did not consume its one-shot grant: %v", err)
+	}
+	if err := command.Process.Kill(); err != nil {
+		t.Fatal(err)
+	}
+	<-exited
 }

@@ -84,6 +84,11 @@ func (m *Manager) runtimeAccountEndpoint() (string, uint64, error) {
 
 func (m *Manager) prepareRuntimeAccountControl(ctx context.Context, imagePath, imageDigest, profilePath string,
 	expectedAccount *string, ownedMaintenance []byte) (runtimeAccountControl, error) {
+	return m.prepareRuntimeControlGrant(ctx, imagePath, imageDigest, profilePath, expectedAccount, ownedMaintenance, "Paused")
+}
+
+func (m *Manager) prepareRuntimeControlGrant(ctx context.Context, imagePath, imageDigest, profilePath string,
+	expectedAccount *string, ownedMaintenance []byte, phase string) (runtimeAccountControl, error) {
 	var control runtimeAccountControl
 	root, err := canonicalSessionDirectory(m.DataRoot)
 	if err != nil {
@@ -153,10 +158,10 @@ func (m *Manager) prepareRuntimeAccountControl(ctx context.Context, imagePath, i
 		}
 		var marker runtimeMaintenanceMarker
 		if json.Unmarshal(markerBytes, &marker) != nil || marker.Schema != 1 ||
-			marker.ID != coordinator || !runtimeInstanceID.MatchString(marker.Token) || marker.Phase != "Paused" ||
+			marker.ID != coordinator || !runtimeInstanceID.MatchString(marker.Token) || marker.Phase != phase ||
 			marker.ExpectedProfile != profile || marker.ExpectedVersion == "" ||
 			marker.OwnerPID != os.Getpid() || marker.OwnerBirth != birth {
-			return control, errors.New("Runtime account control requires the exact live Paused owner")
+			return control, fmt.Errorf("Runtime account control requires the exact live %s owner", phase)
 		}
 		maintenance = map[string]any{
 			"marker_sha256": controlDigest(markerBytes), "coordinator_id": coordinator,
