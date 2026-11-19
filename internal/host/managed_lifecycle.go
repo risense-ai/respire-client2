@@ -23,6 +23,11 @@ func (m *Manager) stopManaged(ctx context.Context, h HealthInfo) error {
 		return err
 	}
 	if h.ManagedID == "" {
+		lock, err := m.lockRuntimeTakeover(ctx)
+		if err != nil {
+			return err
+		}
+		defer lock.Close()
 		if err := m.stopDetached(ctx, h); err != nil {
 			return err
 		}
