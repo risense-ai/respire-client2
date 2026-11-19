@@ -15,3 +15,11 @@ func (m *Manager) unlockAccountRuntime(context.Context, HealthInfo) error {
 func (m *Manager) desktopRuntimePasswordLogin(context.Context, []string, string, string) (json.RawMessage, error) {
 	return nil, errors.New("macOS Keychain support requires a native Client2 build")
 }
+
+func (m *Manager) recoverDesktopRuntimeLogin(context.Context, Operation) (json.RawMessage, error) {
+	return nil, errors.New("macOS Keychain support requires a native Client2 build")
+}
+
+func (m *Manager) continueDesktopRuntimeLogin(context.Context, Operation, json.RawMessage) (json.RawMessage, error) {
+	return nil, errors.New("macOS Keychain support requires a native Client2 build")
+}

@@ -321,6 +321,10 @@ func TestPublishedRuntimeRequiresExactClient2Maintenance(t *testing.T) {
 	if json.Unmarshal(rawRecord, &record) != nil || record.OperationID != operation || !record.Sent {
 		t.Fatal("Runtime exchange did not retain the original sent operation")
 	}
+	if _, err := manager.queryRuntimeLoginResult(ctx, image, hash, admission, record); !errors.As(err, &unconfirmed) ||
+		unconfirmed.id != operation || !strings.Contains(err.Error(), "scope_mismatch") {
+		t.Fatalf("original-result query did not reach the published Runtime before refusing the absent journal: %v", err)
+	}
 	if _, err := os.Stat(filepath.Join(root, ".login-recovery.json")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("invalid intent should not create a login journal: %v", err)
 	}

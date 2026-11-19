@@ -110,16 +110,24 @@ func (m *Manager) desktopRuntimePasswordLogin(ctx context.Context, args []string
 	if err != nil {
 		return unknown(err)
 	}
-	receipt := result.Receipt
+	raw, err := m.finishDesktopRuntimeLogin(ctx, image, info.SHA256, &admission, result.Receipt)
+	if err != nil && len(raw) == 0 {
+		return unknown(err)
+	}
+	return raw, err
+}
+
+func (m *Manager) finishDesktopRuntimeLogin(ctx context.Context, image, digest string, admission *runtimeAccountAdmission, receipt runtimeLoginReceipt) (json.RawMessage, error) {
 	switch receipt.Outcome {
 	case "awaiting_input":
 		raw, err := desktopRuntimeLoginEnvelope(receipt)
-		return raw, &unconfirmedError{id: operation, cause: errors.Join(errors.New("登录需要补充输入"), err)}
+		return raw, &unconfirmedError{id: receipt.OperationID, cause: errors.Join(errors.New("登录需要补充输入"), err)}
 	case "awaiting_verification":
-		receipt, err = m.startAndCompleteRuntimeLogin(ctx, image, info.SHA256, &admission, receipt)
+		committed, err := m.startAndCompleteRuntimeLogin(ctx, image, digest, admission, receipt)
 		if err != nil {
-			return unknown(err)
+			return nil, err
 		}
+		receipt = committed
 	}
 	return desktopRuntimeLoginEnvelope(receipt)
 }

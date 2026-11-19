@@ -131,7 +131,7 @@ func hostEnvelopeError(raw json.RawMessage) error {
 func (m *Manager) recoverHost(ctx context.Context, job Operation) (json.RawMessage, error) {
 	transaction := job.Transaction
 	if transaction != nil && transaction.RuntimeLogin {
-		return nil, &unconfirmedError{job.ID, errors.New("Runtime 登录事务尚未确认，请保留原操作记录")}
+		return m.recoverDesktopRuntimeLogin(ctx, job)
 	}
 	if transaction != nil && transaction.RequestBound && transaction.Kind == "core_config" {
 		if transaction.OperationID != strings.TrimPrefix(job.ID, "desktop-") || !hostOperationID.MatchString(transaction.OperationID) {
