@@ -329,6 +329,10 @@ func (m *Manager) runOperation(spec commandSpec, args []string, secret, id strin
 					job.Transaction = returned
 				}
 			}
+		} else if job.Transaction != nil && job.Transaction.RuntimeLogin {
+			if returned != nil && *returned != *job.Transaction {
+				err = &unconfirmedError{id, errors.New("登录回执与预绑定的原事务身份不匹配")}
+			}
 		} else {
 			job.Transaction = returned
 		}

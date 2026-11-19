@@ -67,6 +67,10 @@ func (m *Manager) desktopRuntimeAccountLogin(ctx context.Context, args []string,
 	if err != nil {
 		return nil, err
 	}
+	// Record the native transaction before Runtime can act on it.
+	if err := m.bindDesktopRuntimeLogin(id, operation, profile); err != nil {
+		return nil, err
+	}
 	source, err := readRuntimeLoginMaterial(ctx, profile)
 	if err != nil {
 		return nil, err
@@ -125,6 +129,23 @@ func (m *Manager) desktopRuntimeAccountLogin(ctx context.Context, args []string,
 		return unknown(err)
 	}
 	return raw, err
+}
+
+func (m *Manager) bindDesktopRuntimeLogin(id, operation, profile string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	job := m.jobs[id]
+	if job == nil || job.State != "running" || job.Transaction != nil {
+		return errors.New("Client2 登录操作无法绑定原账户身份")
+	}
+	job.Transaction = &hostTransaction{
+		OperationID: operation, SourceProfile: profile, Kind: "account", RuntimeLogin: true,
+	}
+	if err := m.persistOperationsLocked(); err != nil {
+		job.Transaction = nil
+		return err
+	}
+	return nil
 }
 
 func (m *Manager) finishDesktopRuntimeLogin(ctx context.Context, image, digest string, admission *runtimeAccountAdmission, receipt runtimeLoginReceipt) (json.RawMessage, error) {
