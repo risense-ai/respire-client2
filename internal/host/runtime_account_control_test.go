@@ -457,6 +457,20 @@ func TestPublishedRuntimeRequiresExactClient2Maintenance(t *testing.T) {
 	if err != nil || !ready.StoreReady || ready.AccountID != account || ready.InstanceID != grant.binding.LaunchID {
 		t.Fatalf("Client2 did not unlock the authorized target through the real Runtime: %v", err)
 	}
+	changedHealth := ready
+	changedHealth.InstanceID = operation
+	if _, err := manager.completeRuntimeLogin(serving, grant, &admission, applied, changedHealth); err == nil {
+		t.Fatal("another Runtime instance was allowed to complete the login")
+	}
+	if _, err := manager.completeRuntimeLogin(serving, grant, &admission, applied, ready); !errors.As(err, &unconfirmed) ||
+		unconfirmed.id != operation || !strings.Contains(err.Error(), "scope_mismatch") {
+		t.Fatalf("published Runtime did not accept the Verified grant before refusing the missing fixture journal: %v", err)
+	}
+	var verified runtimeMaintenanceMarker
+	if json.Unmarshal(admission.Marker, &verified) != nil || verified.Phase != "Verified" ||
+		verified.ExpectedProfile != target || verified.Token != record.Token {
+		t.Fatal("original Verified ownership was not retained after refusing completion")
+	}
 	if err := command.Process.Kill(); err != nil {
 		t.Fatal(err)
 	}
