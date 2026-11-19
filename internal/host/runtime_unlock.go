@@ -120,6 +120,23 @@ func (m *Manager) unlockNativeRuntime(ctx context.Context, health HealthInfo, st
 	if health.ImageSHA256 != info.SHA256 {
 		return errors.New("Running Runtime image differs from the verified installation")
 	}
+	current, _, err := m.Health(ctx)
+	if err != nil {
+		return err
+	}
+	// The process holding the takeover lock before us may have opened this same library.
+	observed := current
+	observed.StoreReady = health.StoreReady
+	observed.CredentialState = health.CredentialState
+	if observed != health {
+		return errors.New("Runtime identity changed while waiting for the takeover lock")
+	}
+	if current.StoreReady && current.CredentialState == "available" {
+		return nil
+	}
+	if current != health {
+		return errors.New("Runtime credential state changed while waiting for the takeover lock")
+	}
 	profile, err := filepath.EvalSymlinks(health.DataDir)
 	if err != nil {
 		return err
@@ -185,7 +202,7 @@ func (m *Manager) unlockNativeRuntime(ctx context.Context, health HealthInfo, st
 		return errors.New("Runtime unlock frame exceeds its protocol limit")
 	}
 	defer clear(body)
-	current, _, err := m.Health(ctx)
+	current, _, err = m.Health(ctx)
 	if err != nil {
 		return err
 	}
