@@ -197,19 +197,21 @@ func (m *Manager) readRuntimeLoginRecovery(ctx context.Context, owner HealthInfo
 }
 
 func (m *Manager) exchangeRuntimeControl(ctx context.Context, image string, port uint64, grant any, request runtimeControlRequest) (reply rpcResponse, err error) {
-	var frames bytes.Buffer
+	frames := make([]byte, 0, 2*(4+controlFrameLimit))
+	defer func() { clear(frames) }()
 	for _, value := range []any{grant, request} {
 		raw, err := json.Marshal(value)
 		if err != nil {
 			return reply, err
 		}
 		if len(raw) == 0 || len(raw) > controlFrameLimit {
+			clear(raw)
 			return reply, errors.New("Runtime control request exceeds its frame limit")
 		}
-		frames.Write(binary.BigEndian.AppendUint32(nil, uint32(len(raw))))
-		frames.Write(raw)
+		frames = binary.BigEndian.AppendUint32(frames, uint32(len(raw)))
+		frames = append(frames, raw...)
+		clear(raw)
 	}
-	defer func(data []byte) { clear(data) }(frames.Bytes())
 	cmd := exec.CommandContext(ctx, image, "--host-control-internal")
 	cmd.Dir = filepath.Dir(image)
 	configureCommand(cmd)
@@ -241,12 +243,21 @@ func (m *Manager) exchangeRuntimeControl(ctx context.Context, image string, port
 	waited := false
 	defer func() {
 		if !waited {
-			_ = input.Close()
-			_ = cmd.Process.Kill()
-			_ = cmd.Wait()
+			killErr := cmd.Process.Kill()
+			waitErr := cmd.Wait()
+			if cmd.ProcessState == nil {
+				err = errors.Join(err, fmt.Errorf("Runtime control child %d exit unconfirmed: %w", cmd.Process.Pid,
+					errors.Join(killErr, waitErr)))
+			}
+		}
+		if err != nil {
+			err = errors.Join(err, ctx.Err())
+			if request.OperationID != "" {
+				err = &unconfirmedError{id: request.OperationID, cause: err}
+			}
 		}
 	}()
-	if _, err := frames.WriteTo(input); err != nil {
+	if _, err := bytes.NewReader(frames).WriteTo(input); err != nil {
 		return reply, fmt.Errorf("Write Runtime control frames: %w", err)
 	}
 	var size uint32
