@@ -42,6 +42,9 @@ func (m *Manager) startDetached(ctx context.Context, info InstalledRuntime) (Hea
 	if endpoint.Scheme != "http" || endpoint.Hostname() != "127.0.0.1" || endpoint.Port() == "" {
 		return HealthInfo{}, errors.New("Runtime 启动要求本机环回端口")
 	}
+	if err := m.archiveStoppedEndpoint(ctx, endpoint.Host); err != nil {
+		return HealthInfo{}, err
+	}
 	executable := filepath.Join(m.runtimeDir(info.Version), runtimeBinary())
 	log, err := os.CreateTemp(m.Root, "runtime-start-*.log")
 	if err != nil {

@@ -33,6 +33,14 @@ func (m *Manager) lockRuntimeTakeover(ctx context.Context) (*sqlite3.Conn, error
 			return nil, errors.New("Runtime 切换锁目录无效")
 		}
 	}
+	wait := time.Duration(0)
+	if deadline, present := ctx.Deadline(); present {
+		wait = time.Until(deadline)
+	}
+	return lockRuntimeDatabase(ctx, directory, wait)
+}
+
+func lockRuntimeDatabase(ctx context.Context, directory string, wait time.Duration) (*sqlite3.Conn, error) {
 	path := filepath.Join(directory, "lock.db")
 	if info, err := os.Lstat(path); err == nil {
 		if !info.Mode().IsRegular() {
@@ -46,9 +54,7 @@ func (m *Manager) lockRuntimeTakeover(ctx context.Context) (*sqlite3.Conn, error
 		return nil, err
 	}
 	db.SetInterrupt(ctx)
-	if deadline, present := ctx.Deadline(); present {
-		err = db.BusyTimeout(time.Until(deadline))
-	}
+	err = db.BusyTimeout(wait)
 	if err == nil {
 		err = db.Exec("BEGIN EXCLUSIVE")
 	}
