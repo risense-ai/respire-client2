@@ -23,6 +23,44 @@ import (
 	"time"
 )
 
+func TestDesktopPasswordLoginUsesRuntimeInstallation(t *testing.T) {
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("RSRS_DATA_DIR", root)
+	manager, err := New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager.ClientVersion = "2.0.0-dev.20"
+	id := "desktop-00000000-0000-4000-8000-000000000001"
+	if _, err := manager.Submit("auth_login", id,
+		json.RawMessage(`{"user":"isolated","addr":"https://respire.example.invalid"}`),
+		true, `{"password":"fixture only"}`); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	for {
+		job, err := manager.Operation(id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if job.State != "running" {
+			if job.State != "failed" || !strings.Contains(job.Error, "runtime.json") {
+				t.Fatalf("desktop login did not use the native Runtime installation: %s", job.Error)
+			}
+			return
+		}
+		select {
+		case <-ctx.Done():
+			t.Fatal("desktop password login did not report the missing Runtime installation")
+		case <-time.After(20 * time.Millisecond):
+		}
+	}
+}
+
 func TestRuntimeAuthSessionIdentity(t *testing.T) {
 	const operation = "00000000-0000-4000-8000-000000000001"
 	const factors = `"kdf_salt":"salt","wrapped_urk":"wrap","urk_nonce":"nonce","keyring_account":"login-test","keyring_backend":"native","auth_operation_id":"` + operation + `"`
@@ -181,7 +219,7 @@ func TestPublishedRuntimeRequiresExactClient2Maintenance(t *testing.T) {
 		second.Close()
 		t.Fatal("second coordinator acquired the installation takeover lock")
 	}
-	if _, err := manager.publishPausedRuntimeMaintenance(ctx, root, issuer, intent); err == nil {
+	if _, err := manager.publishPausedRuntimeMaintenance(ctx, root, issuer, intent, nil); err == nil {
 		t.Fatal("an existing maintenance record was overwritten")
 	}
 	marker := admission.Marker

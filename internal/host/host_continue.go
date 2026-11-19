@@ -60,6 +60,9 @@ func (m *Manager) Continue(id, transportID string, input json.RawMessage) (Opera
 	if job == nil || !job.host || job.State != "unconfirmed" || job.Transaction == nil {
 		return Operation{}, errors.New("只能续接保留原宿主身份的未确认操作")
 	}
+	if job.Transaction.RuntimeLogin {
+		return Operation{}, errors.New("Runtime 登录事务的续接尚未接入桌面入口")
+	}
 	if job.TransportID == transportID {
 		return Operation{}, errors.New("此传输请求已经提交，请查询原操作")
 	}

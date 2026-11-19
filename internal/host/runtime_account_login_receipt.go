@@ -26,8 +26,31 @@ func verifyRuntimeLoginTarget(record runtimeAccountRecord, receipt runtimeLoginR
 	if err != nil || !filepath.IsLocal(relative) || !samePath(actual, target) {
 		return "", errors.New("Runtime login target is outside its installation or was redirected")
 	}
-	selected := record.Root
-	raw, err := readCredentialConfig(filepath.Join(record.Root, "client.json"), 1<<20)
+	chosen, err := selectedRuntimeLoginProfile(record.Root)
+	if err != nil {
+		return "", err
+	}
+	if !samePath(actual, chosen) {
+		return "", errors.New("Runtime login receipt does not match the selected account")
+	}
+	session, err := readCredentialConfig(filepath.Join(actual, "session.json"), controlFrameLimit)
+	if err != nil {
+		return "", err
+	}
+	identity, err := runtimeAuthIdentityOf(session)
+	if err != nil {
+		return "", err
+	}
+	if identity.Kind != "bound" || identity.AccountID == nil || *identity.AccountID != *receipt.AccountID ||
+		identity.SessionDigest != *receipt.SessionDigest || *identity.AccountID != controlDigest([]byte(record.User)) {
+		return "", errors.New("Runtime login target session identity differs from its receipt")
+	}
+	return actual, nil
+}
+
+func selectedRuntimeLoginProfile(root string) (string, error) {
+	selected := root
+	raw, err := readCredentialConfig(filepath.Join(root, "client.json"), 1<<20)
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return "", err
 	}
@@ -51,22 +74,11 @@ func verifyRuntimeLoginTarget(record runtimeAccountRecord, receipt runtimeLoginR
 	if err != nil {
 		return "", err
 	}
-	if !samePath(actual, chosen) || !samePath(chosen, selected) {
-		return "", errors.New("Runtime login receipt does not match the selected account")
+	relative, err := filepath.Rel(root, chosen)
+	if err != nil || !filepath.IsLocal(relative) || !samePath(chosen, selected) {
+		return "", errors.New("Selected Runtime account is outside its installation or was redirected")
 	}
-	session, err := readCredentialConfig(filepath.Join(actual, "session.json"), controlFrameLimit)
-	if err != nil {
-		return "", err
-	}
-	identity, err := runtimeAuthIdentityOf(session)
-	if err != nil {
-		return "", err
-	}
-	if identity.Kind != "bound" || identity.AccountID == nil || *identity.AccountID != *receipt.AccountID ||
-		identity.SessionDigest != *receipt.SessionDigest || *identity.AccountID != controlDigest([]byte(record.User)) {
-		return "", errors.New("Runtime login target session identity differs from its receipt")
-	}
-	return actual, nil
+	return chosen, nil
 }
 
 type runtimeLoginReceipt struct {

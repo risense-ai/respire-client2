@@ -99,8 +99,7 @@ export function validateAuthentication(kind, values) {
     throw Error("密码至少 8 位，且两次输入必须一致");
 }
 
-// runAuthentication submits register/login through the CLI host RPC stdin
-// transport; credentials stay out of argv and client settings.
+// Credentials stay out of arguments and client settings.
 export async function runAuthentication(kind, values) {
   const credentials = { password: values.password };
   if (values.super) credentials.super = values.super;

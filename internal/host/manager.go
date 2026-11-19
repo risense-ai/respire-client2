@@ -195,6 +195,7 @@ type InstalledRuntime struct {
 }
 
 type Manager struct {
+	ClientVersion   string
 	Root            string
 	DataRoot        string
 	Endpoint        string

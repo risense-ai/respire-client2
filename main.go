@@ -25,6 +25,7 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	m.ClientVersion = version
 	if len(os.Args) > 1 && os.Args[1] == "--headless" {
 		headless(m)
 		return

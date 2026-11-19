@@ -70,14 +70,14 @@ func (m *Manager) beginOfflineRuntimeAccountMaintenance(ctx context.Context, pro
 	if err != nil {
 		return admission, nil, err
 	}
-	admission, err = m.publishPausedRuntimeMaintenance(ctx, profilePath, issuer, intent)
+	admission, err = m.publishPausedRuntimeMaintenance(ctx, profilePath, issuer, intent, nil)
 	if err != nil {
 		return admission, nil, errors.Join(err, takeover.Close())
 	}
 	return admission, takeover, nil
 }
 
-func (m *Manager) publishPausedRuntimeMaintenance(ctx context.Context, profilePath, issuer string, intent runtimeLoginIntent) (admission runtimeAccountAdmission, err error) {
+func (m *Manager) publishPausedRuntimeMaintenance(ctx context.Context, profilePath, issuer string, intent runtimeLoginIntent, observed *HealthInfo) (admission runtimeAccountAdmission, err error) {
 	root, err := canonicalSessionDirectory(m.DataRoot)
 	if err != nil {
 		return admission, err
@@ -167,6 +167,9 @@ func (m *Manager) publishPausedRuntimeMaintenance(ctx context.Context, profilePa
 		OperationID: intent.OperationID, User: intent.User, Server: intent.Server,
 	}
 	binding.Original.Identity = identity
+	if observed != nil {
+		binding.Original.WasServing, binding.Original.StoreReady = true, observed.StoreReady
+	}
 	record, err := json.Marshal(binding)
 	if err != nil {
 		return admission, err
