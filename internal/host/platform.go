@@ -65,9 +65,21 @@ func runtimeTarget() (string, error) {
 func samePath(a, b string) bool {
 	a, b = filepath.Clean(a), filepath.Clean(b)
 	if runtime.GOOS == "windows" {
-		return strings.EqualFold(a, b)
+		return strings.EqualFold(windowsDOSPath(a), windowsDOSPath(b))
 	}
 	return a == b
+}
+
+func windowsDOSPath(path string) string {
+	const unc = `\\?\UNC\`
+	if len(path) >= len(unc) && strings.EqualFold(path[:len(unc)], unc) {
+		return `\\` + path[len(unc):]
+	}
+	if local, extended := strings.CutPrefix(path, `\\?\`); extended &&
+		len(local) >= 3 && local[1] == ':' && local[2] == '\\' {
+		return local
+	}
+	return path
 }
 
 func verifyExecutable(path string) error {

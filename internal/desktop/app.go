@@ -108,6 +108,7 @@ func Run(m *host.Manager, buildVersion string) {
 		OnShutdown:     func() { close(d.closing); d.app.Updater.StopPeriodicCheck() },
 		ErrorHandler:   func(err error) { log.Printf("desktop: %v", err) },
 	})
+	m.OpenBrowser = d.app.Browser.OpenURL
 	if err = d.initUpdater(); err != nil {
 		log.Fatal(err)
 	}

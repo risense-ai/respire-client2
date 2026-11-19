@@ -195,7 +195,19 @@ func (m *Manager) runHostContinuation(job Operation, transportID string, input j
 	if len(raw) > 0 && (err == nil || errors.As(err, &unknown)) {
 		current := job
 		current.Envelope = raw
-		if pendingHostInput(current) != nil {
+		if pendingHostInput(current) != nil && job.Transaction.RuntimeLogin {
+			reply, continueErr := m.continueDesktopRuntimeLogin(ctx, current, input)
+			err = continueErr
+			if len(reply) != 0 {
+				returned := transactionFromEnvelope(job.Name, reply)
+				if returned == nil || *returned != *job.Transaction {
+					err = &unconfirmedError{job.ID, errors.New("Runtime 续接回执与原登录事务不匹配")}
+				} else {
+					raw = reply
+					confirmedInput = true
+				}
+			}
+		} else if pendingHostInput(current) != nil {
 			method, params, prepareErr := continuationParams(current, input)
 			if prepareErr == nil {
 				prepareErr = m.requireHostMethod(ctx, method)

@@ -293,6 +293,8 @@ func (m *Manager) runOperation(spec commandSpec, args []string, secret, id strin
 	switch {
 	case spec.method == "model.apply-engine":
 		envelope, err = applyEngine(ctx, m, args, id)
+	case spec.method == "auth.login", spec.method == "auth.login.browser":
+		envelope, err = m.desktopRuntimeAccountLogin(ctx, args, secret, id, spec.method == "auth.login.browser")
 	case spec.host:
 		envelope, err = m.hostOperation(ctx, args, secret, spec.method, id)
 	default:
@@ -326,6 +328,10 @@ func (m *Manager) runOperation(spec commandSpec, args []string, secret, id strin
 					returned.RequestBound = true
 					job.Transaction = returned
 				}
+			}
+		} else if job.Transaction != nil && job.Transaction.RuntimeLogin {
+			if returned != nil && *returned != *job.Transaction {
+				err = &unconfirmedError{id, errors.New("登录回执与预绑定的原事务身份不匹配")}
 			}
 		} else {
 			job.Transaction = returned

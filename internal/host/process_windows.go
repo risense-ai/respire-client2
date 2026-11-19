@@ -4,12 +4,52 @@ import (
 	"context"
 	"errors"
 	"net"
+	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"syscall"
 
 	"golang.org/x/sys/windows"
 )
+
+func hostControlBirth(context.Context) (string, error) {
+	return windowsControlBirth(windows.CurrentProcess())
+}
+
+func runtimeControlProcessBirth(_ context.Context, pid int) (string, error) {
+	handle, err := windows.OpenProcess(windows.PROCESS_QUERY_LIMITED_INFORMATION|windows.SYNCHRONIZE, false, uint32(pid))
+	if errors.Is(err, windows.ERROR_INVALID_PARAMETER) {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	defer windows.CloseHandle(handle)
+	status, err := windows.WaitForSingleObject(handle, 0)
+	if err != nil {
+		return "", err
+	}
+	if status == windows.WAIT_OBJECT_0 {
+		return "", nil
+	}
+	if status != uint32(windows.WAIT_TIMEOUT) {
+		return "", errors.New("Windows control process status is unknown")
+	}
+	return windowsControlBirth(handle)
+}
+
+func windowsControlBirth(process windows.Handle) (string, error) {
+	var created, exited, kernel, user windows.Filetime
+	if err := windows.GetProcessTimes(process, &created, &exited, &kernel, &user); err != nil {
+		return "", err
+	}
+	birth := uint64(created.HighDateTime)<<32 | uint64(created.LowDateTime)
+	if birth == 0 {
+		return "", errors.New("Windows control parent start time is missing")
+	}
+	return strconv.FormatUint(birth, 10), nil
+}
 
 func configureCommand(cmd *exec.Cmd) {
 	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: windows.CREATE_NO_WINDOW}
@@ -63,7 +103,13 @@ func runtimeProcess(h HealthInfo) (windows.Handle, error) {
 		return 0, err
 	}
 	actual := windows.UTF16ToString(buf[:size])
-	if !samePath(actual, h.Exe) || !acceptsRuntimeBinary(filepath.Base(actual)) {
+	actualFile, actualErr := os.Stat(actual)
+	reportedFile, reportedErr := os.Stat(h.Exe)
+	if err := errors.Join(actualErr, reportedErr); err != nil {
+		windows.CloseHandle(handle)
+		return 0, err
+	}
+	if !os.SameFile(actualFile, reportedFile) || !acceptsRuntimeBinary(filepath.Base(actual)) {
 		windows.CloseHandle(handle)
 		return 0, errors.New("Runtime process identity mismatch")
 	}

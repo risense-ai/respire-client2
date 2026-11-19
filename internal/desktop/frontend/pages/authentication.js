@@ -99,8 +99,7 @@ export function validateAuthentication(kind, values) {
     throw Error("密码至少 8 位，且两次输入必须一致");
 }
 
-// runAuthentication submits register/login through the CLI host RPC stdin
-// transport; credentials stay out of argv and client settings.
+// Credentials stay out of arguments and client settings.
 export async function runAuthentication(kind, values) {
   const credentials = { password: values.password };
   if (values.super) credentials.super = values.super;
@@ -222,7 +221,7 @@ export function authenticationPanel(root, ctx, refresh) {
   section.className = "section-gap";
   section.innerHTML = panel(
     "账户登录与恢复",
-    '<div class="panel-body stack"><p class="hint">密码认证通过 CLI 宿主 RPC 执行，凭据不会放入进程命令行或客户端设置。需要 CLI 1.0.18 或支持账户 RPC 的兼容版本。</p><div class="actions"><button data-auth="login">密码登录</button><button data-auth="register">注册账户</button><button data-auth="recover">恢复解密材料</button><button data-auth="reset">更换超级密码</button><button data-auth="forget" class="danger">忘记本机身份</button></div></div>',
+    '<div class="panel-body stack"><p class="hint">密码登录直接连接 Runtime。凭据保存在系统密钥串。</p><div class="actions"><button data-auth="login">密码登录</button><button data-auth="register">注册账户</button><button data-auth="recover">恢复解密材料</button><button data-auth="reset">更换超级密码</button><button data-auth="forget" class="danger">忘记本机身份</button></div></div>',
   );
   root.insertBefore(section, root.children[1]);
   const done = async (result, label) => {
@@ -252,6 +251,10 @@ export function authenticationPanel(root, ctx, refresh) {
       return;
     }
     if (kind === "login" || kind === "register") {
+      if (ctx.desktop?.serverAddressError) {
+        notify(ctx.desktop.serverAddressError, true);
+        return;
+      }
       const title = kind === "login" ? "密码登录" : "注册账户";
       dialog({
         title,
@@ -259,7 +262,7 @@ export function authenticationPanel(root, ctx, refresh) {
           input(
             "addr",
             "服务器",
-            ctx.status?.summary?.server_addr || "https://api.rsrs.rs",
+            ctx.desktop?.serverAddress || "",
             { required: true },
           ) +
           input("user", "账户名称", "", { required: true }) +

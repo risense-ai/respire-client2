@@ -1,0 +1,615 @@
+//go:build linux || windows || (darwin && cgo)
+
+package host
+
+import (
+	"bytes"
+	"context"
+	"crypto/aes"
+	"crypto/cipher"
+	"crypto/hkdf"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"io"
+	"net"
+	"net/http"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"runtime"
+	"strings"
+	"testing"
+	"time"
+)
+
+func TestRuntimeLoginOwnerProcess(t *testing.T) {
+	if os.Getenv("RESPIRE_TEST_LOGIN_OWNER") == "1" {
+		if _, err := io.Copy(io.Discard, os.Stdin); err != nil {
+			t.Fatal(err)
+		}
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	child := exec.CommandContext(ctx, exe, "-test.run=^TestRuntimeLoginOwnerProcess$")
+	child.Env = append(os.Environ(), "RESPIRE_TEST_LOGIN_OWNER=1")
+	configureCommand(child)
+	input, err := child.StdinPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := child.Start(); err != nil {
+		t.Fatal(err)
+	}
+	waited := false
+	defer func() {
+		if !waited {
+			_ = child.Process.Kill()
+			_ = child.Wait()
+		}
+	}()
+	birth, err := runtimeControlProcessBirth(ctx, child.Process.Pid)
+	if err != nil || birth == "" {
+		t.Fatalf("live maintenance owner identity is missing: %v", err)
+	}
+	root, err := canonicalSessionDirectory(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	const operation = "00000000-0000-4000-8000-000000000001"
+	record := runtimeAccountRecord{Root: root, Source: root, Token: operation}
+	record.Original.Identity = runtimeAuthIdentity{Kind: "absent"}
+	owner := runtimeMaintenanceMarker{Schema: 1, Phase: "Paused", Token: operation, ExpectedProfile: root,
+		OwnerPID: child.Process.Pid, OwnerBirth: birth}
+	original, err := json.Marshal(owner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(root, "maintenance.json")
+	if err := os.WriteFile(path, original, 0600); err != nil {
+		t.Fatal(err)
+	}
+	var manager Manager
+	if _, err := manager.claimRuntimeLogin(ctx, record, original, path, root); err == nil {
+		t.Fatal("live Client2 maintenance ownership was replaced")
+	}
+	if err := input.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := child.Wait(); err != nil {
+		t.Fatal(err)
+	}
+	waited = true
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager.Endpoint = "http://" + listener.Addr().String()
+	if err := listener.Close(); err != nil {
+		t.Fatal(err)
+	}
+	recovered, err := manager.claimRuntimeLogin(ctx, record, original, path, root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if json.Unmarshal(recovered, &owner) != nil || owner.OwnerPID != os.Getpid() ||
+		owner.Token != record.Token || owner.Phase != "Paused" {
+		t.Fatal("recovery did not retain the original paused operation")
+	}
+}
+
+func TestDesktopPasswordLoginUsesRuntimeInstallation(t *testing.T) {
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("RSRS_DATA_DIR", root)
+	manager, err := New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager.ClientVersion = "2.0.0-dev.20"
+	id := "desktop-00000000-0000-4000-8000-000000000001"
+	if _, err := manager.Submit("auth_login", id,
+		json.RawMessage(`{"user":"isolated","addr":"https://respire.example.invalid"}`),
+		true, `{"password":"fixture only"}`); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	for {
+		job, err := manager.Operation(id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if job.State != "running" {
+			if job.State != "failed" || !strings.Contains(job.Error, "runtime.json") {
+				t.Fatalf("desktop login did not use the native Runtime installation: %s", job.Error)
+			}
+			return
+		}
+		select {
+		case <-ctx.Done():
+			t.Fatal("desktop password login did not report the missing Runtime installation")
+		case <-time.After(20 * time.Millisecond):
+		}
+	}
+}
+
+func TestRuntimeAuthSessionIdentity(t *testing.T) {
+	const operation = "00000000-0000-4000-8000-000000000001"
+	const factors = `"kdf_salt":"salt","wrapped_urk":"wrap","urk_nonce":"nonce","keyring_account":"login-test","keyring_backend":"native","auth_operation_id":"` + operation + `"`
+	for _, tc := range []struct {
+		name, session, kind string
+		invalid             bool
+	}{
+		{name: "missing", kind: "absent"},
+		{name: "named account", session: `{"user":"original user"}`, kind: "bound"},
+		{name: "keygen", session: `{"vault_version":4,` + factors + `}`, kind: "unbound"},
+		{name: "offline v1", session: `{"vault_version":1,"user":"","addr":"","secret":"legacy",` + factors + `}`, kind: "unbound"},
+		{name: "offline v4", session: `{"vault_version":4,"user":"","addr":"",` + factors + `}`, kind: "unbound"},
+		{name: "unexpected field", session: `{"vault_version":4,"token":"extra",` + factors + `}`, invalid: true},
+		{name: "no user or keygen", session: `{}`, invalid: true},
+		{name: "null is not missing", session: `null`, invalid: true},
+		{name: "null user is not absent", session: `{"user":null}`, invalid: true},
+		{name: "invalid UUID version", session: `{"vault_version":4,"kdf_salt":"salt","wrapped_urk":"wrap","urk_nonce":"nonce","keyring_account":"login-test","keyring_backend":"native","auth_operation_id":"00000000-0000-1000-8000-000000000001"}`, invalid: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var original []byte
+			if tc.name != "missing" {
+				original = []byte(tc.session)
+			}
+			identity, err := runtimeAuthIdentityOf(original)
+			if tc.invalid {
+				if err == nil {
+					t.Fatal("invalid session admitted an account identity")
+				}
+				return
+			}
+			if err != nil || identity.Kind != tc.kind {
+				t.Fatalf("wrong account identity: %v", err)
+			}
+			if original != nil && identity.SessionDigest != controlDigest(original) {
+				t.Fatal("account identity was not bound to the exact session bytes")
+			}
+			if tc.kind == "bound" && (identity.AccountID == nil || *identity.AccountID != controlDigest([]byte("original user"))) {
+				t.Fatal("named account hash differs")
+			}
+			if tc.kind == "unbound" && (identity.OperationID != operation || identity.AccountID != nil) {
+				t.Fatal("unbound session lost its original operation")
+			}
+		})
+	}
+}
+
+func TestRuntimeLoginReceiptBindsPrivateChallenge(t *testing.T) {
+	record := runtimeAccountRecord{
+		OperationID: "00000000-0000-4000-8000-000000000001",
+		Source:      t.TempDir(),
+		User:        "fixture",
+		Server:      "https://respire.example.invalid/",
+	}
+	const challenge = "private challenge fixture"
+	digest := controlDigest([]byte(challenge))
+	decode := func(operation, digest string, inputs []string) (runtimeLoginResult, error) {
+		t.Helper()
+		summary := map[string]any{
+			"receipt": map[string]any{
+				"operation_id": operation, "outcome": "awaiting_input", "source_profile": record.Source,
+				"login": map[string]any{"user": record.User, "addr": strings.TrimSuffix(record.Server, "/"), "required_inputs": inputs},
+			},
+			"handoff": map[string]any{"kind": "challenge", "payload": challenge, "sha256": digest},
+		}
+		raw, err := json.Marshal(map[string]any{"command": "auth-account", "status": "pending", "summary": summary})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return readRuntimeLoginResult(rpcResponse{Envelope: raw}, record)
+	}
+	result, err := decode(record.OperationID, digest, []string{"totp"})
+	if err != nil || result.Handoff == nil || result.Handoff.Challenge == nil || *result.Handoff.Challenge != challenge {
+		t.Fatalf("valid challenge did not reach the private coordinator: %v", err)
+	}
+	public, err := json.Marshal(result.Receipt)
+	if err != nil || bytes.Contains(public, []byte(challenge)) {
+		t.Fatalf("account receipt contains the private challenge: %v", err)
+	}
+	for _, test := range []struct {
+		operation, digest string
+		inputs            []string
+	}{
+		{"00000000-0000-4000-8000-000000000002", digest, []string{"totp"}},
+		{record.OperationID, strings.Repeat("0", 64), []string{"totp"}},
+		{record.OperationID, digest, []string{"totp", "totp"}},
+		{record.OperationID, digest, []string{"host_credentials"}},
+	} {
+		if _, err := decode(test.operation, test.digest, test.inputs); err == nil {
+			t.Fatal("invalid challenge accepted")
+		}
+	}
+}
+
+func TestPublishedRuntimeRequiresExactClient2Maintenance(t *testing.T) {
+	image := os.Getenv("RESPIRE_NATIVE_ACCOUNT_RUNTIME")
+	if image == "" {
+		t.Skip("set RESPIRE_NATIVE_ACCOUNT_RUNTIME to the published dev.27 Runtime")
+	}
+	image, err := filepath.Abs(image)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hash, err := fileHash(image)
+	if err != nil {
+		t.Fatal(err)
+	}
+	root, err := canonicalSessionDirectory(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	endpoint, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager := Manager{DataRoot: root, Endpoint: "http://" + endpoint.Addr().String()}
+	defer endpoint.Close()
+	ctx := context.Background()
+	const issuer = "2.0.0-dev.20"
+	operation, err := controlUUID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	intent := runtimeLoginIntent{OperationID: operation, User: "isolated-client2", Server: "https://respire.example.invalid"}
+	path := filepath.Join(root, "runtime", "autostart", "maintenance.json")
+	if _, lock, err := manager.beginOfflineRuntimeAccountMaintenance(ctx, root, issuer, intent); err == nil {
+		lock.Close()
+		t.Fatal("maintenance started while the Runtime port was in use")
+	}
+	if _, err := os.Lstat(path); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("failed admission left a maintenance record: %v", err)
+	}
+	if err := endpoint.Close(); err != nil {
+		t.Fatal(err)
+	}
+	library, err := lockRuntimeDatabase(ctx, root, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, second, beginErr := manager.beginOfflineRuntimeAccountMaintenance(ctx, root, issuer, intent)
+	if err := library.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if beginErr == nil {
+		second.Close()
+		t.Fatal("maintenance started while another owner held the library lock")
+	}
+	if _, err := os.Lstat(path); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("failed library lock check left a maintenance record: %v", err)
+	}
+	admission, lock, err := manager.beginOfflineRuntimeAccountMaintenance(ctx, root, issuer, intent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lock.Close()
+	if _, second, err := manager.beginOfflineRuntimeAccountMaintenance(ctx, root, issuer, intent); err == nil {
+		second.Close()
+		t.Fatal("second coordinator acquired the installation takeover lock")
+	}
+	if _, err := manager.publishPausedRuntimeMaintenance(ctx, root, issuer, intent, nil); err == nil {
+		t.Fatal("an existing maintenance record was overwritten")
+	}
+	marker := admission.Marker
+	if current, err := os.ReadFile(path); err != nil || !bytes.Equal(current, marker) {
+		t.Fatalf("original maintenance record was not retained: %v", err)
+	}
+	if _, err := manager.prepareRuntimeAccountControl(ctx, image, hash, root, nil, nil); err == nil {
+		t.Fatal("Client2 accepted a maintenance marker without the original ownership bytes")
+	}
+	changed := append(bytes.Clone(marker), '\n')
+	if _, err := manager.prepareRuntimeAccountControl(context.Background(), image, hash, root, nil, changed); err == nil {
+		t.Fatal("Client2 accepted stale maintenance bytes")
+	}
+	password := "isolated fixture"
+	entropy := bytes.Repeat([]byte{0x35}, 18)
+	super := "A3-" + hex.EncodeToString(entropy)
+	authorization := runtimeLoginAuthorization{Kind: "password", Password: &password}
+	// Contradictory options exercise admission without contacting a server.
+	continuation := runtimeLoginContinuation{MigrateLocal: true, MigrateVault: true}
+	session := filepath.Join(root, "session.json")
+	if err := os.WriteFile(session, []byte(`{"user":"changed-after-admission"}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := manager.prepareInitialRuntimeLogin(ctx, image, hash, admission, authorization, continuation, &super, nil, nil); err == nil {
+		t.Fatal("changed profile admitted the original login")
+	}
+	if err := os.Remove(session); err != nil {
+		t.Fatal(err)
+	}
+	control, params, err := manager.prepareInitialRuntimeLogin(ctx, image, hash, admission, authorization, continuation, &super, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	changedIntent := params
+	changedIntent.User = "different-user"
+	if _, err := manager.sendInitialRuntimeLogin(ctx, control, changedIntent, &admission); err == nil {
+		t.Fatal("changed account intent was sent")
+	}
+	slot := "login-control:" + params.Material.Account
+	store := nativeRuntimeCredentialStore(ctx)
+	for _, slot := range []string{slot, "super:" + params.Material.Account, "pass:" + params.Material.Account} {
+		t.Cleanup(func() {
+			saved, err := store.readSlot(params.Material.Backend, "rsrs", slot, false)
+			if err != nil {
+				t.Error(err)
+				return
+			}
+			if saved == nil {
+				return
+			}
+			var cleanup *exec.Cmd
+			switch runtime.GOOS {
+			case "windows":
+				cleanup = exec.Command("cmdkey.exe", "/delete:"+slot+".rsrs")
+			case "darwin":
+				cleanup = exec.Command("security", "delete-generic-password", "-s", "rsrs", "-a", slot)
+			case "linux":
+				cleanup = exec.Command("secret-tool", "clear", "service", "rsrs", "username", slot, "target", "default")
+			}
+			if err := cleanup.Run(); err != nil {
+				t.Errorf("remove isolated login fixture: %v", err)
+				return
+			}
+			if still, err := store.readSlot(params.Material.Backend, "rsrs", slot, false); err != nil || still != nil {
+				t.Errorf("isolated login fixture credential was not removed: %v", err)
+			}
+		})
+	}
+	result, err := manager.sendInitialRuntimeLogin(ctx, control, params, &admission)
+	if _, duplicateErr := manager.sendInitialRuntimeLogin(ctx, control, params, &admission); duplicateErr == nil {
+		t.Fatal("sent operation was readmitted")
+	}
+	var unconfirmed *unconfirmedError
+	if !errors.As(err, &unconfirmed) || unconfirmed.id != operation ||
+		!strings.Contains(err.Error(), "account_outcome_unknown") || result.Receipt.OperationID != "" || result.Handoff != nil {
+		t.Fatalf("Runtime did not accept the exact Paused authorization and reject invalid login intent: %v", err)
+	}
+	saved, credentialErr := store.readSlot(params.Material.Backend, "rsrs", slot, false)
+	if credentialErr != nil || saved == nil {
+		t.Fatalf("original login was not preserved in the native credential store: %v", credentialErr)
+	}
+	var custody struct {
+		Request runtimeLoginParams `json:"request"`
+	}
+	if json.Unmarshal([]byte(*saved), &custody) != nil || custody.Request.Authorization.Password == nil ||
+		*custody.Request.Authorization.Password != password || custody.Request.Binding.LaunchID != control.binding.LaunchID {
+		t.Fatal("the system credential store did not retain the original login request")
+	}
+	metadata := filepath.Join(root, "runtime", "autostart", "account-login-"+operation+".json")
+	nonsecret, err := readCredentialConfig(metadata, runtimeMaintenanceLimit)
+	if err != nil || bytes.Contains(nonsecret, []byte(password)) {
+		t.Fatalf("login metadata missing or contains private input: %v", err)
+	}
+	rawRecord, err := readCredentialConfig(admission.Path, runtimeMaintenanceLimit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var record runtimeAccountRecord
+	if json.Unmarshal(rawRecord, &record) != nil || record.OperationID != operation || !record.Sent {
+		t.Fatal("Runtime exchange did not retain the original sent operation")
+	}
+	if _, err := manager.queryRuntimeLoginResult(ctx, image, hash, admission, record); !errors.As(err, &unconfirmed) ||
+		unconfirmed.id != operation || !strings.Contains(err.Error(), "scope_mismatch") {
+		t.Fatalf("original-result query did not reach the published Runtime before refusing the absent journal: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, ".login-recovery.json")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("invalid intent should not create a login journal: %v", err)
+	}
+
+	// Validate the native checkpoint separately from the rejected Runtime request.
+	challenge := "isolated challenge fixture"
+	challengeDigest := controlDigest([]byte(challenge))
+	handoff := runtimeLoginHandoff{Kind: "challenge", Challenge: &challenge, ChallengeDigest: &challengeDigest}
+	originalRequest, err := json.Marshal(params)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := persistRuntimeLoginChallenge(ctx, record, params, []byte("{}"), handoff); err == nil {
+		t.Fatal("unrelated credential input was allowed to update the checkpoint")
+	}
+	if err := persistRuntimeLoginChallenge(ctx, record, params, originalRequest, handoff); err != nil {
+		t.Fatal(err)
+	}
+	saved, err = store.readSlot(params.Material.Backend, "rsrs", slot, false)
+	if err != nil || saved == nil || json.Unmarshal([]byte(*saved), &custody) != nil ||
+		custody.Request.Challenge == nil || custody.Request.Challenge.Payload != challenge ||
+		custody.Request.Challenge.Digest != challengeDigest {
+		t.Fatalf("original two-step challenge was not recoverable from the credential store: %v", err)
+	}
+	nonsecret, err = readCredentialConfig(metadata, runtimeMaintenanceLimit)
+	if err != nil || !bytes.Contains(nonsecret, []byte(challengeDigest)) || bytes.Contains(nonsecret, []byte(challenge)) {
+		t.Fatalf("challenge metadata did not retain only its digest: %v", err)
+	}
+	continuationReceipt, err := json.Marshal(map[string]any{
+		"operation_id": operation, "source_profile": root, "outcome": "awaiting_input",
+		"login": map[string]any{"user": intent.User, "addr": intent.Server, "required_inputs": []string{"totp"}},
+	})
+	var waiting runtimeLoginReceipt
+	if err != nil || json.Unmarshal(continuationReceipt, &waiting) != nil {
+		t.Fatal("invalid test continuation receipt")
+	}
+	invalidCode := "short"
+	if _, err := manager.continueRuntimeLogin(ctx, image, hash, admission, waiting, runtimeLoginSupplement{TOTP: &invalidCode}); err == nil {
+		t.Fatal("invalid code reached the Runtime")
+	}
+	code := "098765"
+	if _, err := manager.continueRuntimeLogin(ctx, image, hash, admission, waiting, runtimeLoginSupplement{TOTP: &code}); !errors.As(err, &unconfirmed) ||
+		unconfirmed.id != operation || !strings.Contains(err.Error(), "account_outcome_unknown") {
+		t.Fatalf("Runtime did not receive the original continuation before rejecting fixture intent: %v", err)
+	}
+	reloaded, err := store.readSlot(params.Material.Backend, "rsrs", slot, false)
+	if err != nil || reloaded == nil || *reloaded != *saved {
+		t.Fatalf("transient verification code was retained in the original private custody: %v", err)
+	}
+	waiting.Login.RequiredInputs = []string{"source_secret", "merge_local"}
+	fixtureSource := "isolated source input"
+	merge := false
+	if _, err := manager.continueRuntimeLogin(ctx, image, hash, admission, waiting,
+		runtimeLoginSupplement{SourceSecret: &fixtureSource, MergeLocal: &merge}); !errors.As(err, &unconfirmed) ||
+		unconfirmed.id != operation || !strings.Contains(err.Error(), "account_outcome_unknown") {
+		t.Fatalf("supplement did not reach the same Runtime operation: %v", err)
+	}
+	reloaded, err = store.readSlot(params.Material.Backend, "rsrs", slot, false)
+	if err != nil || reloaded == nil || json.Unmarshal([]byte(*reloaded), &custody) != nil ||
+		custody.Request.Continuation.SourceSecret == nil || *custody.Request.Continuation.SourceSecret != fixtureSource ||
+		custody.Request.Continuation.MergeLocal == nil || *custody.Request.Continuation.MergeLocal ||
+		custody.Request.Authorization.TOTP != nil {
+		t.Fatalf("private login supplement was not retained with the original input: %v", err)
+	}
+	// Use an actual encrypted v4 vault wrap for the isolated target account.
+	salt, nonce := bytes.Repeat([]byte{0x71}, 16), bytes.Repeat([]byte{0x2f}, 12)
+	key, err := hkdf.Key(sha256.New, entropy, salt, "onememory:kek:v4", 32)
+	if err != nil {
+		t.Fatal(err)
+	}
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	aead, err := cipher.NewGCM(block)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wrapped := aead.Seal(nil, nonce, bytes.Repeat([]byte{0xc8}, 32), nil)
+	sessionCandidate, err := json.Marshal(map[string]any{
+		"user": intent.User, "addr": intent.Server, "vault_version": 4,
+		"keyring_account": params.Material.Account, "keyring_backend": params.Material.Backend,
+		"kdf_salt": hex.EncodeToString(salt), "urk_nonce": hex.EncodeToString(nonce), "wrapped_urk": hex.EncodeToString(wrapped),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var pretty bytes.Buffer
+	if err := json.Indent(&pretty, sessionCandidate, "", "  "); err != nil {
+		t.Fatal(err)
+	}
+	digest := controlDigest(pretty.Bytes())
+	candidate := runtimeLoginHandoff{Kind: "credentials", CandidateDigest: &digest, Session: sessionCandidate, Slots: []string{"pass", "super"}}
+	if _, _, err := runtimeLoginCandidateSlots(candidate, params); err != nil {
+		t.Fatal(err)
+	}
+	wrong := candidate
+	wrong.Slots = []string{"super"}
+	if _, _, err := runtimeLoginCandidateSlots(wrong, params); err == nil {
+		t.Fatal("incomplete slot plan was accepted")
+	}
+	if _, err := manager.acknowledgeRuntimeLoginCandidate(ctx, control, admission, record, custody.Request, candidate); !errors.As(err, &unconfirmed) || unconfirmed.id != operation || !strings.Contains(err.Error(), "account_outcome_unknown") {
+		t.Fatalf("Runtime did not receive candidate acknowledgement before rejecting the offline fixture: %v", err)
+	}
+	for name, want := range map[string]string{"super": super, "pass": password} {
+		value, err := store.readSlot(params.Material.Backend, "rsrs", name+":"+params.Material.Account, true)
+		if err != nil || value == nil || *value != want {
+			t.Fatalf("verified native slot %s was not retained: %v", name, err)
+		}
+	}
+
+	// Test authorized target startup independently of the rejected offline login.
+	target := filepath.Join(root, "target-account")
+	if err := os.Mkdir(target, 0700); err != nil {
+		t.Fatal(err)
+	}
+	target, err = canonicalSessionDirectory(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	receiptTarget := target
+	if runtime.GOOS == "windows" {
+		receiptTarget = windowsDOSPath(target)
+	}
+	selected, err := json.Marshal(map[string]string{"data_dir": receiptTarget})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "client.json"), selected, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(target, "session.json"), pretty.Bytes(), 0600); err != nil {
+		t.Fatal(err)
+	}
+	account := controlDigest([]byte(intent.User))
+	applied := runtimeLoginReceipt{OperationID: operation, Outcome: "awaiting_verification", SourceProfile: root,
+		TargetProfile: &receiptTarget, AccountID: &account, SessionDigest: &digest}
+	wrongDigest := strings.Repeat("0", 64)
+	changedTarget := applied
+	changedTarget.SessionDigest = &wrongDigest
+	manager.Root = filepath.Join(root, "client2")
+	if err := os.Mkdir(manager.Root, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := manager.startAndCompleteRuntimeLogin(ctx, image, hash, &admission, changedTarget); err == nil {
+		t.Fatal("changed target session was authorized to start")
+	}
+	recoveredProfile, recoveredIdentity, heldCandidate, err := runtimeLoginQueryScope(ctx, record)
+	if err != nil || recoveredProfile != target || recoveredIdentity.SessionDigest != digest || len(heldCandidate) == 0 {
+		t.Fatalf("original login result could not be queried against its applied target: %v", err)
+	}
+	clear(heldCandidate)
+	if _, err := manager.prepareRuntimeLoginLaunch(ctx, image, hash, &admission, applied); err != nil {
+		t.Fatal(err)
+	}
+	var launchInterrupted runtimeMaintenanceMarker
+	if json.Unmarshal(admission.Marker, &launchInterrupted) != nil || launchInterrupted.Phase != "Starting" {
+		t.Fatal("the interrupted target launch did not publish its Starting marker")
+	}
+	admission.Marker, err = manager.claimRuntimeLogin(ctx, record, admission.Marker, path, recoveredProfile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var reclaimed runtimeMaintenanceMarker
+	if json.Unmarshal(admission.Marker, &reclaimed) != nil || reclaimed.Phase != "Paused" ||
+		reclaimed.Token != record.Token || reclaimed.ExpectedProfile != target {
+		t.Fatal("the original login was not reclaimed after the target failed to launch")
+	}
+	if _, err := manager.queryRuntimeLoginResult(ctx, image, hash, admission, record); !errors.As(err, &unconfirmed) ||
+		unconfirmed.id != operation || !strings.Contains(err.Error(), "scope_mismatch") {
+		t.Fatalf("published Runtime did not accept the original target query before refusing the absent journal: %v", err)
+	}
+	manager.localClient = &http.Client{Timeout: 15 * time.Second, Transport: &http.Transport{}}
+	t.Setenv("RSRS_NO_AUTOSYNC", "1")
+	serving, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	_, finishErr := manager.startAndCompleteRuntimeLogin(serving, image, hash, &admission, applied)
+	ready, _, healthErr := manager.Health(serving)
+	if healthErr == nil && ready.PID != 0 && ready.ImageSHA256 == hash && samePath(ready.InstallationRoot, root) {
+		t.Cleanup(func() {
+			stop, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			if err := manager.stopDetached(stop, ready); err != nil {
+				t.Errorf("stop isolated login target: %v", err)
+			}
+		})
+	}
+	if !errors.As(finishErr, &unconfirmed) || unconfirmed.id != operation || !strings.Contains(finishErr.Error(), "scope_mismatch") {
+		t.Fatalf("published Runtime did not accept the Verified grant before refusing the missing fixture journal: %v", finishErr)
+	}
+	if healthErr != nil || !ready.StoreReady || !samePath(ready.DataDir, target) || ready.AccountID != account {
+		t.Fatalf("original target was not available after authorized startup and unlock: %v", healthErr)
+	}
+	granted := filepath.Join(root, "runtime", "autostart", "launch", "launch-"+ready.InstanceID+".json")
+	if _, err := os.Stat(granted); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("serving Runtime did not consume its one-shot grant: %v", err)
+	}
+	var verified runtimeMaintenanceMarker
+	if json.Unmarshal(admission.Marker, &verified) != nil || verified.Phase != "Verified" ||
+		verified.ExpectedProfile != target || verified.Token != record.Token {
+		t.Fatal("original Verified ownership was not retained after refusing completion")
+	}
+	if _, err := manager.recoverVerifiedRuntimeLogin(serving, image, hash, target, recoveredIdentity, record, admission, path); !errors.As(err, &unconfirmed) ||
+		unconfirmed.id != operation || !strings.Contains(err.Error(), "scope_mismatch") {
+		t.Fatalf("published Runtime did not receive the original completion after its response was lost: %v", err)
+	}
+}

@@ -16,9 +16,6 @@ import (
 
 func (m *Manager) migrateHostSession(ctx context.Context, owner HealthInfo, path string, original []byte, session runtimeSession, version uint64, store hostCredentialStore) ([]byte, error) {
 	verifyOwner := func() error {
-		if err := m.requireClearSessionRecovery(); err != nil {
-			return err
-		}
 		current, _, err := m.Health(ctx)
 		if err != nil {
 			return err
@@ -26,7 +23,10 @@ func (m *Manager) migrateHostSession(ctx context.Context, owner HealthInfo, path
 		if current != owner || owner.StoreReady {
 			return errors.New("Runtime session owner changed during historical migration")
 		}
-		return verifyHostProcess(current)
+		if err := verifyHostProcess(current); err != nil {
+			return err
+		}
+		return m.requireClearSessionRecovery(ctx, owner, path, original)
 	}
 	if err := verifyOwner(); err != nil {
 		return nil, err
@@ -124,7 +124,7 @@ func (m *Manager) migrateHostSession(ctx context.Context, owner HealthInfo, path
 	return published, nil
 }
 
-func (m *Manager) requireClearSessionRecovery() error {
+func (m *Manager) requireClearSessionRecovery(ctx context.Context, owner HealthInfo, path string, original []byte) error {
 	for _, name := range []string{"account-active.json", "key-control.json", "offline-keygen.json", "maintenance.json"} {
 		_, err := os.Lstat(filepath.Join(m.DataRoot, "runtime", "autostart", name))
 		if err == nil {
@@ -134,28 +134,26 @@ func (m *Manager) requireClearSessionRecovery() error {
 			return err
 		}
 	}
-	bytes, err := readCredentialConfig(filepath.Join(m.DataRoot, ".login-recovery.json"), 65536)
+	data, err := readCredentialConfig(filepath.Join(m.DataRoot, ".login-recovery.json"), controlFrameLimit)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil
 	}
 	if err != nil {
 		return err
 	}
-	var recovery struct {
-		Version    int             `json:"schema_version"`
-		Active     json.RawMessage `json:"active"`
+	// A remote operation can still need its original session even without an active local recovery.
+	var journal struct {
 		Operations []struct {
 			Phase string `json:"phase"`
 		} `json:"operations"`
 	}
-	if json.Unmarshal(bytes, &recovery) != nil || recovery.Version != 2 ||
-		string(recovery.Active) != "null" || recovery.Operations == nil {
-		return errors.New("historical session migration requires login recovery first")
+	if json.Unmarshal(data, &journal) != nil {
+		return errors.New("Invalid historical login recovery journal")
 	}
-	for _, operation := range recovery.Operations {
+	for _, operation := range journal.Operations {
 		if operation.Phase != "committed" && operation.Phase != "rolled_back" {
-			return errors.New("historical session migration requires login recovery first")
+			return errors.New("Historical session has an unfinished login operation")
 		}
 	}
-	return nil
+	return m.readRuntimeLoginRecovery(ctx, owner, path, original)
 }

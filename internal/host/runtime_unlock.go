@@ -26,6 +26,8 @@ type hostCredentialStore struct {
 	backends []string
 	read     func(backend, service, account string) (*string, error)
 	preserve func(service, account, value string) error
+	replace  func(service, account string, expected *string, value string) error
+	remove   func(service, account, expected string) error
 }
 
 func (s hostCredentialStore) supports(name string) bool {
@@ -69,34 +71,9 @@ type runtimeProviderCredential struct {
 	Value   string `json:"value"`
 }
 
-func readCredentialConfig(path string, max int64) ([]byte, error) {
-	info, err := os.Lstat(path)
-	if err != nil {
-		return nil, err
-	}
-	if !info.Mode().IsRegular() || info.Size() > max {
-		return nil, errors.New("invalid credential configuration file")
-	}
-	file, err := os.Open(path)
-	if err != nil {
-		return nil, err
-	}
-	defer file.Close()
-	body, err := io.ReadAll(io.LimitReader(file, max+1))
-	if err != nil {
-		return nil, err
-	}
-	if int64(len(body)) > max {
-		return nil, errors.New("credential configuration exceeds the protocol limit")
-	}
-	return body, nil
-}
-
 func (m *Manager) unlockNativeRuntime(ctx context.Context, health HealthInfo, store hostCredentialStore) error {
-	base, err := url.Parse(m.Endpoint)
-	if err != nil || base.Scheme != "http" || base.Hostname() != "127.0.0.1" || base.Port() == "" ||
-		base.User != nil || base.RawQuery != "" || base.Fragment != "" || base.Path != "" {
-		return errors.New("Runtime unlock requires the local loopback endpoint")
+	if _, _, err := m.runtimeAccountEndpoint(); err != nil {
+		return err
 	}
 	if !samePath(health.InstallationRoot, m.DataRoot) || !runtimeInstanceID.MatchString(health.InstanceID) ||
 		health.Generation == 0 || !validHash(health.AccountID) {
@@ -120,6 +97,16 @@ func (m *Manager) unlockNativeRuntime(ctx context.Context, health HealthInfo, st
 	if health.ImageSHA256 != info.SHA256 {
 		return errors.New("Running Runtime image differs from the verified installation")
 	}
+	return m.unlockVerifiedRuntime(ctx, health, store, "")
+}
+
+// The caller holds takeover and has verified the Runtime image and process.
+func (m *Manager) unlockVerifiedRuntime(ctx context.Context, health HealthInfo, store hostCredentialStore, sessionDigest string) error {
+	address, _, err := m.runtimeAccountEndpoint()
+	if err != nil {
+		return err
+	}
+	base := url.URL{Scheme: "http", Host: address, Path: "/api/runtime/unlock"}
 	current, _, err := m.Health(ctx)
 	if err != nil {
 		return err
@@ -141,7 +128,11 @@ func (m *Manager) unlockNativeRuntime(ctx context.Context, health HealthInfo, st
 	if err != nil {
 		return err
 	}
-	relative, err := filepath.Rel(m.DataRoot, profile)
+	root, err := canonicalSessionDirectory(m.DataRoot)
+	if err != nil {
+		return err
+	}
+	relative, err := filepath.Rel(windowsDOSPath(root), windowsDOSPath(profile))
 	if err != nil || !filepath.IsLocal(relative) {
 		return errors.New("Runtime unlock profile is outside the installation")
 	}
@@ -156,6 +147,9 @@ func (m *Manager) unlockNativeRuntime(ctx context.Context, health HealthInfo, st
 	original, err := readCredentialConfig(sessionPath, 65536)
 	if err != nil {
 		return fmt.Errorf("Read original Runtime session: %w", err)
+	}
+	if sessionDigest != "" && controlDigest(original) != sessionDigest {
+		return errors.New("Runtime login target session changed before credential delivery")
 	}
 	var session runtimeSession
 	if err := json.Unmarshal(original, &session); err != nil {
@@ -216,7 +210,6 @@ func (m *Manager) unlockNativeRuntime(ctx context.Context, health HealthInfo, st
 	if current != health {
 		return errors.New("Runtime changed before credential delivery")
 	}
-	base.Path = "/api/runtime/unlock"
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, base.String(), bytes.NewReader(body))
 	if err != nil {
 		return err

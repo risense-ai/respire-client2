@@ -48,14 +48,6 @@ func (m *Manager) hostOperationLocked(ctx context.Context, args []string, secret
 	hostRPC := strings.HasPrefix(method, "auth.") || strings.HasPrefix(method, "core_config.")
 	stdin := secret + "\n"
 	if hostRPC {
-		if method == "auth.login.browser" {
-			if secret != "" {
-				return nil, errors.New("浏览器授权不接受桌面凭据")
-			}
-			if err := m.requireHostMethodLocked(ctx, method); err != nil {
-				return nil, err
-			}
-		}
 		var params map[string]string
 		if strings.HasPrefix(method, "core_config.") {
 			if err := m.requireHostMethodLocked(ctx, method); err != nil {

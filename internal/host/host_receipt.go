@@ -18,6 +18,7 @@ type hostTransaction struct {
 	Register      bool         `json:"register,omitempty"`
 	Scope         runtimeScope `json:"scope,omitzero"`
 	RequestBound  bool         `json:"request_bound,omitempty"`
+	RuntimeLogin  bool         `json:"runtime_login,omitempty"`
 }
 
 func (transaction *hostTransaction) acceptsCoreResult(reply *hostTransaction) bool {
@@ -129,6 +130,9 @@ func hostEnvelopeError(raw json.RawMessage) error {
 
 func (m *Manager) recoverHost(ctx context.Context, job Operation) (json.RawMessage, error) {
 	transaction := job.Transaction
+	if transaction != nil && transaction.RuntimeLogin {
+		return m.recoverDesktopRuntimeLogin(ctx, job)
+	}
 	if transaction != nil && transaction.RequestBound && transaction.Kind == "core_config" {
 		if transaction.OperationID != strings.TrimPrefix(job.ID, "desktop-") || !hostOperationID.MatchString(transaction.OperationID) {
 			return nil, &unconfirmedError{job.ID, errors.New("核心配置预绑定身份不匹配")}

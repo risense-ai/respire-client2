@@ -6,10 +6,43 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"time"
 
 	"golang.org/x/sys/unix"
 )
+
+func hostControlBirth(ctx context.Context) (string, error) {
+	birth, err := runtimeControlProcessBirth(ctx, os.Getpid())
+	if err == nil && birth == "" {
+		err = errors.New("Linux control parent start time is missing")
+	}
+	return birth, err
+}
+
+func runtimeControlProcessBirth(_ context.Context, pid int) (string, error) {
+	stat, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", pid))
+	if errors.Is(err, os.ErrNotExist) {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	end := strings.LastIndexByte(string(stat), ')')
+	fields := strings.Fields(string(stat[end+1:]))
+	if end < 0 || len(fields) <= 19 {
+		return "", errors.New("Linux control parent start time is missing")
+	}
+	if fields[0] == "Z" || fields[0] == "X" {
+		return "", nil
+	}
+	ticks, err := strconv.ParseUint(fields[19], 10, 64)
+	if err != nil || ticks == 0 {
+		return "", errors.New("Linux control parent start time is invalid")
+	}
+	return strconv.FormatUint(ticks, 10), nil
+}
 
 func verifyHostProcess(h HealthInfo) error {
 	actual, err := os.Readlink(fmt.Sprintf("/proc/%d/exe", h.PID))

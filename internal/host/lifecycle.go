@@ -34,7 +34,7 @@ func (m *Manager) runtimeDir(v string) string { return filepath.Join(m.DataRoot,
 
 func (m *Manager) Owns(exe string) bool {
 	for _, root := range []string{filepath.Join(m.DataRoot, "bin", "runtime"), filepath.Join(m.DataRoot, "runtime"), filepath.Join(m.Root, "runtime")} {
-		rel, err := filepath.Rel(root, exe)
+		rel, err := filepath.Rel(windowsDOSPath(root), windowsDOSPath(exe))
 		if err == nil && filepath.IsLocal(rel) && acceptsRuntimeBinary(filepath.Base(rel)) {
 			return true
 		}
