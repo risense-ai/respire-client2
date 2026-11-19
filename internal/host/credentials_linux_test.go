@@ -127,4 +127,13 @@ func TestLinuxSecretServiceInteroperability(t *testing.T) {
 	if err != nil || strings.TrimSuffix(string(output), "\n") != verified {
 		t.Fatalf("native lookup of updated custody failed: %v", err)
 	}
+	if err := removeSecretServiceCredential(ctx, "rsrs", custody, original); err == nil {
+		t.Fatal("stale cleanup would delete the verified credential")
+	}
+	if err := removeSecretServiceCredential(ctx, "rsrs", custody, verified); err != nil {
+		t.Fatal(err)
+	}
+	if value, err := secretServiceCredential(ctx, "rsrs", custody, nil); err != nil || value != nil {
+		t.Fatalf("temporary login credential was not removed: %v", err)
+	}
 }

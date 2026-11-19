@@ -74,6 +74,15 @@ func TestWindowsLoginCustodyInteroperability(t *testing.T) {
 			if err != nil || readback == nil || *readback != next {
 				t.Fatalf("verified custody changed after stale update: %v", err)
 			}
+			if err := removeSystemCredential(service, account, value); err == nil {
+				t.Fatal("stale cleanup would delete the verified credential")
+			}
+			if err := removeSystemCredential(service, account, next); err != nil {
+				t.Fatal(err)
+			}
+			if readback, err := readSystemCredential(service, account); err != nil || readback != nil {
+				t.Fatalf("temporary login credential was not removed: %v", err)
+			}
 		})
 	}
 }

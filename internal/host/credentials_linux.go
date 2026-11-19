@@ -69,6 +69,15 @@ func secretServiceCredential(ctx context.Context, service, account string, prese
 
 // Credential replacement is serialized by the installation takeover lock.
 func updateSecretServiceCredential(ctx context.Context, service, account string, expected, replacement *string) (*string, error) {
+	return changeSecretServiceCredential(ctx, service, account, expected, replacement, false)
+}
+
+func removeSecretServiceCredential(ctx context.Context, service, account, expected string) error {
+	_, err := changeSecretServiceCredential(ctx, service, account, &expected, nil, true)
+	return err
+}
+
+func changeSecretServiceCredential(ctx context.Context, service, account string, expected, replacement *string, remove bool) (*string, error) {
 	bus, err := dbus.ConnectSessionBus()
 	if err != nil {
 		return nil, fmt.Errorf("Connect Linux Secret Service: %w", err)
@@ -84,6 +93,9 @@ func updateSecretServiceCredential(ctx context.Context, service, account string,
 	items := append(unlocked, locked...)
 	var collection dbus.ObjectPath
 	if len(items) == 0 {
+		if remove {
+			return nil, nil
+		}
 		err := root.CallWithContext(ctx, secretAPI+"Service.ReadAlias", 0, "default").Store(&collection)
 		if err != nil {
 			return nil, fmt.Errorf("Find Linux default keyring: %w", err)
@@ -164,6 +176,26 @@ func updateSecretServiceCredential(ctx context.Context, service, account string,
 		return linuxCredentialValue(secret.Value)
 	}
 	value, err := read()
+	if remove && err == nil {
+		if *value != *expected {
+			return nil, errors.New("Linux Secret Service credential changed before cleanup")
+		}
+		var prompt dbus.ObjectPath
+		if err := entry.CallWithContext(ctx, secretAPI+"Item.Delete", 0).Store(&prompt); err != nil {
+			return nil, fmt.Errorf("Delete Linux Secret Service credential: %w", err)
+		}
+		if prompt != "/" {
+			return nil, errors.New("Linux Secret Service did not remove the credential without interaction")
+		}
+		remaining, err := secretServiceCredential(ctx, service, account, nil)
+		if err != nil {
+			return nil, err
+		}
+		if remaining != nil {
+			return nil, errors.New("Linux Secret Service credential cleanup could not be verified")
+		}
+		return nil, nil
+	}
 	if err != nil || replacement == nil || *replacement == *value {
 		return value, err
 	}

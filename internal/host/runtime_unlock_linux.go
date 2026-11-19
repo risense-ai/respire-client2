@@ -23,5 +23,8 @@ func nativeRuntimeCredentialStore(ctx context.Context) hostCredentialStore {
 			_, err := updateSecretServiceCredential(ctx, service, account, expected, &value)
 			return err
 		},
+		remove: func(service, account, expected string) error {
+			return removeSecretServiceCredential(ctx, service, account, expected)
+		},
 	}
 }

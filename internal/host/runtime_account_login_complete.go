@@ -145,5 +145,92 @@ func (m *Manager) completeRuntimeLogin(ctx context.Context, launched runtimeAcco
 	if _, err := verifyRuntimeLoginTarget(record, result.Receipt); err != nil {
 		return unknown(err)
 	}
+	if err := retireRuntimeLogin(ctx, record, admission.Marker, *private); err != nil {
+		return unknown(err)
+	}
 	return result.Receipt, nil
+}
+
+// A committed login keeps its serving credentials. Retire only its own
+// transient request, then allow ordinary Runtime startup again.
+func retireRuntimeLogin(ctx context.Context, record runtimeAccountRecord, marker []byte, private string) error {
+	directory := filepath.Join(record.Root, "runtime", "autostart")
+	markerPath := filepath.Join(directory, "maintenance.json")
+	actualMarker, err := readCredentialConfig(markerPath, runtimeMaintenanceLimit)
+	if err != nil {
+		return err
+	}
+	var owner runtimeMaintenanceMarker
+	if !bytes.Equal(actualMarker, marker) || json.Unmarshal(marker, &owner) != nil ||
+		owner.Phase != "Verified" || owner.Token != record.Token {
+		return errors.New("Committed login does not own the current maintenance marker")
+	}
+	activePath := filepath.Join(directory, "account-active.json")
+	active, err := readCredentialConfig(activePath, runtimeMaintenanceLimit)
+	if err != nil {
+		return err
+	}
+	var route struct {
+		Schema      int    `json:"schema"`
+		OperationID string `json:"operation_id"`
+	}
+	if json.Unmarshal(active, &route) != nil || route.Schema != 1 || route.OperationID != record.OperationID {
+		return errors.New("Committed login does not own the active account route")
+	}
+	account := "login-" + strings.ReplaceAll(record.OperationID, "-", "")
+	path := loginCustodyPath(record)
+	before, err := readCredentialConfig(path, runtimeMaintenanceLimit)
+	if err != nil {
+		return err
+	}
+	var state map[string]json.RawMessage
+	if json.Unmarshal(before, &state) != nil || state == nil {
+		return errors.New("Committed login credential record is invalid")
+	}
+	for key, expected := range map[string]string{
+		"operation_id": record.OperationID, "root": record.Root, "source": record.Source,
+		"account": account, "backend": runtimeLoginBackend(),
+	} {
+		var actual string
+		if json.Unmarshal(state[key], &actual) != nil || actual != expected {
+			return errors.New("Committed login credential record belongs to another operation")
+		}
+	}
+	if string(state["rolled_back"]) != "false" {
+		return errors.New("Committed login credential record has a different outcome")
+	}
+	state["slots_removed"] = json.RawMessage("true")
+	retiring, err := json.Marshal(state)
+	if err != nil {
+		return err
+	}
+	if err := writeRuntimeAccountRecord(path, retiring, before); err != nil {
+		return err
+	}
+	if err := nativeRuntimeCredentialStore(ctx).remove("rsrs", "login-control:"+account, private); err != nil {
+		return err
+	}
+	state["retired"] = json.RawMessage("true")
+	retired, err := json.Marshal(state)
+	if err != nil {
+		return err
+	}
+	if err := writeRuntimeAccountRecord(path, retired, retiring); err != nil {
+		return err
+	}
+	if err := removeOwnedRuntimeAccountRecord(markerPath, marker); err != nil {
+		return err
+	}
+	return removeOwnedRuntimeAccountRecord(activePath, active)
+}
+
+func removeOwnedRuntimeAccountRecord(path string, expected []byte) error {
+	current, err := readCredentialConfig(path, runtimeMaintenanceLimit)
+	if err != nil {
+		return err
+	}
+	if !bytes.Equal(current, expected) {
+		return errors.New("Runtime account record changed before cleanup")
+	}
+	return os.Remove(path)
 }

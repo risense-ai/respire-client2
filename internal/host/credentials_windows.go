@@ -37,11 +37,38 @@ var (
 	credentialDLL = windows.NewLazySystemDLL("advapi32.dll")
 	credRead      = credentialDLL.NewProc("CredReadW")
 	credWrite     = credentialDLL.NewProc("CredWriteW")
+	credDelete    = credentialDLL.NewProc("CredDeleteW")
 	credFree      = credentialDLL.NewProc("CredFree")
 )
 
 func isWindowsLoginCustody(service, account string) bool {
 	return service == "rsrs" && strings.HasPrefix(account, "login-control:login-")
+}
+
+func removeSystemCredential(service, account, expected string) error {
+	existing, err := readSystemCredential(service, account)
+	if err != nil || existing == nil {
+		return err
+	}
+	if *existing != expected {
+		return errors.New("Windows credential changed before cleanup")
+	}
+	target, err := windows.UTF16PtrFromString(account + "." + service)
+	if err != nil {
+		return err
+	}
+	ok, _, deleteErr := credDelete.Call(uintptr(unsafe.Pointer(target)), windowsGenericCredential, 0)
+	if ok == 0 && !errors.Is(deleteErr, windows.ERROR_NOT_FOUND) {
+		return fmt.Errorf("Windows credential cleanup: %w", deleteErr)
+	}
+	remaining, err := readSystemCredential(service, account)
+	if err != nil {
+		return err
+	}
+	if remaining != nil {
+		return errors.New("Windows credential cleanup could not be verified")
+	}
+	return nil
 }
 
 // Keep existing password slots in UTF-16 and share CLI's encoding for private login state.
