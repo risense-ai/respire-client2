@@ -21,7 +21,7 @@ on:
         type: string
       cli_version:
         description: 'Exact CLI DEV version, without v'
-        default: '2.0.0-dev.19'
+        default: '2.0.0-dev.20'
         type: string
       cli_run_attempt:
         description: 'Attempt that produced the CLI artifact'
@@ -57,7 +57,7 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 25
     env:
-      RUNTIME_VERSION: '2.0.0-dev.25'
+      RUNTIME_VERSION: '2.0.0-dev.26'
       RUNTIME_RUN_ID: ${{ inputs.runtime_run_id }}
       INPUT_RUN_ID: ${{ inputs.client2_run_id }}
       INPUT_ATTEMPT: ${{ inputs.client2_run_attempt }}

@@ -93,6 +93,8 @@ func (m *Manager) Start() error {
 	if err = m.verifyInstalled(info); err != nil {
 		return err
 	}
+	// The one-shot command shares the CLI takeover lock and native credentials.
+	// Runtime itself owns the listener after the command exits.
 	_, err = m.hostOperation(ctx, []string{"runtime", "start"}, "", "runtime.start", "")
 	if err != nil {
 		return err
@@ -127,8 +129,12 @@ func (m *Manager) requireActive(info InstalledRuntime) error {
 	if err != nil {
 		return err
 	}
-	if h.Version != info.Version || !samePath(h.Exe, filepath.Join(m.runtimeDir(info.Version), runtimeBinary())) {
-		return errors.New("启动后的 Runtime 身份或版本不匹配")
+	if h.Version != info.Version || !samePath(h.Exe, filepath.Join(m.runtimeDir(info.Version), runtimeBinary())) ||
+		!samePath(h.InstallationRoot, m.DataRoot) {
+		return errors.New("启动后的 Runtime 安装目录、身份或版本不匹配")
+	}
+	if err := verifyHostProcess(h); err != nil {
+		return fmt.Errorf("无法确认 Runtime 进程身份: %w", err)
 	}
 	return m.unlockIfNeeded(h)
 }
