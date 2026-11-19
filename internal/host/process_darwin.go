@@ -4,11 +4,29 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"os"
+	"os/exec"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"time"
 
 	"golang.org/x/sys/unix"
 )
+
+func hostControlBirth(ctx context.Context) (string, error) {
+	cmd := exec.CommandContext(ctx, "/bin/ps", "-p", strconv.Itoa(os.Getpid()), "-o", "lstart=")
+	cmd.Env = append(os.Environ(), "LC_ALL=C")
+	out, err := cmd.Output()
+	if err != nil {
+		return "", err
+	}
+	birth := strings.TrimSpace(string(out))
+	if birth == "" {
+		return "", errors.New("macOS control parent start time is missing")
+	}
+	return birth, nil
+}
 
 func verifyHostProcess(h HealthInfo) error {
 	args, err := unix.SysctlRaw("kern.procargs2", int(h.PID))

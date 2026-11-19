@@ -6,10 +6,23 @@ import (
 	"net"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"syscall"
 
 	"golang.org/x/sys/windows"
 )
+
+func hostControlBirth(context.Context) (string, error) {
+	var created, exited, kernel, user windows.Filetime
+	if err := windows.GetProcessTimes(windows.CurrentProcess(), &created, &exited, &kernel, &user); err != nil {
+		return "", err
+	}
+	birth := uint64(created.HighDateTime)<<32 | uint64(created.LowDateTime)
+	if birth == 0 {
+		return "", errors.New("Windows control parent start time is missing")
+	}
+	return strconv.FormatUint(birth, 10), nil
+}
 
 func configureCommand(cmd *exec.Cmd) {
 	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: windows.CREATE_NO_WINDOW}
