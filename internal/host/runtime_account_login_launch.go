@@ -86,3 +86,60 @@ func (m *Manager) prepareRuntimeLoginLaunch(ctx context.Context, imagePath, imag
 	}
 	return control, nil
 }
+
+// The caller retains takeover from account admission through target verification.
+func (m *Manager) unlockRuntimeLoginTarget(ctx context.Context, control runtimeAccountControl,
+	admission runtimeAccountAdmission, receipt runtimeLoginReceipt, startedPID uint32) (HealthInfo, error) {
+	var record runtimeAccountRecord
+	if json.Unmarshal(admission.Record, &record) != nil || !record.Sent || record.Register ||
+		receipt.OperationID != record.OperationID || receipt.SourceProfile != record.Source ||
+		receipt.Outcome != "awaiting_verification" {
+		return HealthInfo{}, errors.New("Runtime target unlock requires its original applied login receipt")
+	}
+	target, err := verifyRuntimeLoginTarget(record, receipt)
+	if err != nil {
+		return HealthInfo{}, err
+	}
+	expectedDigest, ok := control.grant["image_sha256"].(string)
+	if !ok || !validHash(expectedDigest) || control.binding.InstallationRoot != record.Root ||
+		control.binding.Profile != target || control.binding.ExpectedAccountID == nil ||
+		*control.binding.ExpectedAccountID != *receipt.AccountID || startedPID == 0 {
+		return HealthInfo{}, errors.New("Runtime target unlock is missing its original launch identity")
+	}
+	markerPath := filepath.Join(record.Root, "runtime", "autostart", "maintenance.json")
+	currentMarker, err := readCredentialConfig(markerPath, runtimeMaintenanceLimit)
+	if err != nil {
+		return HealthInfo{}, err
+	}
+	var marker runtimeMaintenanceMarker
+	if !bytes.Equal(currentMarker, admission.Marker) || json.Unmarshal(currentMarker, &marker) != nil ||
+		marker.Phase != "Starting" || marker.Token != record.Token || marker.ExpectedProfile != target {
+		return HealthInfo{}, errors.New("Runtime target unlock requires its exact Starting marker")
+	}
+	health, _, err := m.Health(ctx)
+	if err != nil {
+		return HealthInfo{}, err
+	}
+	if !health.StartupComplete || health.PID != startedPID || health.InstanceID != control.binding.LaunchID ||
+		health.AccountID != *receipt.AccountID || health.Generation == 0 ||
+		!samePath(health.InstallationRoot, record.Root) || !samePath(health.DataDir, target) ||
+		!samePath(health.ImagePath, control.image) || health.ImageSHA256 != expectedDigest {
+		return HealthInfo{}, errors.New("Running Runtime does not match the authorized target launch")
+	}
+	if err := verifyHostProcess(health); err != nil {
+		return HealthInfo{}, err
+	}
+	if err := m.unlockVerifiedRuntime(ctx, health, nativeRuntimeCredentialStore(ctx), *receipt.SessionDigest); err != nil {
+		return HealthInfo{}, err
+	}
+	ready, _, err := m.Health(ctx)
+	if err != nil {
+		return HealthInfo{}, err
+	}
+	health.StoreReady = true
+	health.CredentialState = "available"
+	if ready != health {
+		return HealthInfo{}, errors.New("Runtime did not confirm the same unlocked target instance")
+	}
+	return ready, nil
+}

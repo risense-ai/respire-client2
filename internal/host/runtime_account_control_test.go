@@ -5,6 +5,11 @@ package host
 import (
 	"bytes"
 	"context"
+	"crypto/aes"
+	"crypto/cipher"
+	"crypto/hkdf"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"net"
@@ -191,7 +196,8 @@ func TestPublishedRuntimeRequiresExactClient2Maintenance(t *testing.T) {
 		t.Fatal("Client2 accepted stale maintenance bytes")
 	}
 	password := "isolated fixture"
-	super := "isolated recovery fixture"
+	entropy := bytes.Repeat([]byte{0x35}, 18)
+	super := "A3-" + hex.EncodeToString(entropy)
 	authorization := runtimeLoginAuthorization{Kind: "password", Password: &password}
 	// Contradictory options exercise admission without contacting a server.
 	continuation := runtimeLoginContinuation{MigrateLocal: true, MigrateVault: true}
@@ -325,9 +331,25 @@ func TestPublishedRuntimeRequiresExactClient2Maintenance(t *testing.T) {
 	if err != nil || reloaded == nil || *reloaded != *saved {
 		t.Fatalf("transient verification code was retained in the original private custody: %v", err)
 	}
+	// Use an actual encrypted v4 vault wrap for the isolated target account.
+	salt, nonce := bytes.Repeat([]byte{0x71}, 16), bytes.Repeat([]byte{0x2f}, 12)
+	key, err := hkdf.Key(sha256.New, entropy, salt, "onememory:kek:v4", 32)
+	if err != nil {
+		t.Fatal(err)
+	}
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	aead, err := cipher.NewGCM(block)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wrapped := aead.Seal(nil, nonce, bytes.Repeat([]byte{0xc8}, 32), nil)
 	sessionCandidate, err := json.Marshal(map[string]any{
 		"user": intent.User, "addr": intent.Server, "vault_version": 4,
 		"keyring_account": params.Material.Account, "keyring_backend": params.Material.Backend,
+		"kdf_salt": hex.EncodeToString(salt), "urk_nonce": hex.EncodeToString(nonce), "wrapped_urk": hex.EncodeToString(wrapped),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -388,7 +410,7 @@ func TestPublishedRuntimeRequiresExactClient2Maintenance(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	manager.localClient = &http.Client{Timeout: time.Second, Transport: &http.Transport{}}
+	manager.localClient = &http.Client{Timeout: 15 * time.Second, Transport: &http.Transport{}}
 	_, port, ok := strings.Cut(strings.TrimPrefix(manager.Endpoint, "http://"), ":")
 	if !ok {
 		t.Fatal("invalid fixture endpoint")
@@ -427,6 +449,13 @@ func TestPublishedRuntimeRequiresExactClient2Maintenance(t *testing.T) {
 	granted := filepath.Join(root, "runtime", "autostart", "launch", "launch-"+grant.binding.LaunchID+".json")
 	if _, err := os.Stat(granted); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("serving Runtime did not consume its one-shot grant: %v", err)
+	}
+	if _, err := manager.unlockRuntimeLoginTarget(serving, grant, admission, applied, uint32(command.Process.Pid)+1); err == nil {
+		t.Fatal("credentials were delivered to a process that was not started for the original grant")
+	}
+	ready, err := manager.unlockRuntimeLoginTarget(serving, grant, admission, applied, uint32(command.Process.Pid))
+	if err != nil || !ready.StoreReady || ready.AccountID != account || ready.InstanceID != grant.binding.LaunchID {
+		t.Fatalf("Client2 did not unlock the authorized target through the real Runtime: %v", err)
 	}
 	if err := command.Process.Kill(); err != nil {
 		t.Fatal(err)

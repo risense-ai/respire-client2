@@ -71,10 +71,8 @@ type runtimeProviderCredential struct {
 }
 
 func (m *Manager) unlockNativeRuntime(ctx context.Context, health HealthInfo, store hostCredentialStore) error {
-	base, err := url.Parse(m.Endpoint)
-	if err != nil || base.Scheme != "http" || base.Hostname() != "127.0.0.1" || base.Port() == "" ||
-		base.User != nil || base.RawQuery != "" || base.Fragment != "" || base.Path != "" {
-		return errors.New("Runtime unlock requires the local loopback endpoint")
+	if _, _, err := m.runtimeAccountEndpoint(); err != nil {
+		return err
 	}
 	if !samePath(health.InstallationRoot, m.DataRoot) || !runtimeInstanceID.MatchString(health.InstanceID) ||
 		health.Generation == 0 || !validHash(health.AccountID) {
@@ -98,6 +96,16 @@ func (m *Manager) unlockNativeRuntime(ctx context.Context, health HealthInfo, st
 	if health.ImageSHA256 != info.SHA256 {
 		return errors.New("Running Runtime image differs from the verified installation")
 	}
+	return m.unlockVerifiedRuntime(ctx, health, store, "")
+}
+
+// The caller holds takeover and has verified the Runtime image and process.
+func (m *Manager) unlockVerifiedRuntime(ctx context.Context, health HealthInfo, store hostCredentialStore, sessionDigest string) error {
+	address, _, err := m.runtimeAccountEndpoint()
+	if err != nil {
+		return err
+	}
+	base := url.URL{Scheme: "http", Host: address, Path: "/api/runtime/unlock"}
 	current, _, err := m.Health(ctx)
 	if err != nil {
 		return err
@@ -134,6 +142,9 @@ func (m *Manager) unlockNativeRuntime(ctx context.Context, health HealthInfo, st
 	original, err := readCredentialConfig(sessionPath, 65536)
 	if err != nil {
 		return fmt.Errorf("Read original Runtime session: %w", err)
+	}
+	if sessionDigest != "" && controlDigest(original) != sessionDigest {
+		return errors.New("Runtime login target session changed before credential delivery")
 	}
 	var session runtimeSession
 	if err := json.Unmarshal(original, &session); err != nil {
@@ -194,7 +205,6 @@ func (m *Manager) unlockNativeRuntime(ctx context.Context, health HealthInfo, st
 	if current != health {
 		return errors.New("Runtime changed before credential delivery")
 	}
-	base.Path = "/api/runtime/unlock"
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, base.String(), bytes.NewReader(body))
 	if err != nil {
 		return err
