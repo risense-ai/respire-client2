@@ -218,7 +218,7 @@ jobs:
           cache: true
       - name: Linux native libraries
         if: matrix.os == 'linux'
-        run: sudo apt-get update -qq && sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev libx11-dev fontconfig
+        run: sudo apt-get update -qq && sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev libx11-dev fontconfig gnome-keyring libsecret-tools
       - uses: actions/download-artifact@v8
         with:
           name: desktop-candidate-${{ github.run_attempt }}
@@ -233,6 +233,9 @@ jobs:
           tags=production
           if [[ '${{ matrix.os }}' == linux ]]; then tags=production,gtk3; fi
           go test -tags "$tags" ./...
+      - name: Check real Linux Secret Service interoperability
+        if: matrix.os == 'linux'
+        run: dbus-run-session -- env RESPIRE_NATIVE_SECRET_SERVICE_CHECK=1 go test -count=1 -tags production -run '^TestLinuxSecretServiceInteroperability$' ./internal/host
       - name: Verify candidate Windows executable identity and fonts
         if: matrix.os == 'windows'
         shell: pwsh
