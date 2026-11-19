@@ -145,6 +145,13 @@ func (m *Manager) unlockNativeRuntime(ctx context.Context, health HealthInfo, st
 	if err != nil || !filepath.IsLocal(relative) {
 		return errors.New("Runtime unlock profile is outside the installation")
 	}
+	off, err := m.runtimeServiceOff(profile)
+	if err != nil {
+		return err
+	}
+	if off {
+		return nil
+	}
 	sessionPath := filepath.Join(profile, "session.json")
 	original, err := readCredentialConfig(sessionPath, 65536)
 	if err != nil {
@@ -239,6 +246,42 @@ func (m *Manager) unlockNativeRuntime(ctx context.Context, health HealthInfo, st
 	}
 	if providerCode != "" {
 		fmt.Fprintf(os.Stderr, "Runtime library unlocked; provider credentials unavailable (%s)\n", providerCode)
+	}
+	return nil
+}
+
+func (m *Manager) runtimeServiceOff(profile string) (bool, error) {
+	var device struct {
+		Mode string `json:"service_mode"`
+	}
+	if err := readServiceSettings(filepath.Join(m.DataRoot, "client.json"), &device); err != nil {
+		return false, err
+	}
+	switch device.Mode {
+	case "off":
+		return true, nil
+	case "normal", "readonly":
+		return false, nil
+	}
+	var agent struct {
+		MemoryOff bool `json:"memory_off"`
+	}
+	if err := readServiceSettings(filepath.Join(profile, "agent.json"), &agent); err != nil {
+		return false, err
+	}
+	return agent.MemoryOff, nil
+}
+
+func readServiceSettings(path string, settings any) error {
+	data, err := readCredentialConfig(path, 1<<20)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("Read Runtime service settings: %w", err)
+	}
+	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) || json.Unmarshal(data, settings) != nil {
+		return fmt.Errorf("Invalid Runtime service settings in %s", filepath.Base(path))
 	}
 	return nil
 }
