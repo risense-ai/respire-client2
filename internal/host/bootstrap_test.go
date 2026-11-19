@@ -327,7 +327,47 @@ func TestInstallBootstrapCLIAtomicPlacement(t *testing.T) {
 			t.Fatalf("staging leftovers in bin dir: %v", entries)
 		}
 	})
-	t.Run("equal version refreshes from the verified payload", func(t *testing.T) {
+	t.Run("identical installed CLI is reused while in use", func(t *testing.T) {
+		buildPayload(t, "1.2.3")
+		payload, err := readBootstrapPayload()
+		if err != nil {
+			t.Fatal(err)
+		}
+		m := newInstallTestManager(t)
+		source := filepath.Join(payload.Dir, cliBinary())
+		bin, err := os.ReadFile(source)
+		if err != nil {
+			t.Fatal(err)
+		}
+		dest := filepath.Join(m.DataRoot, "bin", cliBinary())
+		if err := os.MkdirAll(filepath.Dir(dest), 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(dest, bin, 0700); err != nil {
+			t.Fatal(err)
+		}
+		held, err := os.Open(dest)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer held.Close()
+		before, err := held.Stat()
+		if err != nil {
+			t.Fatal(err)
+		}
+		stubCLIProbe(t, cliProbeFixture{destVer: "1.2.3", tmpBroken: true})
+		if err := m.installBootstrapCLI(context.Background(), &payload); err != nil {
+			t.Fatalf("identical installed CLI must be reusable: %v", err)
+		}
+		after, err := os.Stat(dest)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !os.SameFile(before, after) {
+			t.Fatal("identical installed CLI was replaced")
+		}
+	})
+	t.Run("equal version with different bytes refreshes from the verified payload", func(t *testing.T) {
 		payload, err := func() (bootstrapPayload, error) {
 			buildPayload(t, "1.2.3")
 			return readBootstrapPayload()
