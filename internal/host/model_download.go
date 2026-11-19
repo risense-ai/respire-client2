@@ -1,8 +1,7 @@
 package host
 
 // Multi-threaded downloads for BGE-M3 weights: the client fetches the pinned
-// files itself with parallel Range chunks and SHA256 verification, then the
-// CLI's installer sees valid files and skips its own single-stream download.
+// files itself with parallel Range chunks and SHA256 verification.
 // URLs and hashes mirror respire-cli's cli/src/model_install.rs.
 
 import (
@@ -34,13 +33,20 @@ type modelFileSpec struct {
 }
 
 var modelFileSpecs = map[string]modelFileSpec{
-	"tokenizer": {rel: "tokenizer.json", sha256: tokenizerSHA, size: 17433231},
+	"tokenizer": {rel: "tokenizer.json", sha256: tokenizerSHA, size: 17082821},
 	"quantized": {rel: "onnx/model_quantized.onnx", sha256: "0826f8c1ab9edf1801db86c61919d4d108e8bfc0b809ec823ad366882ff0b77d", size: 569694530},
 	"fp16":      {rel: "onnx/model_fp16.onnx", sha256: "4f1a646a3d4f39985589e9991a717044ede8278617fe55e3d246838bc05055e9", size: 1133992936},
 	"int8":      {rel: "onnx/model_int8.onnx", sha256: "a206e10e995aa2a833924bcd725ba5dd6c3425cd34bac3cf2b5677cd2a1c51d6", size: 568456694},
 	"uint8":     {rel: "onnx/model_uint8.onnx", sha256: "3222211565d0d5da2fe89e0c40856ed879e5c5dd3369fbbe685213469498e811", size: 568456765},
 	"q4":        {rel: "onnx/model_q4.onnx", sha256: "4f6d9786712f8dbf00efbb08ffd819395ef05d860249e852b4efc16022f753a6", size: 1248237611},
 	"q4f16":     {rel: "onnx/model_q4f16.onnx", sha256: "8305fdfa48b5702ecb4a6d84c1a52a4d1cb27d69880ff7f69d1a93d795864f25", size: 699932840},
+}
+
+const m3CPUContainerURL = "https://github.com/risense-ai/respire-cli/releases/download/model-bge-m3-ort-v1/model_quantized.cpu-v1.ort"
+
+var m3CPUContainer = modelFileSpec{
+	rel: "onnx/model_quantized.cpu-v1.ort", size: 569654128,
+	sha256: "7ff152e912bc234f5c90e4012f99897a7b2ce180f016db2321304057756b64ff",
 }
 
 var modelMirrors = []string{"https://hf-mirror.com", "https://hf-mirror.net", "https://huggingface.co"}
@@ -148,8 +154,8 @@ func expandTilde(p string) (string, error) {
 }
 
 // DownloadModel fetches one pinned file into the model's dir. For m3 the
-// variant is one of the legacy keys or "baseline" (tokenizer + quantized
-// weights, the first-run set); profile models download tokenizer.json plus
+// variant is one of the legacy keys or "baseline" (CPU first-run files);
+// profile models download tokenizer.json plus
 // the chosen onnx variant from their pinned repository.
 func (m *Manager) DownloadModel(ctx context.Context, model, variant, mirror string) error {
 	dir, definition, err := m.modelDirFor(model)
@@ -201,7 +207,32 @@ func (m *Manager) DownloadModel(ctx context.Context, model, variant, mirror stri
 			return lastErr
 		}
 	}
+	if definition.Legacy && variant == "baseline" && m3UsesCPUContainer() {
+		return m.downloadModelFrom(ctx, m3CPUContainerURL,
+			filepath.Join(m.ModelDir(), filepath.FromSlash(m3CPUContainer.rel)), m3CPUContainer)
+	}
 	return nil
+}
+
+func m3UsesCPUContainer() bool {
+	if choice, set := os.LookupEnv("RSRS_CPU_OWNED_ORT_EXPERIMENT"); set && choice == "0" {
+		return false
+	}
+	_, profiling := os.LookupEnv("RSRS_ORT_PROFILE")
+	return !profiling
+}
+
+func (m *Manager) cpuContainerPresent(dir string) bool {
+	if !m3UsesCPUContainer() {
+		return true
+	}
+	relative := filepath.FromSlash(m3CPUContainer.rel)
+	// Runtime resolves its user cache ahead of an explicitly configured model directory.
+	info, err := os.Lstat(filepath.Join(m.ModelDir(), relative))
+	if errors.Is(err, os.ErrNotExist) {
+		info, err = os.Lstat(filepath.Join(dir, relative))
+	}
+	return err == nil && info.Mode().IsRegular() && info.Size() == m3CPUContainer.size
 }
 
 func modelFileValid(path string, spec modelFileSpec) bool {

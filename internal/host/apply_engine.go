@@ -52,6 +52,9 @@ func applyEngine(ctx context.Context, m *Manager, args []string, id string) (jso
 		if _, ok := installedVariants(dir)[model]; !ok {
 			return nil, fmt.Errorf("%s 权重文件未就绪（未下载或校验不一致），请先在列表中下载后再切换 %s", model, strings.ToUpper(engine))
 		}
+		if engine == "cpu" && model == "quantized" && !m.cpuContainerPresent(dir) {
+			return nil, errors.New("BGE-M3 CPU 容器缺失或大小不符，请先下载基础模型")
+		}
 	}
 	// Read the previous selection first: on failure this is exactly what gets
 	// restored, so a fresh install without inference.json falls back to the
