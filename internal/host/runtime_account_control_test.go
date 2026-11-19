@@ -76,7 +76,7 @@ func TestRuntimeLoginOwnerProcess(t *testing.T) {
 		t.Fatal(err)
 	}
 	var manager Manager
-	if _, err := manager.claimPausedRuntimeLogin(ctx, record, original, path, root); err == nil {
+	if _, err := manager.claimRuntimeLogin(ctx, record, original, path, root); err == nil {
 		t.Fatal("live Client2 maintenance ownership was replaced")
 	}
 	if err := input.Close(); err != nil {
@@ -94,7 +94,7 @@ func TestRuntimeLoginOwnerProcess(t *testing.T) {
 	if err := listener.Close(); err != nil {
 		t.Fatal(err)
 	}
-	recovered, err := manager.claimPausedRuntimeLogin(ctx, record, original, path, root)
+	recovered, err := manager.claimRuntimeLogin(ctx, record, original, path, root)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -554,9 +554,21 @@ func TestPublishedRuntimeRequiresExactClient2Maintenance(t *testing.T) {
 		t.Fatalf("original login result could not be queried against its applied target: %v", err)
 	}
 	clear(heldCandidate)
-	admission.Marker, err = manager.claimPausedRuntimeLogin(ctx, record, admission.Marker, path, recoveredProfile)
+	if _, err := manager.prepareRuntimeLoginLaunch(ctx, image, hash, &admission, applied); err != nil {
+		t.Fatal(err)
+	}
+	var launchInterrupted runtimeMaintenanceMarker
+	if json.Unmarshal(admission.Marker, &launchInterrupted) != nil || launchInterrupted.Phase != "Starting" {
+		t.Fatal("the interrupted target launch did not publish its Starting marker")
+	}
+	admission.Marker, err = manager.claimRuntimeLogin(ctx, record, admission.Marker, path, recoveredProfile)
 	if err != nil {
 		t.Fatal(err)
+	}
+	var reclaimed runtimeMaintenanceMarker
+	if json.Unmarshal(admission.Marker, &reclaimed) != nil || reclaimed.Phase != "Paused" ||
+		reclaimed.Token != record.Token || reclaimed.ExpectedProfile != target {
+		t.Fatal("the original login was not reclaimed after the target failed to launch")
 	}
 	if _, err := manager.queryRuntimeLoginResult(ctx, image, hash, admission, record); !errors.As(err, &unconfirmed) ||
 		unconfirmed.id != operation || !strings.Contains(err.Error(), "scope_mismatch") {

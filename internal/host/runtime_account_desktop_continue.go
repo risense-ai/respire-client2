@@ -12,7 +12,7 @@ import (
 	"strings"
 )
 
-func (m *Manager) withPendingRuntimeLogin(ctx context.Context, transaction *hostTransaction,
+func (m *Manager) withPendingRuntimeLogin(ctx context.Context, transaction *hostTransaction, recoverStarting bool,
 	run func(string, string, runtimeAccountAdmission, runtimeAccountRecord) (json.RawMessage, error)) (raw json.RawMessage, err error) {
 	if transaction == nil || !transaction.RuntimeLogin || !hostOperationID.MatchString(transaction.OperationID) {
 		return nil, errors.New("原 Runtime 登录事务身份无效")
@@ -63,7 +63,7 @@ func (m *Manager) withPendingRuntimeLogin(ctx context.Context, transaction *host
 	}
 	var owner runtimeMaintenanceMarker
 	if json.Unmarshal(marker, &owner) != nil || owner.Schema != 1 || owner.Token != record.Token ||
-		owner.Phase != "Paused" {
+		(owner.Phase != "Paused" && !(recoverStarting && owner.Phase == "Starting")) {
 		return nil, errors.New("原 Runtime 登录操作需要恢复维护状态")
 	}
 	profile, _, candidate, err := runtimeLoginQueryScope(ctx, record)
@@ -71,7 +71,10 @@ func (m *Manager) withPendingRuntimeLogin(ctx context.Context, transaction *host
 		return nil, err
 	}
 	defer clear(candidate)
-	marker, err = m.claimPausedRuntimeLogin(ctx, record, marker, markerPath, profile)
+	if owner.Phase == "Starting" && (len(candidate) == 0 || owner.ExpectedProfile != profile) {
+		return nil, errors.New("原 Runtime 启动记录与已选账户的密钥不匹配")
+	}
+	marker, err = m.claimRuntimeLogin(ctx, record, marker, markerPath, profile)
 	if err != nil {
 		return nil, err
 	}
@@ -79,11 +82,11 @@ func (m *Manager) withPendingRuntimeLogin(ctx context.Context, transaction *host
 	return run(image, info.SHA256, runtimeAccountAdmission{Marker: marker, Record: recordBytes, Path: path}, record)
 }
 
-// Retain the original token when a new Client2 process queries the same Paused
-// login. A reused PID is distinct only when its native birth identity differs.
-func (m *Manager) claimPausedRuntimeLogin(ctx context.Context, record runtimeAccountRecord, original []byte, path, selected string) ([]byte, error) {
+// Keep the original login token when reclaiming maintenance. Replacing an
+// interrupted Starting marker invalidates the unused startup grant.
+func (m *Manager) claimRuntimeLogin(ctx context.Context, record runtimeAccountRecord, original []byte, path, selected string) ([]byte, error) {
 	var owner runtimeMaintenanceMarker
-	if json.Unmarshal(original, &owner) != nil || owner.Schema != 1 || owner.Phase != "Paused" ||
+	if json.Unmarshal(original, &owner) != nil || owner.Schema != 1 || (owner.Phase != "Paused" && owner.Phase != "Starting") ||
 		owner.Token != record.Token || (owner.ExpectedProfile != record.Source && owner.ExpectedProfile != selected) ||
 		owner.OwnerPID <= 0 || uint64(owner.OwnerPID) > uint64(^uint32(0)) || owner.OwnerBirth == "" {
 		return nil, errors.New("原 Runtime 登录维护身份无效")
@@ -93,7 +96,7 @@ func (m *Manager) claimPausedRuntimeLogin(ctx context.Context, record runtimeAcc
 		return nil, err
 	}
 	sameOwner := owner.OwnerPID == os.Getpid() && owner.OwnerBirth == birth
-	if sameOwner && owner.ExpectedProfile == selected {
+	if sameOwner && owner.Phase == "Paused" && owner.ExpectedProfile == selected {
 		return original, nil
 	}
 	if !sameOwner {
@@ -113,7 +116,7 @@ func (m *Manager) claimPausedRuntimeLogin(ctx context.Context, record runtimeAcc
 		return nil, err
 	}
 	owner.OwnerPID, owner.OwnerBirth = os.Getpid(), birth
-	owner.ExpectedProfile = selected
+	owner.Phase, owner.ExpectedProfile = "Paused", selected
 	next, err := json.Marshal(owner)
 	if err != nil {
 		return nil, err
@@ -125,7 +128,7 @@ func (m *Manager) claimPausedRuntimeLogin(ctx context.Context, record runtimeAcc
 }
 
 func (m *Manager) recoverDesktopRuntimeLogin(ctx context.Context, job Operation) (json.RawMessage, error) {
-	raw, err := m.withPendingRuntimeLogin(ctx, job.Transaction, func(image, digest string, admission runtimeAccountAdmission, record runtimeAccountRecord) (json.RawMessage, error) {
+	raw, err := m.withPendingRuntimeLogin(ctx, job.Transaction, true, func(image, digest string, admission runtimeAccountAdmission, record runtimeAccountRecord) (json.RawMessage, error) {
 		result, err := m.queryRuntimeLoginResult(ctx, image, digest, admission, record)
 		if err != nil {
 			return nil, err
@@ -245,7 +248,7 @@ func (m *Manager) continueDesktopRuntimeLogin(ctx context.Context, job Operation
 	if json.Unmarshal(job.Envelope, &envelope) != nil {
 		return nil, &unconfirmedError{id: job.ID, cause: errors.New("原 Runtime 登录输入回执无效")}
 	}
-	raw, err := m.withPendingRuntimeLogin(ctx, job.Transaction, func(image, digest string, admission runtimeAccountAdmission, _ runtimeAccountRecord) (json.RawMessage, error) {
+	raw, err := m.withPendingRuntimeLogin(ctx, job.Transaction, false, func(image, digest string, admission runtimeAccountAdmission, _ runtimeAccountRecord) (json.RawMessage, error) {
 		result, err := m.continueRuntimeLogin(ctx, image, digest, admission, envelope.Summary, supplement)
 		if err != nil {
 			return nil, err
