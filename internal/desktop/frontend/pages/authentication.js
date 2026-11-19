@@ -252,6 +252,10 @@ export function authenticationPanel(root, ctx, refresh) {
       return;
     }
     if (kind === "login" || kind === "register") {
+      if (ctx.desktop?.serverAddressError) {
+        notify(ctx.desktop.serverAddressError, true);
+        return;
+      }
       const title = kind === "login" ? "密码登录" : "注册账户";
       dialog({
         title,
@@ -259,7 +263,7 @@ export function authenticationPanel(root, ctx, refresh) {
           input(
             "addr",
             "服务器",
-            ctx.status?.summary?.server_addr || "https://api.rsrs.rs",
+            ctx.desktop?.serverAddress || "",
             { required: true },
           ) +
           input("user", "账户名称", "", { required: true }) +

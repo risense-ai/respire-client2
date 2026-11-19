@@ -65,7 +65,6 @@ const STEP_TITLES = {
   import: "导入已有会话",
 };
 
-const DEFAULT_SERVER = "https://api.rsrs.rs";
 
 // Two mutually exclusive install modes; one apply only ever runs the chosen
 // mode, and existing prompts/plugins on the machine are always kept.
@@ -308,7 +307,11 @@ export function createWizard(ctx) {
     if (state.accountPhase === "autosync") return renderAutosync(body);
     if (!connected()) return renderAccountOffline(body);
     const mode = state.accountMode;
-    const server = ctx.status?.summary?.server_addr || DEFAULT_SERVER;
+    if (ctx.desktop?.serverAddressError) {
+      body.innerHTML = frame("注册或登录", "", `<p class="form-error">${h(ctx.desktop.serverAddressError)}</p>`, backButton("sync"));
+      return;
+    }
+    const server = ctx.desktop?.serverAddress || "";
     body.innerHTML = frame(
       "注册或登录",
       "凭据通过 CLI 宿主 RPC 提交，不进入进程命令行或客户端设置。",

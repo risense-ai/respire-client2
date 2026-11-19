@@ -2,7 +2,6 @@ import {
   $,
   h,
   raw,
-  summary,
   rows,
   api,
   execute,
@@ -115,13 +114,12 @@ export function accounts(root, ctx) {
     const results = await Promise.allSettled([
       execute("account_list"),
       execute("space_list"),
-      execute("config"),
     ]);
     if (!root.isConnected) {
       loading = false;
       return;
     }
-    const [profileResult, spaceResult, configResult] = results;
+    const [profileResult, spaceResult] = results;
     if (profileResult.status === "fulfilled") {
       const profiles = rows(profileResult.value, "accounts");
       $("[data-accounts]", root).className = "";
@@ -136,14 +134,9 @@ export function accounts(root, ctx) {
         ? `<ul class="clean">${spaces.map((item) => `<li class="row"><div class="row-copy"><strong>${h(item.name)}</strong><small>${h(item.role || item.kind || "")}</small></div>${item.current ? '<span class="badge">当前</span>' : `<button data-space-use="${h(item.name)}">使用</button>`}${item.is_main || item.current ? "" : `<button class="danger" data-space-remove="${h(item.name)}">删除</button>`}</li>`).join("")}</ul>`
         : '<div class="empty">没有返回空间</div>';
     } else $("[data-spaces]", root).textContent = spaceResult.reason.message;
-    if (configResult.status === "fulfilled") {
-      $("[name=addr]", root).value =
-        summary(configResult.value).addr ||
-        ctx.status?.summary?.server_addr ||
-        "https://api.rsrs.rs";
-      $("[name=autosync]", root).checked =
-        ctx.status?.summary?.autosync === true;
-    } else notify(configResult.reason.message, true);
+    $("[name=addr]", root).value = ctx.desktop?.serverAddress || "";
+    $("[name=autosync]", root).checked = ctx.status?.summary?.autosync === true;
+    if (ctx.desktop?.serverAddressError) notify(ctx.desktop.serverAddressError, true);
     loading = false;
   }
   const commands = {

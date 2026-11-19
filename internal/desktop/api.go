@@ -123,6 +123,11 @@ func (d *desktop) handler(static http.Handler) http.Handler {
 			if autoErr != nil {
 				result.(map[string]any)["autostartError"] = autoErr.Error()
 			}
+			if address, addressErr := d.m.DeviceServerAddress(); addressErr != nil {
+				result.(map[string]any)["serverAddressError"] = addressErr.Error()
+			} else {
+				result.(map[string]any)["serverAddress"] = address
+			}
 		} else if r.Method == "POST" && r.Header.Get("X-Respire-Client") == "1" && strings.HasPrefix(r.Header.Get("Content-Type"), "application/json") {
 			// Preference keys are only shape-checked here; patchPreferences
 			// applies them, so actionInput must carry one JSON field per
