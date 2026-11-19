@@ -15,6 +15,10 @@ func configureCommand(cmd *exec.Cmd) {
 	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: windows.CREATE_NO_WINDOW}
 }
 
+func configureRuntimeCommand(cmd *exec.Cmd) {
+	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: windows.CREATE_NO_WINDOW | windows.CREATE_NEW_PROCESS_GROUP}
+}
+
 func verifyHostProcess(h HealthInfo) error {
 	handle, err := runtimeProcess(h)
 	if err != nil {

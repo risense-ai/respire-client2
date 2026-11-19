@@ -76,16 +76,11 @@ func (m *Manager) Start() error {
 	}
 	ctx, cancel = context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
-	if err = m.verifyInstalled(info); err != nil {
-		return err
-	}
-	// The one-shot command shares the CLI takeover lock and native credentials.
-	// Runtime itself owns the listener after the command exits.
-	_, err = m.hostOperation(ctx, []string{"runtime", "start"}, "", "runtime.start", "")
+	h, err = m.startDetached(ctx, info)
 	if err != nil {
 		return err
 	}
-	return m.requireActive(info)
+	return m.unlockIfNeeded(h)
 }
 
 func (m *Manager) requireActive(info InstalledRuntime) error {
@@ -95,6 +90,13 @@ func (m *Manager) requireActive(info InstalledRuntime) error {
 	if err != nil {
 		return err
 	}
+	if err := m.verifySelectedHealth(h, info); err != nil {
+		return err
+	}
+	return m.unlockIfNeeded(h)
+}
+
+func (m *Manager) verifySelectedHealth(h HealthInfo, info InstalledRuntime) error {
 	if h.Version != info.Version || !samePath(h.Exe, filepath.Join(m.runtimeDir(info.Version), runtimeBinary())) ||
 		!samePath(h.InstallationRoot, m.DataRoot) {
 		return errors.New("启动后的 Runtime 安装目录、身份或版本不匹配")
@@ -102,7 +104,7 @@ func (m *Manager) requireActive(info InstalledRuntime) error {
 	if err := verifyHostProcess(h); err != nil {
 		return fmt.Errorf("无法确认 Runtime 进程身份: %w", err)
 	}
-	return m.unlockIfNeeded(h)
+	return nil
 }
 
 // The CLI owns native credentials. Client2 asks it to unlock this existing owner;
@@ -110,6 +112,17 @@ func (m *Manager) requireActive(info InstalledRuntime) error {
 func (m *Manager) unlockIfNeeded(health HealthInfo) error {
 	if health.StoreReady || health.CredentialState != "required" {
 		return nil
+	}
+	if samePath(health.InstallationRoot, m.DataRoot) && filepath.IsAbs(health.DataDir) {
+		relative, err := filepath.Rel(m.DataRoot, health.DataDir)
+		if err == nil && filepath.IsLocal(relative) {
+			// An accountless Runtime can serve its login and status endpoints while locked.
+			if _, err := os.Lstat(filepath.Join(health.DataDir, "session.json")); errors.Is(err, os.ErrNotExist) {
+				return nil
+			} else if err != nil {
+				return err
+			}
+		}
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
