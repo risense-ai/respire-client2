@@ -54,7 +54,7 @@ func (m *Manager) continueRuntimeLoginCode(ctx context.Context, imagePath, image
 	if err != nil {
 		return runtimeLoginResult{}, err
 	}
-	expected, err := loginCustodyMetadata(record, account, backend, &params.Challenge.Digest)
+	expected, err := loginCustodyMetadata(record, account, backend, &params.Challenge.Digest, nil)
 	if err != nil {
 		return runtimeLoginResult{}, err
 	}
@@ -87,8 +87,11 @@ func (m *Manager) continueRuntimeLoginCode(ctx context.Context, imagePath, image
 	if err != nil {
 		return runtimeLoginResult{}, err
 	}
-	if result.Handoff != nil && result.Handoff.Kind == "challenge" {
+	if result.Handoff == nil {
+		return result, nil
+	}
+	if result.Handoff.Kind == "challenge" {
 		return runtimeLoginResult{}, &unconfirmedError{id: record.OperationID, cause: errors.New("Runtime unexpectedly replaced the submitted login challenge")}
 	}
-	return result, nil
+	return m.acknowledgeRuntimeLoginCandidate(ctx, control, admission, record, params, *result.Handoff)
 }

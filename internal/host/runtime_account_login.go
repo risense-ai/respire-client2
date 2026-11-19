@@ -23,9 +23,12 @@ type runtimeLoginAuthorization struct {
 }
 
 type runtimeLoginContinuation struct {
-	MigrateLocal    bool `json:"migrate_local"`
-	MigrateVault    bool `json:"migrate_vault"`
-	OfferLocalMerge bool `json:"offer_local_merge"`
+	MigrateLocal    bool    `json:"migrate_local"`
+	MigrateVault    bool    `json:"migrate_vault"`
+	OfferLocalMerge bool    `json:"offer_local_merge"`
+	LegacyPassword  *string `json:"legacy_password,omitempty"`
+	AccountSecret   *string `json:"account_secret,omitempty"`
+	SecretKey       *string `json:"secret_key,omitempty"`
 }
 
 type runtimeLoginMaterial struct {
@@ -51,6 +54,7 @@ type runtimeLoginParams struct {
 	Continuation  runtimeLoginContinuation  `json:"continuation"`
 	Material      runtimeLoginMaterial      `json:"material"`
 	Challenge     *runtimeLoginChallenge    `json:"challenge,omitempty"`
+	CustodyAck    *runtimeLoginCustodyAck   `json:"custody_ack,omitempty"`
 }
 
 // The coordinator retains takeover. The original session is rechecked before
@@ -115,10 +119,10 @@ type runtimeLoginCustody struct {
 	Slots     map[string]string `json:"slots"`
 }
 
-func loginCustodyMetadata(record runtimeAccountRecord, account, backend string, digest *string) ([]byte, error) {
+func loginCustodyMetadata(record runtimeAccountRecord, account, backend string, digest *string, candidate json.RawMessage) ([]byte, error) {
 	return json.Marshal(map[string]any{
 		"operation_id": record.OperationID, "root": record.Root, "source": record.Source, "account": account, "backend": backend,
-		"candidate": nil, "challenge_sha256": digest, "rolled_back": false, "slots_removed": false, "retired": false,
+		"candidate": candidate, "challenge_sha256": digest, "rolled_back": false, "slots_removed": false, "retired": false,
 	})
 }
 
@@ -134,7 +138,7 @@ func persistInitialRuntimeLogin(ctx context.Context, record runtimeAccountRecord
 	if params.Material.Account != account || params.Material.Backend != backend || params.Challenge != nil {
 		return errors.New("Runtime login credential slot differs from its original operation")
 	}
-	metadata, err := loginCustodyMetadata(record, account, backend, nil)
+	metadata, err := loginCustodyMetadata(record, account, backend, nil, nil)
 	if err != nil {
 		return err
 	}
@@ -156,7 +160,7 @@ func persistRuntimeLoginChallenge(ctx context.Context, record runtimeAccountReco
 	}
 	path := loginCustodyPath(record)
 	account, backend := params.Material.Account, params.Material.Backend
-	expectedMetadata, err := loginCustodyMetadata(record, account, backend, nil)
+	expectedMetadata, err := loginCustodyMetadata(record, account, backend, nil, nil)
 	if err != nil {
 		return err
 	}
@@ -181,7 +185,7 @@ func persistRuntimeLoginChallenge(ctx context.Context, record runtimeAccountReco
 		return err
 	}
 	defer clear(secrets)
-	metadata, err := loginCustodyMetadata(record, account, backend, handoff.ChallengeDigest)
+	metadata, err := loginCustodyMetadata(record, account, backend, handoff.ChallengeDigest, nil)
 	if err != nil {
 		return err
 	}
@@ -226,6 +230,9 @@ func (m *Manager) sendInitialRuntimeLogin(ctx context.Context, control runtimeAc
 			return runtimeLoginResult{}, &unconfirmedError{id: record.OperationID, cause: err}
 		}
 		result.Handoff = nil
+	}
+	if result.Handoff != nil {
+		return m.acknowledgeRuntimeLoginCandidate(ctx, control, *admission, record, params, *result.Handoff)
 	}
 	return result, nil
 }

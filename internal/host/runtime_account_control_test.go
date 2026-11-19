@@ -189,6 +189,7 @@ func TestPublishedRuntimeRequiresExactClient2Maintenance(t *testing.T) {
 		t.Fatal("Client2 accepted stale maintenance bytes")
 	}
 	password := "isolated fixture"
+	super := "isolated recovery fixture"
 	authorization := runtimeLoginAuthorization{Kind: "password", Password: &password}
 	// Contradictory options exercise admission without contacting a server.
 	continuation := runtimeLoginContinuation{MigrateLocal: true, MigrateVault: true}
@@ -196,13 +197,13 @@ func TestPublishedRuntimeRequiresExactClient2Maintenance(t *testing.T) {
 	if err := os.WriteFile(session, []byte(`{"user":"changed-after-admission"}`), 0600); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := manager.prepareInitialRuntimeLogin(ctx, image, hash, admission, authorization, continuation, nil, nil, nil); err == nil {
+	if _, _, err := manager.prepareInitialRuntimeLogin(ctx, image, hash, admission, authorization, continuation, &super, nil, nil); err == nil {
 		t.Fatal("changed profile admitted the original login")
 	}
 	if err := os.Remove(session); err != nil {
 		t.Fatal(err)
 	}
-	control, params, err := manager.prepareInitialRuntimeLogin(ctx, image, hash, admission, authorization, continuation, nil, nil, nil)
+	control, params, err := manager.prepareInitialRuntimeLogin(ctx, image, hash, admission, authorization, continuation, &super, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -213,32 +214,34 @@ func TestPublishedRuntimeRequiresExactClient2Maintenance(t *testing.T) {
 	}
 	slot := "login-control:" + params.Material.Account
 	store := nativeRuntimeCredentialStore(ctx)
-	t.Cleanup(func() {
-		saved, err := store.readSlot(params.Material.Backend, "rsrs", slot, false)
-		if err != nil {
-			t.Error(err)
-			return
-		}
-		if saved == nil {
-			return
-		}
-		var cleanup *exec.Cmd
-		switch runtime.GOOS {
-		case "windows":
-			cleanup = exec.Command("cmdkey.exe", "/delete:"+slot+".rsrs")
-		case "darwin":
-			cleanup = exec.Command("security", "delete-generic-password", "-s", "rsrs", "-a", slot)
-		case "linux":
-			cleanup = exec.Command("secret-tool", "clear", "service", "rsrs", "username", slot, "target", "default")
-		}
-		if err := cleanup.Run(); err != nil {
-			t.Errorf("remove isolated login fixture: %v", err)
-			return
-		}
-		if still, err := store.readSlot(params.Material.Backend, "rsrs", slot, false); err != nil || still != nil {
-			t.Errorf("isolated login fixture credential was not removed: %v", err)
-		}
-	})
+	for _, slot := range []string{slot, "super:" + params.Material.Account, "pass:" + params.Material.Account} {
+		t.Cleanup(func() {
+			saved, err := store.readSlot(params.Material.Backend, "rsrs", slot, false)
+			if err != nil {
+				t.Error(err)
+				return
+			}
+			if saved == nil {
+				return
+			}
+			var cleanup *exec.Cmd
+			switch runtime.GOOS {
+			case "windows":
+				cleanup = exec.Command("cmdkey.exe", "/delete:"+slot+".rsrs")
+			case "darwin":
+				cleanup = exec.Command("security", "delete-generic-password", "-s", "rsrs", "-a", slot)
+			case "linux":
+				cleanup = exec.Command("secret-tool", "clear", "service", "rsrs", "username", slot, "target", "default")
+			}
+			if err := cleanup.Run(); err != nil {
+				t.Errorf("remove isolated login fixture: %v", err)
+				return
+			}
+			if still, err := store.readSlot(params.Material.Backend, "rsrs", slot, false); err != nil || still != nil {
+				t.Errorf("isolated login fixture credential was not removed: %v", err)
+			}
+		})
+	}
 	result, err := manager.sendInitialRuntimeLogin(ctx, control, params, &admission)
 	if _, duplicateErr := manager.sendInitialRuntimeLogin(ctx, control, params, &admission); duplicateErr == nil {
 		t.Fatal("sent operation was readmitted")
@@ -319,5 +322,35 @@ func TestPublishedRuntimeRequiresExactClient2Maintenance(t *testing.T) {
 	reloaded, err := store.readSlot(params.Material.Backend, "rsrs", slot, false)
 	if err != nil || reloaded == nil || *reloaded != *saved {
 		t.Fatalf("transient verification code was retained in the original private custody: %v", err)
+	}
+	sessionCandidate, err := json.Marshal(map[string]any{
+		"user": intent.User, "addr": intent.Server, "vault_version": 4,
+		"keyring_account": params.Material.Account, "keyring_backend": params.Material.Backend,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var pretty bytes.Buffer
+	if err := json.Indent(&pretty, sessionCandidate, "", "  "); err != nil {
+		t.Fatal(err)
+	}
+	digest := controlDigest(pretty.Bytes())
+	candidate := runtimeLoginHandoff{Kind: "credentials", CandidateDigest: &digest, Session: sessionCandidate, Slots: []string{"pass", "super"}}
+	if _, _, err := runtimeLoginCandidateSlots(candidate, params); err != nil {
+		t.Fatal(err)
+	}
+	wrong := candidate
+	wrong.Slots = []string{"super"}
+	if _, _, err := runtimeLoginCandidateSlots(wrong, params); err == nil {
+		t.Fatal("incomplete slot plan was accepted")
+	}
+	if _, err := manager.acknowledgeRuntimeLoginCandidate(ctx, control, admission, record, custody.Request, candidate); !errors.As(err, &unconfirmed) || unconfirmed.id != operation || !strings.Contains(err.Error(), "account_outcome_unknown") {
+		t.Fatalf("Runtime did not receive candidate acknowledgement before rejecting the offline fixture: %v", err)
+	}
+	for name, want := range map[string]string{"super": super, "pass": password} {
+		value, err := store.readSlot(params.Material.Backend, "rsrs", name+":"+params.Material.Account, true)
+		if err != nil || value == nil || *value != want {
+			t.Fatalf("verified native slot %s was not retained: %v", name, err)
+		}
 	}
 }
