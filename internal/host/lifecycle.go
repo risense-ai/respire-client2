@@ -107,8 +107,6 @@ func (m *Manager) verifySelectedHealth(h HealthInfo, info InstalledRuntime) erro
 	return nil
 }
 
-// The CLI owns native credentials. Client2 asks it to unlock this existing owner;
-// private keys never enter browser state, process arguments or Runtime files.
 func (m *Manager) unlockIfNeeded(health HealthInfo) error {
 	if health.StoreReady || health.CredentialState != "required" {
 		return nil
@@ -126,8 +124,7 @@ func (m *Manager) unlockIfNeeded(health HealthInfo) error {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	_, err := m.hostOperation(ctx, []string{"runtime", "unlock"}, "", "runtime.unlock", "")
-	return err
+	return m.unlockAccountRuntime(ctx, health)
 }
 
 func (m *Manager) Stop(ownedOnly bool) error {
