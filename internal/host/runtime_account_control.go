@@ -44,54 +44,98 @@ func controlUUID() (string, error) {
 
 func controlDigest(data []byte) string { return fmt.Sprintf("%x", sha256.Sum256(data)) }
 
-func (m *Manager) readRuntimeLoginRecovery(ctx context.Context, owner HealthInfo, path string, original []byte, session runtimeSession) error {
+type runtimeControlBinding struct {
+	InstallationRoot  string  `json:"installation_root"`
+	Profile           string  `json:"profile"`
+	LaunchID          string  `json:"launch_id"`
+	ExpectedAccountID *string `json:"expected_account_id"`
+}
+
+type runtimeAccountControl struct {
+	binding runtimeControlBinding
+	image   string
+	port    uint64
+	grant   map[string]any
+}
+
+func (m *Manager) prepareRuntimeAccountControl(ctx context.Context, imagePath, imageDigest, profilePath string, expectedAccount *string) (runtimeAccountControl, error) {
+	var control runtimeAccountControl
 	root, err := canonicalSessionDirectory(m.DataRoot)
 	if err != nil {
-		return err
+		return control, err
 	}
-	profile, err := canonicalSessionDirectory(filepath.Dir(path))
+	profile, err := canonicalSessionDirectory(profilePath)
 	if err != nil {
-		return err
+		return control, err
 	}
-	image, err := canonicalSessionDirectory(owner.Exe)
+	image, err := canonicalSessionDirectory(imagePath)
 	if err != nil {
-		return err
+		return control, err
 	}
 	actualImage, err := fileHash(image)
 	if err != nil {
-		return err
+		return control, err
 	}
-	if actualImage != owner.ImageSHA256 {
-		return errors.New("Runtime control image changed")
+	if actualImage != imageDigest {
+		return control, errors.New("Runtime control image changed")
 	}
 	address, err := url.Parse(m.Endpoint)
-	if err != nil {
-		return err
+	if err != nil || address.Scheme != "http" || address.Hostname() != "127.0.0.1" ||
+		address.User != nil || address.Path != "" || address.RawQuery != "" || address.Fragment != "" {
+		return control, errors.New("Runtime control requires the local loopback endpoint")
 	}
 	port, err := strconv.ParseUint(address.Port(), 10, 16)
 	if err != nil || port == 0 {
-		return errors.New("Invalid Runtime control port")
+		return control, errors.New("Invalid Runtime control port")
 	}
 	birth, err := hostControlBirth(ctx)
 	if err != nil {
-		return err
+		return control, err
 	}
 	grantID, err := controlUUID()
 	if err != nil {
-		return err
+		return control, err
 	}
-	requestID, err := controlUUID()
-	if err != nil {
-		return err
-	}
-	identity := map[string]any{"session_sha256": controlDigest(original)}
 	grantAccount := controlDigest([]byte(profile))
-	var expectedAccount any
+	if expectedAccount != nil {
+		if !validHash(*expectedAccount) {
+			return control, errors.New("Invalid Runtime control account binding")
+		}
+		grantAccount = *expectedAccount
+	}
+	var registrationDigest any
+	registration, err := readCredentialConfig(filepath.Join(root, "runtime", "autostart", "registration.json"), controlFrameLimit)
+	if err == nil {
+		registrationDigest = controlDigest(registration)
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return control, err
+	}
+	issued := time.Now().UnixMilli()
+	return runtimeAccountControl{
+		binding: runtimeControlBinding{
+			InstallationRoot: root, Profile: profile, LaunchID: grantID, ExpectedAccountID: expectedAccount,
+		},
+		image: image,
+		port:  port,
+		grant: map[string]any{
+			"schema_version": 1, "protocol_version": 1, "nonce": grantID, "instance_id": grantID,
+			"installation_root": root, "installation_id": controlDigest([]byte(root)), "profile": profile,
+			"account_id": grantAccount, "sync_generation": 0, "image_path": image, "image_sha256": imageDigest,
+			"supervisor_pid": os.Getpid(), "supervisor_birth": birth, "managed_id": nil,
+			"registration_sha256": registrationDigest, "maintenance": nil, "port": port,
+			"issued_at_ms": issued, "expires_at_ms": issued + 60_000,
+		},
+	}, nil
+}
+
+func (m *Manager) readRuntimeLoginRecovery(ctx context.Context, owner HealthInfo, path string, original []byte, session runtimeSession) error {
+	identity := map[string]any{"session_sha256": controlDigest(original)}
+	var expectedAccount *string
 	if session.User != "" {
-		grantAccount = controlDigest([]byte(session.User))
-		expectedAccount = grantAccount
+		account := controlDigest([]byte(session.User))
+		expectedAccount = &account
 		identity["kind"] = "bound"
-		identity["account_id"] = grantAccount
+		identity["account_id"] = account
 	} else {
 		var unbound struct {
 			OperationID string `json:"auth_operation_id"`
@@ -102,31 +146,22 @@ func (m *Manager) readRuntimeLoginRecovery(ctx context.Context, owner HealthInfo
 		identity["kind"] = "unbound"
 		identity["operation_id"] = unbound.OperationID
 	}
-	var registrationDigest any
-	registration, err := readCredentialConfig(filepath.Join(m.DataRoot, "runtime", "autostart", "registration.json"), controlFrameLimit)
-	if err == nil {
-		registrationDigest = controlDigest(registration)
-	} else if !errors.Is(err, os.ErrNotExist) {
+	control, err := m.prepareRuntimeAccountControl(ctx, owner.Exe, owner.ImageSHA256, filepath.Dir(path), expectedAccount)
+	if err != nil {
 		return err
 	}
-	issued := time.Now().UnixMilli()
-	grant := map[string]any{
-		"schema_version": 1, "protocol_version": 1, "nonce": grantID, "instance_id": grantID,
-		"installation_root": root, "installation_id": controlDigest([]byte(root)), "profile": profile,
-		"account_id": grantAccount, "sync_generation": 0, "image_path": image, "image_sha256": owner.ImageSHA256,
-		"supervisor_pid": os.Getpid(), "supervisor_birth": birth, "managed_id": nil,
-		"registration_sha256": registrationDigest, "maintenance": nil, "port": port,
-		"issued_at_ms": issued, "expires_at_ms": issued + 60_000,
+	requestID, err := controlUUID()
+	if err != nil {
+		return err
 	}
 	params, err := json.Marshal(map[string]any{
-		"schema_version": 1, "identity": identity,
-		"binding": map[string]any{"installation_root": root, "profile": profile, "launch_id": grantID, "expected_account_id": expectedAccount},
+		"schema_version": 1, "identity": identity, "binding": control.binding,
 	})
 	if err != nil {
 		return err
 	}
 	request := runtimeControlRequest{V: 1, ID: requestID, Method: "control.auth.recovery_status", Args: []string{string(params)}}
-	reply, err := m.exchangeRuntimeControl(ctx, owner.Exe, port, grant, request)
+	reply, err := m.exchangeRuntimeControl(ctx, control.image, control.port, control.grant, request)
 	if err != nil {
 		return err
 	}
