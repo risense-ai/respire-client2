@@ -69,6 +69,19 @@ type runtimeMaintenanceMarker struct {
 	OwnerBirth      string `json:"owner_birth"`
 }
 
+func (m *Manager) runtimeAccountEndpoint() (string, uint64, error) {
+	address, err := url.Parse(m.Endpoint)
+	if err != nil || address.Scheme != "http" || address.Hostname() != "127.0.0.1" ||
+		address.User != nil || address.Path != "" || address.RawQuery != "" || address.Fragment != "" {
+		return "", 0, errors.New("Runtime control requires the local loopback endpoint")
+	}
+	port, err := strconv.ParseUint(address.Port(), 10, 16)
+	if err != nil || port == 0 {
+		return "", 0, errors.New("Invalid Runtime control port")
+	}
+	return address.Host, port, nil
+}
+
 func (m *Manager) prepareRuntimeAccountControl(ctx context.Context, imagePath, imageDigest, profilePath string,
 	expectedAccount *string, ownedMaintenance []byte) (runtimeAccountControl, error) {
 	var control runtimeAccountControl
@@ -91,14 +104,9 @@ func (m *Manager) prepareRuntimeAccountControl(ctx context.Context, imagePath, i
 	if actualImage != imageDigest {
 		return control, errors.New("Runtime control image changed")
 	}
-	address, err := url.Parse(m.Endpoint)
-	if err != nil || address.Scheme != "http" || address.Hostname() != "127.0.0.1" ||
-		address.User != nil || address.Path != "" || address.RawQuery != "" || address.Fragment != "" {
-		return control, errors.New("Runtime control requires the local loopback endpoint")
-	}
-	port, err := strconv.ParseUint(address.Port(), 10, 16)
-	if err != nil || port == 0 {
-		return control, errors.New("Invalid Runtime control port")
+	_, port, err := m.runtimeAccountEndpoint()
+	if err != nil {
+		return control, err
 	}
 	birth, err := hostControlBirth(ctx)
 	if err != nil {
@@ -123,7 +131,7 @@ func (m *Manager) prepareRuntimeAccountControl(ctx context.Context, imagePath, i
 		return control, err
 	}
 	maintenancePath := filepath.Join(root, "runtime", "autostart", "maintenance.json")
-	markerBytes, err := readCredentialConfig(maintenancePath, 16*1024)
+	markerBytes, err := readCredentialConfig(maintenancePath, runtimeMaintenanceLimit)
 	var maintenance any
 	if ownedMaintenance == nil {
 		if !errors.Is(err, os.ErrNotExist) {
@@ -139,15 +147,9 @@ func (m *Manager) prepareRuntimeAccountControl(ctx context.Context, imagePath, i
 		if !bytes.Equal(markerBytes, ownedMaintenance) {
 			return control, errors.New("Runtime account maintenance changed")
 		}
-		coordinator := "host-" + controlDigest([]byte(root))
-		if registrationDigest != nil {
-			var record struct {
-				ID string `json:"id"`
-			}
-			if json.Unmarshal(registration, &record) != nil || record.ID == "" {
-				return control, errors.New("Invalid Runtime registration coordinator")
-			}
-			coordinator = record.ID
+		coordinator, err := runtimeRegistrationCoordinator(root, registration)
+		if err != nil {
+			return control, err
 		}
 		var marker runtimeMaintenanceMarker
 		if json.Unmarshal(markerBytes, &marker) != nil || marker.Schema != 1 ||

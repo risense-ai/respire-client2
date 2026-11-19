@@ -25,6 +25,14 @@ func canonicalSessionDirectory(path string) (string, error) {
 }
 
 func publishSessionFile(from, to string) error {
+	return moveDurableRuntimeFile(from, to, windows.MOVEFILE_REPLACE_EXISTING)
+}
+
+func publishFreshRuntimeFile(from, to string) error {
+	return moveDurableRuntimeFile(from, to, 0)
+}
+
+func moveDurableRuntimeFile(from, to string, flags uint32) error {
 	source, err := windows.UTF16PtrFromString(from)
 	if err != nil {
 		return err
@@ -33,5 +41,5 @@ func publishSessionFile(from, to string) error {
 	if err != nil {
 		return err
 	}
-	return windows.MoveFileEx(source, destination, windows.MOVEFILE_REPLACE_EXISTING|windows.MOVEFILE_WRITE_THROUGH)
+	return windows.MoveFileEx(source, destination, flags|windows.MOVEFILE_WRITE_THROUGH)
 }

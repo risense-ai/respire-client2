@@ -83,36 +83,52 @@ func TestPublishedRuntimeRequiresExactClient2Maintenance(t *testing.T) {
 		t.Fatal(err)
 	}
 	manager := Manager{DataRoot: root, Endpoint: "http://" + endpoint.Addr().String()}
+	defer endpoint.Close()
+	ctx := context.Background()
+	const issuer = "2.0.0-dev.20"
+	path := filepath.Join(root, "runtime", "autostart", "maintenance.json")
+	if _, lock, err := manager.beginOfflineRuntimeAccountMaintenance(ctx, root, issuer); err == nil {
+		lock.Close()
+		t.Fatal("maintenance started while the Runtime port was in use")
+	}
+	if _, err := os.Lstat(path); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("failed admission left a maintenance record: %v", err)
+	}
 	if err := endpoint.Close(); err != nil {
 		t.Fatal(err)
 	}
-	lock, err := manager.lockRuntimeTakeover(context.Background())
+	library, err := lockRuntimeDatabase(ctx, root, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, second, beginErr := manager.beginOfflineRuntimeAccountMaintenance(ctx, root, issuer)
+	if err := library.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if beginErr == nil {
+		second.Close()
+		t.Fatal("maintenance started while another owner held the library lock")
+	}
+	if _, err := os.Lstat(path); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("failed library lock check left a maintenance record: %v", err)
+	}
+	marker, lock, err := manager.beginOfflineRuntimeAccountMaintenance(ctx, root, issuer)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer lock.Close()
-	directory := filepath.Join(root, "runtime", "autostart")
-	if err := os.Mkdir(directory, 0700); err != nil {
-		t.Fatal(err)
+	if _, second, err := manager.beginOfflineRuntimeAccountMaintenance(ctx, root, issuer); err == nil {
+		second.Close()
+		t.Fatal("second coordinator acquired the installation takeover lock")
 	}
-	birth, err := hostControlBirth(context.Background())
-	if err != nil {
-		t.Fatal(err)
+	if _, err := manager.publishPausedRuntimeMaintenance(ctx, root, issuer); err == nil {
+		t.Fatal("an existing maintenance record was overwritten")
+	}
+	if current, err := os.ReadFile(path); err != nil || !bytes.Equal(current, marker) {
+		t.Fatalf("original maintenance record was not retained: %v", err)
 	}
 	const operation = "00000000-0000-4000-8000-000000000001"
-	path := filepath.Join(directory, "maintenance.json")
-	marker, err := json.Marshal(runtimeMaintenanceMarker{
-		Schema: 1, ID: "host-" + controlDigest([]byte(root)), Token: operation,
-		Phase: "Paused", ExpectedProfile: root, ExpectedVersion: "2.0.0-dev.20",
-		OwnerPID: os.Getpid(), OwnerBirth: birth,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(path, marker, 0600); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := manager.prepareRuntimeAccountControl(context.Background(), image, hash, root, nil, nil); err == nil {
+	if _, err := manager.prepareRuntimeAccountControl(ctx, image, hash, root, nil, nil); err == nil {
 		t.Fatal("Client2 accepted a maintenance marker without the original ownership bytes")
 	}
 	changed := append(bytes.Clone(marker), '\n')
