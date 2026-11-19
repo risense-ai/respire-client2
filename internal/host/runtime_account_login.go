@@ -126,31 +126,40 @@ func persistInitialRuntimeLogin(ctx context.Context, record runtimeAccountRecord
 // Accept only the original operation. Persist and read back custody before the
 // send flag permits the private Runtime exchange.
 func (m *Manager) sendInitialRuntimeLogin(ctx context.Context, control runtimeAccountControl, params runtimeLoginParams,
-	admission *runtimeAccountAdmission) (rpcResponse, error) {
+	admission *runtimeAccountAdmission) (runtimeLoginResult, error) {
 	var record runtimeAccountRecord
 	if json.Unmarshal(admission.Record, &record) != nil || record.Sent ||
 		!hostOperationID.MatchString(record.OperationID) || record.User != params.User || record.Server != params.Server ||
 		!reflect.DeepEqual(record.Original.Identity, params.Identity) || !reflect.DeepEqual(control.binding, params.Binding) ||
 		control.binding.InstallationRoot != record.Root || control.binding.Profile != record.Source {
-		return rpcResponse{}, errors.New("Runtime login intent no longer matches its original operation")
+		return runtimeLoginResult{}, errors.New("Runtime login intent no longer matches its original operation")
 	}
 	requestID, err := controlUUID()
 	if err != nil {
-		return rpcResponse{}, err
+		return runtimeLoginResult{}, err
 	}
 	argument, err := json.Marshal(params)
 	if err != nil {
-		return rpcResponse{}, err
+		return runtimeLoginResult{}, err
 	}
 	defer clear(argument)
 	if err := persistInitialRuntimeLogin(ctx, record, params, json.RawMessage(argument)); err != nil {
-		return rpcResponse{}, err
+		return runtimeLoginResult{}, err
 	}
 	if err := admission.markLoginSent(); err != nil {
-		return rpcResponse{}, err
+		return runtimeLoginResult{}, err
 	}
-	return m.exchangeRuntimeControl(ctx, control.image, control.port, control.grant, runtimeControlRequest{
+	reply, err := m.exchangeRuntimeControl(ctx, control.image, control.port, control.grant, runtimeControlRequest{
 		V: 1, ID: requestID, Method: "control.auth.login", Args: []string{string(argument)},
 		OperationID: record.OperationID, IdempotencyKey: record.OperationID,
 	})
+	if err != nil {
+		return runtimeLoginResult{}, err
+	}
+	defer clear(reply.Envelope)
+	result, err := readRuntimeLoginResult(reply, record)
+	if err != nil {
+		return runtimeLoginResult{}, &unconfirmedError{id: record.OperationID, cause: err}
+	}
+	return result, nil
 }

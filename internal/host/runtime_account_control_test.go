@@ -62,6 +62,53 @@ func TestRuntimeAuthSessionIdentity(t *testing.T) {
 	}
 }
 
+func TestRuntimeLoginReceiptBindsPrivateChallenge(t *testing.T) {
+	record := runtimeAccountRecord{
+		OperationID: "00000000-0000-4000-8000-000000000001",
+		Source:      t.TempDir(),
+		User:        "fixture",
+		Server:      "https://respire.example.invalid/",
+	}
+	const challenge = "private challenge fixture"
+	digest := controlDigest([]byte(challenge))
+	decode := func(operation, digest string, inputs []string) (runtimeLoginResult, error) {
+		t.Helper()
+		summary := map[string]any{
+			"receipt": map[string]any{
+				"operation_id": operation, "outcome": "awaiting_input", "source_profile": record.Source,
+				"login": map[string]any{"user": record.User, "addr": strings.TrimSuffix(record.Server, "/"), "required_inputs": inputs},
+			},
+			"handoff": map[string]any{"kind": "challenge", "payload": challenge, "sha256": digest},
+		}
+		raw, err := json.Marshal(map[string]any{"command": "auth-account", "status": "pending", "summary": summary})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return readRuntimeLoginResult(rpcResponse{Envelope: raw}, record)
+	}
+	result, err := decode(record.OperationID, digest, []string{"totp"})
+	if err != nil || result.Handoff == nil || result.Handoff.Challenge == nil || *result.Handoff.Challenge != challenge {
+		t.Fatalf("valid challenge did not reach the private coordinator: %v", err)
+	}
+	public, err := json.Marshal(result.Receipt)
+	if err != nil || bytes.Contains(public, []byte(challenge)) {
+		t.Fatalf("account receipt contains the private challenge: %v", err)
+	}
+	for _, test := range []struct {
+		operation, digest string
+		inputs            []string
+	}{
+		{"00000000-0000-4000-8000-000000000002", digest, []string{"totp"}},
+		{record.OperationID, strings.Repeat("0", 64), []string{"totp"}},
+		{record.OperationID, digest, []string{"totp", "totp"}},
+		{record.OperationID, digest, []string{"host_credentials"}},
+	} {
+		if _, err := decode(test.operation, test.digest, test.inputs); err == nil {
+			t.Fatal("invalid challenge accepted")
+		}
+	}
+}
+
 func TestPublishedRuntimeRequiresExactClient2Maintenance(t *testing.T) {
 	image := os.Getenv("RESPIRE_NATIVE_ACCOUNT_RUNTIME")
 	if image == "" {
@@ -192,14 +239,14 @@ func TestPublishedRuntimeRequiresExactClient2Maintenance(t *testing.T) {
 			t.Errorf("isolated login fixture credential was not removed: %v", err)
 		}
 	})
-	reply, err := manager.sendInitialRuntimeLogin(ctx, control, params, &admission)
+	result, err := manager.sendInitialRuntimeLogin(ctx, control, params, &admission)
 	if _, duplicateErr := manager.sendInitialRuntimeLogin(ctx, control, params, &admission); duplicateErr == nil {
 		t.Fatal("sent operation was readmitted")
 	}
 	var unconfirmed *unconfirmedError
 	if !errors.As(err, &unconfirmed) || unconfirmed.id != operation ||
-		reply.Code != "account_outcome_unknown" || !strings.Contains(reply.Error, "local import and explicit vault migration are separate operations") {
-		t.Fatalf("Runtime did not accept the exact Paused authorization and reject invalid login intent: %v (%s)", err, reply.Error)
+		!strings.Contains(err.Error(), "account_outcome_unknown") || result.Receipt.OperationID != "" || result.Handoff != nil {
+		t.Fatalf("Runtime did not accept the exact Paused authorization and reject invalid login intent: %v", err)
 	}
 	saved, credentialErr := store.readSlot(params.Material.Backend, "rsrs", slot, false)
 	if credentialErr != nil || saved == nil {
