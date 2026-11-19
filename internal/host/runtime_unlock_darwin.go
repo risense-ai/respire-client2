@@ -41,7 +41,7 @@ import (
 )
 
 func (m *Manager) unlockAccountRuntime(ctx context.Context, health HealthInfo) error {
-	return m.unlockNativeRuntime(ctx, health, nativeHostCredentialStore())
+	return m.unlockNativeRuntime(ctx, health, nativeRuntimeCredentialStore(ctx))
 }
 
 func readSystemCredential(service, account string) (*string, error) {

@@ -9,7 +9,9 @@ import (
 	"errors"
 	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -85,7 +87,10 @@ func TestPublishedRuntimeRequiresExactClient2Maintenance(t *testing.T) {
 	defer endpoint.Close()
 	ctx := context.Background()
 	const issuer = "2.0.0-dev.20"
-	const operation = "00000000-0000-4000-8000-000000000001"
+	operation, err := controlUUID()
+	if err != nil {
+		t.Fatal(err)
+	}
 	intent := runtimeLoginIntent{OperationID: operation, User: "isolated-client2", Server: "https://respire.example.invalid"}
 	path := filepath.Join(root, "runtime", "autostart", "maintenance.json")
 	if _, lock, err := manager.beginOfflineRuntimeAccountMaintenance(ctx, root, issuer, intent); err == nil {
@@ -159,6 +164,34 @@ func TestPublishedRuntimeRequiresExactClient2Maintenance(t *testing.T) {
 	if _, err := manager.sendInitialRuntimeLogin(ctx, control, changedIntent, &admission); err == nil {
 		t.Fatal("changed account intent was sent")
 	}
+	slot := "login-control:" + params.Material.Account
+	store := nativeRuntimeCredentialStore(ctx)
+	t.Cleanup(func() {
+		saved, err := store.readSlot(params.Material.Backend, "rsrs", slot, false)
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		if saved == nil {
+			return
+		}
+		var cleanup *exec.Cmd
+		switch runtime.GOOS {
+		case "windows":
+			cleanup = exec.Command("cmdkey.exe", "/delete:"+slot+".rsrs")
+		case "darwin":
+			cleanup = exec.Command("security", "delete-generic-password", "-s", "rsrs", "-a", slot)
+		case "linux":
+			cleanup = exec.Command("secret-tool", "clear", "service", "rsrs", "username", slot, "target", "default")
+		}
+		if err := cleanup.Run(); err != nil {
+			t.Errorf("remove isolated login fixture: %v", err)
+			return
+		}
+		if still, err := store.readSlot(params.Material.Backend, "rsrs", slot, false); err != nil || still != nil {
+			t.Errorf("isolated login fixture credential was not removed: %v", err)
+		}
+	})
 	reply, err := manager.sendInitialRuntimeLogin(ctx, control, params, &admission)
 	if _, duplicateErr := manager.sendInitialRuntimeLogin(ctx, control, params, &admission); duplicateErr == nil {
 		t.Fatal("sent operation was readmitted")
@@ -167,6 +200,22 @@ func TestPublishedRuntimeRequiresExactClient2Maintenance(t *testing.T) {
 	if !errors.As(err, &unconfirmed) || unconfirmed.id != operation ||
 		reply.Code != "account_outcome_unknown" || !strings.Contains(reply.Error, "local import and explicit vault migration are separate operations") {
 		t.Fatalf("Runtime did not accept the exact Paused authorization and reject invalid login intent: %v (%s)", err, reply.Error)
+	}
+	saved, credentialErr := store.readSlot(params.Material.Backend, "rsrs", slot, false)
+	if credentialErr != nil || saved == nil {
+		t.Fatalf("original login was not preserved in the native credential store: %v", credentialErr)
+	}
+	var custody struct {
+		Request runtimeLoginParams `json:"request"`
+	}
+	if json.Unmarshal([]byte(*saved), &custody) != nil || custody.Request.Authorization.Password == nil ||
+		*custody.Request.Authorization.Password != password || custody.Request.Binding.LaunchID != control.binding.LaunchID {
+		t.Fatal("the system credential store did not retain the original login request")
+	}
+	metadata := filepath.Join(root, "runtime", "autostart", "account-login-"+operation+".json")
+	nonsecret, err := readCredentialConfig(metadata, runtimeMaintenanceLimit)
+	if err != nil || bytes.Contains(nonsecret, []byte(password)) {
+		t.Fatalf("login metadata missing or contains private input: %v", err)
 	}
 	rawRecord, err := readCredentialConfig(admission.Path, runtimeMaintenanceLimit)
 	if err != nil {

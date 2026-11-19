@@ -3,7 +3,11 @@ package host
 import "context"
 
 func (m *Manager) unlockAccountRuntime(ctx context.Context, health HealthInfo) error {
-	return m.unlockNativeRuntime(ctx, health, hostCredentialStore{
+	return m.unlockNativeRuntime(ctx, health, nativeRuntimeCredentialStore(ctx))
+}
+
+func nativeRuntimeCredentialStore(ctx context.Context) hostCredentialStore {
+	return hostCredentialStore{
 		backends: []string{"secret_service", "kernel"},
 		read: func(backend, service, account string) (*string, error) {
 			if backend == "kernel" {
@@ -15,5 +19,5 @@ func (m *Manager) unlockAccountRuntime(ctx context.Context, health HealthInfo) e
 			_, err := secretServiceCredential(ctx, service, account, &value)
 			return err
 		},
-	})
+	}
 }

@@ -76,22 +76,55 @@ func (m *Manager) prepareInitialRuntimeLogin(ctx context.Context, imagePath, ima
 	if control.binding.InstallationRoot != record.Root || control.binding.Profile != record.Source {
 		return control, params, errors.New("Runtime login scope differs from the recorded installation")
 	}
-	backend := "native"
-	if runtime.GOOS == "linux" {
-		backend = "secret_service"
-	}
 	params = runtimeLoginParams{
 		Version: 1, Binding: control.binding, Identity: identity, Server: record.Server, User: record.User,
 		Authorization: authorization, Continuation: continuation, SuperPassword: super,
 		Material: runtimeLoginMaterial{
-			Account: "login-" + strings.ReplaceAll(record.OperationID, "-", ""), Backend: backend,
+			Account: "login-" + strings.ReplaceAll(record.OperationID, "-", ""), Backend: runtimeLoginBackend(),
 			Source: source, TargetOriginal: target,
 		},
 	}
 	return control, params, nil
 }
 
-// The coordinator persists credential custody before calling this method.
+func runtimeLoginBackend() string {
+	if runtime.GOOS == "linux" {
+		return "secret_service"
+	}
+	return "native"
+}
+
+// Keep the nonsecret routing record compatible with CLI recovery. The request
+// itself includes credentials and must only be saved in the system keyring.
+func persistInitialRuntimeLogin(ctx context.Context, record runtimeAccountRecord, params runtimeLoginParams, encodedRequest json.RawMessage) error {
+	account := "login-" + strings.ReplaceAll(record.OperationID, "-", "")
+	backend := runtimeLoginBackend()
+	if params.Material.Account != account || params.Material.Backend != backend {
+		return errors.New("Runtime login credential slot differs from its original operation")
+	}
+	metadata, err := json.Marshal(map[string]any{
+		"operation_id": record.OperationID, "root": record.Root, "source": record.Source, "account": account, "backend": backend,
+		"candidate": nil, "challenge_sha256": nil, "rolled_back": false, "slots_removed": false, "retired": false,
+	})
+	if err != nil {
+		return err
+	}
+	secrets, err := json.Marshal(map[string]any{
+		"request": encodedRequest, "candidate": nil, "slots": map[string]string{},
+	})
+	if err != nil {
+		return err
+	}
+	defer clear(secrets)
+	path := filepath.Join(record.Root, "runtime", "autostart", "account-login-"+record.OperationID+".json")
+	if err := writeRuntimeAccountRecord(path, metadata, nil); err != nil {
+		return err
+	}
+	return nativeRuntimeCredentialStore(ctx).preserve("rsrs", "login-control:"+account, string(secrets))
+}
+
+// Accept only the original operation. Persist and read back custody before the
+// send flag permits the private Runtime exchange.
 func (m *Manager) sendInitialRuntimeLogin(ctx context.Context, control runtimeAccountControl, params runtimeLoginParams,
 	admission *runtimeAccountAdmission) (rpcResponse, error) {
 	var record runtimeAccountRecord
@@ -110,6 +143,9 @@ func (m *Manager) sendInitialRuntimeLogin(ctx context.Context, control runtimeAc
 		return rpcResponse{}, err
 	}
 	defer clear(argument)
+	if err := persistInitialRuntimeLogin(ctx, record, params, json.RawMessage(argument)); err != nil {
+		return rpcResponse{}, err
+	}
 	if err := admission.markLoginSent(); err != nil {
 		return rpcResponse{}, err
 	}

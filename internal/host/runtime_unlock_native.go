@@ -2,7 +2,9 @@
 
 package host
 
-func nativeHostCredentialStore() hostCredentialStore {
+import "context"
+
+func nativeRuntimeCredentialStore(context.Context) hostCredentialStore {
 	return hostCredentialStore{
 		backends: []string{"native"},
 		read: func(_, service, account string) (*string, error) {
