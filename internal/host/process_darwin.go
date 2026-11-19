@@ -29,7 +29,7 @@ func verifyHostProcess(h HealthInfo) error {
 	return nil
 }
 
-func (m *Manager) stopProcess(ctx context.Context, h HealthInfo) error {
+func (m *Manager) stopProcess(ctx context.Context, h HealthInfo, request func() error) error {
 	identity, err := unix.SysctlKinfoProc("kern.proc.pid", int(h.PID))
 	if err != nil {
 		return err
@@ -37,7 +37,7 @@ func (m *Manager) stopProcess(ctx context.Context, h HealthInfo) error {
 	if err = verifyHostProcess(h); err != nil {
 		return err
 	}
-	if _, err = m.localRequest(ctx, "POST", "/api/runtime/stop", nil); err != nil {
+	if err = request(); err != nil {
 		return err
 	}
 	ticker := time.NewTicker(100 * time.Millisecond)

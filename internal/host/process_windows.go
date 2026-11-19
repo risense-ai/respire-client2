@@ -28,13 +28,13 @@ func IsUnavailable(err error) bool {
 	return errors.As(err, &op) && errors.Is(err, windows.WSAECONNREFUSED)
 }
 
-func (m *Manager) stopProcess(ctx context.Context, h HealthInfo) error {
+func (m *Manager) stopProcess(ctx context.Context, h HealthInfo, request func() error) error {
 	handle, err := runtimeProcess(h)
 	if err != nil {
 		return err
 	}
 	defer windows.CloseHandle(handle)
-	if _, err = m.localRequest(ctx, "POST", "/api/runtime/stop", nil); err != nil {
+	if err = request(); err != nil {
 		return err
 	}
 	result, err := windows.WaitForSingleObject(handle, 30000)

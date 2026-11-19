@@ -21,6 +21,11 @@ type HealthInfo struct {
 	DataDir          string `json:"data_dir"`
 	ManagedID        string `json:"managed_id"`
 	InstallationRoot string `json:"installation_root"`
+	InstallationID   string `json:"installation_id"`
+	ImagePath        string `json:"image_path"`
+	ImageSHA256      string `json:"image_sha256"`
+	ProcessStartID   string `json:"process_start_id"`
+	RuntimeVersion   string `json:"runtime_version"`
 	StoreReady       bool   `json:"store_ready"`
 	CredentialState  string `json:"credential_state"`
 	AccountID        string `json:"account_id"`

@@ -22,7 +22,7 @@ func verifyHostProcess(h HealthInfo) error {
 	return nil
 }
 
-func (m *Manager) stopProcess(ctx context.Context, h HealthInfo) error {
+func (m *Manager) stopProcess(ctx context.Context, h HealthInfo, request func() error) error {
 	// A pidfd keeps the exit wait tied to this process even if its PID is reused.
 	fd, err := unix.PidfdOpen(int(h.PID), 0)
 	if err != nil {
@@ -32,7 +32,7 @@ func (m *Manager) stopProcess(ctx context.Context, h HealthInfo) error {
 	if err = verifyHostProcess(h); err != nil {
 		return err
 	}
-	if _, err = m.localRequest(ctx, "POST", "/api/runtime/stop", nil); err != nil {
+	if err = request(); err != nil {
 		return err
 	}
 	deadline := time.Now().Add(30 * time.Second)
