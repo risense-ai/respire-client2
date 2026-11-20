@@ -287,7 +287,6 @@ func installRuntimeForStartup(m interface {
 }
 
 func updateRuntimeForBackground(ctx context.Context, m interface {
-	RunTask(string, func() error) error
 	InstallRuntime(bool, bool) error
 	Health(context.Context) (host.HealthInfo, json.RawMessage, error)
 	Owns(string) bool
@@ -307,9 +306,7 @@ func updateRuntimeForBackground(ctx context.Context, m interface {
 	if !m.Owns(h.Exe) {
 		return nil
 	}
-	return m.RunTask("检查 Runtime 更新", func() error {
-		return m.InstallRuntime(true, restart)
-	})
+	return m.InstallRuntime(true, restart)
 }
 
 func (d *desktop) background() {

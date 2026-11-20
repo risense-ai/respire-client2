@@ -398,7 +398,6 @@ func (m *Manager) InstallRuntime(automatic bool, restart bool) error {
 	}
 	defer lock.Close()
 
-	m.progress("检查 Runtime 发布", 0, 0)
 	release, meta, err := m.LatestRuntime(ctx)
 	if err != nil {
 		return err
@@ -414,10 +413,39 @@ func (m *Manager) InstallRuntime(automatic bool, restart bool) error {
 			return fmt.Errorf("无法验证较新的已选 Runtime: %w", err)
 		}
 		selected = previous
-	} else if err := m.publishRuntime(meta, m.stageDownloadRuntime(ctx, release, meta)); err != nil {
-		return err
 	}
+	if automatic && previousErr == nil && previous == selected {
+		if !restart {
+			return nil
+		}
+		h, _, err := m.Health(ctx)
+		if err != nil {
+			return err
+		}
+		if h.Version == selected.Version && h.RuntimeVersion == selected.Version && h.ImageSHA256 == selected.SHA256 &&
+			samePath(h.InstallationRoot, m.DataRoot) &&
+			samePath(h.Exe, filepath.Join(m.runtimeDir(selected.Version), runtimeBinary())) {
+			return nil
+		}
+	}
+	apply := func() error {
+		return m.applyRuntimeRelease(ctx, release, meta, selected, automatic, restart)
+	}
+	if automatic {
+		return m.RunTask("更新 Runtime", apply)
+	}
+	return apply()
+}
 
+var errRuntimeUpdateDeferred = errors.New("Runtime update deferred while requests are active")
+
+func (m *Manager) applyRuntimeRelease(ctx context.Context, release ReleaseInfo, meta RuntimeMetadata,
+	selected InstalledRuntime, automatic, restart bool) error {
+	if selected.Version == meta.RuntimeVersion {
+		if err := m.publishRuntime(meta, m.stageDownloadRuntime(ctx, release, meta)); err != nil {
+			return err
+		}
+	}
 	if !restart {
 		return m.selectRuntime(selected)
 	}
@@ -437,6 +465,9 @@ func (m *Manager) InstallRuntime(automatic bool, restart bool) error {
 		return err
 	}
 	if m.HasActiveOperations() {
+		if automatic {
+			return errRuntimeUpdateDeferred
+		}
 		return errors.New("客户端业务操作尚未完成，已保留暂存包")
 	}
 	if automatic && err == nil {
@@ -453,7 +484,7 @@ func (m *Manager) InstallRuntime(automatic bool, restart bool) error {
 			return errors.New("Runtime 未报告队列状态，无法确认空闲")
 		}
 		if *load.RPC.Running > 0 || *load.RPC.Queued > 0 {
-			return errors.New("Runtime 正忙，已保留暂存包")
+			return errRuntimeUpdateDeferred
 		}
 	}
 	if h.PID != 0 && !samePath(h.Exe, filepath.Join(m.runtimeDir(selected.Version), runtimeBinary())) {

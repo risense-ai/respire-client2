@@ -360,11 +360,16 @@ func (m *Manager) RunTask(stage string, action func() error) error {
 		m.mu.Unlock()
 		return errors.New("已有操作正在执行")
 	}
+	previous := m.task
 	m.task = TaskState{Busy: true, Stage: stage}
 	m.mu.Unlock()
 	err := action()
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if errors.Is(err, errRuntimeUpdateDeferred) {
+		m.task = previous
+		return nil
+	}
 	m.task.Busy = false
 	if err != nil {
 		m.task.Stage = "操作失败"

@@ -1205,6 +1205,37 @@ func TestInstallRuntimeIndependently(t *testing.T) {
 		if _, err := os.Stat(cli); !errors.Is(err, os.ErrNotExist) {
 			t.Fatalf("Runtime preparation touched the CLI: %v", err)
 		}
+
+		for _, running := range []int{0, 1} {
+			serving := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method != http.MethodGet || r.URL.Path != "/api/health" {
+					t.Errorf("background check tried to change Runtime: %s %s", r.Method, r.URL.Path)
+					http.NotFound(w, r)
+					return
+				}
+				err := json.NewEncoder(w).Encode(map[string]any{
+					"server": "respire", "v": 1, "pid": os.Getpid(), "bin": installed.Version,
+					"runtime_version": installed.Version, "image_sha256": installed.SHA256,
+					"installation_root": m.DataRoot, "managed_id": "cli-supervisor",
+					"exe": filepath.Join(m.runtimeDir(installed.Version), runtimeBinary()),
+					"rpc": map[string]int{"executing_until_reply": running, "queued_or_cancelled_pending_removal": 0},
+				})
+				if err != nil {
+					t.Error(err)
+				}
+			}))
+			m.Endpoint = serving.URL
+			before := m.TaskSnapshot()
+			err := m.InstallRuntime(true, true)
+			serving.Close()
+			if err != nil || m.TaskSnapshot() != before {
+				t.Fatalf("same verified Runtime must keep task state with %d active requests: %v, %+v", running, err, m.TaskSnapshot())
+			}
+		}
+		before := m.TaskSnapshot()
+		if err := m.RunTask("更新 Runtime", func() error { return errRuntimeUpdateDeferred }); err != nil || m.TaskSnapshot() != before {
+			t.Fatalf("deferred activation must retain previous task state: %v, %+v", err, m.TaskSnapshot())
+		}
 		denyCLI.Store(false)
 		if err := m.installOnlineCLI(context.Background(), meta.Compat); err != nil {
 			t.Fatalf("separate CLI installation failed: %v", err)
