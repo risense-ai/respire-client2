@@ -26,8 +26,15 @@ foreach ($dir in @($binaryDirectory, (Join-Path $dataDirectory 'client2'), (Join
     New-Item -ItemType Directory -Path $dir | Out-Null
 }
 $cliPath = Join-Path $binaryDirectory 'rsrs.exe'
-if (-not $DefaultOnline) { Copy-Item -LiteralPath $Cli -Destination $cliPath }
 $clientPath = (Resolve-Path -LiteralPath $Client).Path
+$siblingCli = Join-Path (Split-Path -Parent $clientPath) 'rsrs.exe'
+if (-not $DefaultOnline) {
+    $seedCli = (Resolve-Path -LiteralPath $Cli).Path
+    if ((Split-Path -Parent $seedCli) -ieq (Split-Path -Parent $clientPath) -or
+        $seedCli.StartsWith(($root.TrimEnd('\') + '\'), [StringComparison]::OrdinalIgnoreCase)) {
+        throw 'Require a seed CLI outside the Client2 package and fixture'
+    }
+}
 $listener = [Net.Sockets.TcpListener]::new([Net.IPAddress]::Loopback, 0)
 $listener.Start()
 $port = $listener.LocalEndpoint.Port
@@ -37,7 +44,7 @@ foreach ($name in @('SystemRoot','WINDIR','COMSPEC','PATHEXT','ProgramFiles','Pr
     $value = [Environment]::GetEnvironmentVariable($name)
     if ($value) { $childEnvironment[$name] = $value }
 }
-$childEnvironment['PATH'] = if ($DefaultOnline) { '' } else { "$env:SystemRoot\System32;$env:SystemRoot" }
+$childEnvironment['PATH'] = ''
 $childEnvironment['HOME'] = $homeDirectory
 $childEnvironment['USERPROFILE'] = $homeDirectory
 $childEnvironment['APPDATA'] = Join-Path $root 'appdata'
@@ -57,14 +64,14 @@ $report = [ordered]@{schema=1; scope='sealed Client2 real-SDK existing-key start
     core_test_mode=$false;
     runtime_version=$RuntimeVersion;
     client_sha256=(Get-FileHash $clientPath -Algorithm SHA256).Hash.ToLowerInvariant();
+    child_path_empty=($childEnvironment['PATH'] -ceq '');
     initial_start=$false; normal_stop=$false; automatic_start=$false; automatic_key_handoff=$false; cleanup=$false}
 if ($DefaultOnline) {
     $report.scope = 'latest public default online installation diagnostic only'
     $report.diagnostic_only = $true
     $report.full_passed = $false
-    $report.child_path_empty = $childEnvironment['PATH'] -ceq ''
 } else {
-    $report.cli_sha256 = (Get-FileHash $Cli -Algorithm SHA256).Hash.ToLowerInvariant()
+    $report.cli_sha256 = (Get-FileHash $seedCli -Algorithm SHA256).Hash.ToLowerInvariant()
 }
 $categories = [ordered]@{
     connection_refused='积极拒绝|actively refused|connection refused'
@@ -95,7 +102,7 @@ function Start-Child([string]$Executable, [string[]]$Arguments) {
     $start.CreateNoWindow = $true
     $start.RedirectStandardOutput = $true
     $start.RedirectStandardError = $true
-    if ($DefaultOnline) { $start.WorkingDirectory = $root }
+    $start.WorkingDirectory = $root
     $start.Environment.Clear()
     foreach ($key in $childEnvironment.Keys) { $start.Environment[$key] = $childEnvironment[$key] }
     foreach ($argument in $Arguments) { $start.ArgumentList.Add($argument) }
@@ -141,6 +148,15 @@ function Assert-Actor($Health) {
     if (-not $actor -or -not [string]::Equals($actor.ExecutablePath, $expected, [StringComparison]::OrdinalIgnoreCase)) { throw 'Runtime actor identity differs' }
     return $actor
 }
+function Assert-NoManagedCLI([string]$Stage) {
+    $profile = Invoke-Child $Stage $clientPath @('--headless','bootstrap-status')
+    $managedCli = @(Get-ChildItem -LiteralPath $binaryDirectory -Recurse -Filter 'rsrs.exe' -File)
+    if (-not $profile.ok -or -not $profile.result.installed_runtime -or $profile.result.installed_runtime_error -or
+        $profile.result.cli_path -or $profile.result.cli_error -or $profile.result.payload_found -or $profile.result.payload_error -or
+        $managedCli.Count -or (Test-Path -LiteralPath $siblingCli)) {
+        throw 'Existing-key startup requires an installed Runtime without a managed or adjacent CLI'
+    }
+}
 $desktop = $null
 $runtimeActor = $null
 try {
@@ -156,7 +172,6 @@ try {
             throw 'Verified public inputs differ from the installation references'
         }
         $report.public_inputs = $public
-        $siblingCli = Join-Path (Split-Path -Parent $clientPath) 'rsrs.exe'
         $fresh = Invoke-Child 'fresh_profile' $clientPath @('--headless','bootstrap-status')
         if (-not $fresh.ok -or $fresh.result.payload_found -or $fresh.result.payload_error -or $fresh.result.cli_path -or
             $fresh.result.cli_error -or $fresh.result.installed_runtime -or $fresh.result.installed_runtime_error -or
@@ -209,25 +224,37 @@ try {
         $report.default_online_install = $true
         $report.status = 'diagnostic-passed'
     } else {
-    $installed = Invoke-Child 'install' $cliPath @('--json','runtime','install','--file',$RuntimeArchive,'--version',$RuntimeVersion)
+    $installed = Invoke-Child 'install' $seedCli @('--json','runtime','install','--file',$RuntimeArchive,'--version',$RuntimeVersion)
     if ($installed.status -cne 'ok') { throw 'Runtime install did not succeed' }
     $preferences = '{"autoRuntime":false,"autoUpdate":false,"clientAutoUpdate":false,"runtimeAutoUpdate":false,"runtimeAutoRestart":false,"onboardingVersion":1,"onboardingCompleted":true,"onboardingStep":"done","onboardingSyncChoice":"offline"}'
     $preferencesPath = Join-Path $dataDirectory 'client2/preferences.json'
     [IO.File]::WriteAllText($preferencesPath, $preferences, [Text.UTF8Encoding]::new($false))
-    $keys = Invoke-Child 'keygen' $cliPath @('--json','keygen','--pass',('Synthetic-' + [Guid]::NewGuid().ToString('N')))
+    $keys = Invoke-Child 'keygen' $seedCli @('--json','keygen','--pass',('Synthetic-' + [Guid]::NewGuid().ToString('N')))
     if ($keys.status -cne 'ok' -or -not $keys.summary.super) { throw 'Synthetic offline keygen did not succeed' }
     $keys = $null
+    $seedStart = Invoke-Child 'seed_start' $seedCli @('--json','runtime','start')
+    if ($seedStart.status -cne 'ok') { throw 'Seed Runtime did not start' }
+    $seedHealth = Health
+    $runtimeActor = Assert-Actor $seedHealth
+    if (-not $seedHealth.account_id -or -not $seedHealth.store_ready) { throw 'Seed library was not ready' }
+    $text = 'published-startup-' + [Guid]::NewGuid().ToString('N')
+    $saved = Invoke-Child 'remember' $seedCli @('--client-only','--json','remember',$text,'--title',$text,'--importance','important','--force')
+    if ($saved.status -cne 'ok' -or -not $saved.summary.id) { throw 'Synthetic memory write did not succeed' }
+    $memoryId = $saved.summary.id
+    $seedStop = Invoke-Child 'seed_stop' $seedCli @('--json','runtime','stop')
+    if ($seedStop.status -cne 'ok' -or (Get-CimInstance Win32_Process -Filter "ProcessId=$($runtimeActor.ProcessId)")) { throw 'Seed Runtime did not stop' }
+    $runtimeActor = $null
+    Assert-NoManagedCLI 'original_library_without_cli'
+    $report.cli_absent_before_start = $true
     $started = Invoke-Child 'initial_start' $clientPath @('--headless','start')
     if (-not $started.ok) { throw 'Initial Client2 start did not succeed' }
     $runtimeActor = Assert-Actor (Health)
     $initialHealth = Health
-    if ($initialHealth.store_ready -ne $true -or $initialHealth.credential_state -cne 'available') { throw 'Initial key handoff differs' }
+    if ($initialHealth.store_ready -ne $true -or $initialHealth.credential_state -cne 'available' -or
+        $initialHealth.account_id -cne $seedHealth.account_id -or $initialHealth.pid -eq $seedHealth.pid) { throw 'Initial key handoff differs' }
+    Assert-NoManagedCLI 'first_started_library_without_cli'
     $previousId = $runtimeActor.ProcessId
     $report.initial_start = $true
-    $text = 'published-startup-' + [Guid]::NewGuid().ToString('N')
-    $saved = Invoke-Child 'remember' $cliPath @('--client-only','--json','remember',$text,'--title',$text,'--importance','important','--force')
-    if ($saved.status -cne 'ok' -or -not $saved.summary.id) { throw 'Synthetic memory write did not succeed' }
-    $memoryId = $saved.summary.id
     $stopped = Invoke-Child 'normal_stop' $clientPath @('--headless','stop')
     if (-not $stopped.ok -or (Get-CimInstance Win32_Process -Filter "ProcessId=$previousId")) { throw 'Normal Stop did not remove the initial actor' }
     $runtimeActor = $null
@@ -254,7 +281,8 @@ try {
         }
         if ($desktop.WaitForExit(500)) { throw 'Desktop exited before automatic startup' }
     } while ($deadline.Elapsed.TotalSeconds -lt 60)
-    if (-not $runtimeActor -or $runtimeActor.ProcessId -eq $previousId) { throw 'Automatic startup did not yield a new actor' }
+    if (-not $runtimeActor -or $runtimeActor.ProcessId -eq $previousId -or
+        $runtimeActor.ParentProcessId -ne $desktop.Id) { throw 'Automatic startup did not yield a new actor' }
     $report.automatic_start = $true
     $report.runtime_pid = $runtimeActor.ProcessId
     # Use the original native GUI fixture's scoped read-only RPC oracle.
@@ -268,35 +296,21 @@ try {
         if ($desktop.WaitForExit(500)) { throw 'Desktop exited before key handoff' }
     } while ($deadline.Elapsed.TotalSeconds -lt 60)
     if ($health.store_ready -ne $true -or $health.credential_state -cne 'available') { throw 'Automatic key handoff timed out' }
-    # Health/credential readiness precedes the host's maintenance completion.
-    # Observe that controller; never delete its marker or retry rejected business.
+    # Wait for native startup to finish before the first business request.
     $report.phase = 'host_start_completion'
     $markerPath = Join-Path $dataDirectory 'runtime/autostart/maintenance.json'
-    $report.host_start_observed = $false
     $report.maintenance_observed = $false
     do {
-        $controllers = @(Get-CimInstance Win32_Process -Filter "ParentProcessId=$($desktop.Id)" | Where-Object {
-            [string]::Equals($_.ExecutablePath, $cliPath, [StringComparison]::OrdinalIgnoreCase) -and
-            $_.CommandLine -match '(?:^|\s)runtime\s+start(?:\s|$)'
-        })
+        $health = Health
         $markerPresent = Test-Path -LiteralPath $markerPath
-        if ($controllers.Count) { $report.host_start_observed = $true }
-        if ($markerPresent) {
-            $report.maintenance_observed = $true
-            try { $marker = [IO.File]::ReadAllText($markerPath) | ConvertFrom-Json }
-            catch [IO.FileNotFoundException] { $markerPresent = $false; $report.marker_removed_during_observation = $true }
-            if ($markerPresent) {
-                $report.maintenance_phase = if ($marker.phase -cin @('prepared','paused','starting','verified')) { $marker.phase } else { 'other' }
-                $owner = @($controllers | Where-Object ProcessId -EQ $marker.owner_pid)
-                $report.maintenance_owner_is_startup_cli = $owner.Count -eq 1
-                if ($owner.Count -ne 1) { throw 'Maintenance marker does not belong to a live startup CLI' }
-            }
-        }
-        if (-not $controllers.Count -and -not $markerPresent) { break }
+        if ($markerPresent) { $report.maintenance_observed = $true }
+        if ($health.startup_complete -eq $true -and -not $markerPresent) { break }
         if ($desktop.WaitForExit(500)) { throw 'Desktop exited before host startup completion' }
     } while ($deadline.Elapsed.TotalSeconds -lt 60)
-    if ($controllers.Count -or $markerPresent) { throw 'Host startup maintenance did not complete' }
+    if ($health.startup_complete -ne $true -or $markerPresent) { throw 'Host startup maintenance did not complete' }
     $report.host_start_completed = $true
+    Assert-NoManagedCLI 'restarted_library_without_cli'
+    $report.cli_absent_after_restart = $true
     $report.phase = 'automatic_key_handoff'
     $health = Health
     $publicStates = @('ready','locked','running','draining','stopping','stopped','error','maintenance_requested','resources_closing')
@@ -306,7 +320,8 @@ try {
     $report.installation_root_matches = [string]::Equals($health.installation_root, $dataDirectory, [StringComparison]::OrdinalIgnoreCase)
     $report.account_root_matches = [string]::Equals($health.data_dir, $dataDirectory, [StringComparison]::OrdinalIgnoreCase)
     if ($health.pid -ne $startedHealth.pid -or $health.instance_id -cne $startedHealth.instance_id -or $health.generation -ne $startedHealth.generation) { throw 'Runtime identity changed during key handoff' }
-    if ($health.v -ne 1 -or -not $health.account_id -or -not $health.instance_id -or $health.generation -le 0) { throw 'Runtime RPC scope missing' }
+    if ($health.v -ne 1 -or $health.account_id -cne $seedHealth.account_id -or -not $health.instance_id -or $health.generation -le 0 -or
+        -not $report.installation_root_matches -or $health.data_dir -ine $seedHealth.data_dir) { throw 'Runtime RPC scope differs from the seed library' }
     $scope = @{account_id=$health.account_id; instance_id=$health.instance_id; generation=$health.generation}
     $requestId = 'published-startup-' + [Guid]::NewGuid().ToString('N')
     $request = @{v=1; id=$requestId; operation_id=$requestId; idempotency_key=$requestId; scope=$scope; method='cli.exec'; args=@('--json','show',$memoryId)}
@@ -340,8 +355,11 @@ try {
     $afterRead = Health
     if ($afterRead.pid -ne $health.pid -or $afterRead.instance_id -cne $health.instance_id -or $afterRead.generation -ne $health.generation) { throw 'Runtime identity changed during readback' }
     $report.automatic_key_handoff = $true
-    $legacyRead = Invoke-Child 'legacy_cli_readback' $cliPath @('--client-only','--json','show',$memoryId)
-    if ($legacyRead.status -cne 'ok' -or $legacyRead.details.entry.content -cne $text) { throw 'Legacy CLI readback differs' }
+    $report.direct_rpc_readback = $true
+    $legacyRead = Invoke-Child 'legacy_cli_readback' $seedCli @('--client-only','--json','show',$memoryId)
+    if ($legacyRead.status -cne 'ok' -or $legacyRead.details.entry.id -cne $memoryId -or
+        $legacyRead.details.entry.content -cne $text) { throw 'Legacy CLI readback differs' }
+    Assert-NoManagedCLI 'reconciled_library_without_cli'
     $report.legacy_cli_readback = $true
     $report.status = 'diagnostic-passed'
     }
@@ -362,10 +380,10 @@ try {
         'Runtime key state is not a pending handoff'='unexpected_credential_state'
         'Desktop exited before key handoff'='desktop_exited_before_handoff'
         'Automatic key handoff timed out'='automatic_key_handoff_timeout'
-        'Maintenance marker does not belong to a live startup CLI'='startup_maintenance_owner_unproven'
         'Desktop exited before host startup completion'='desktop_exited_before_host_completion'
         'Host startup maintenance did not complete'='host_start_maintenance_timeout'
-        'Runtime RPC scope missing'='rpc_scope_missing'
+        'Runtime RPC scope differs from the seed library'='rpc_scope_mismatch'
+        'Existing-key startup requires an installed Runtime without a managed or adjacent CLI'='unexpected_cli_or_runtime'
         'Automatic key handoff did not reopen the original memory'='original_memory_rpc_mismatch'
         'Runtime identity changed during readback'='runtime_changed_during_readback'
         'Child operation failed; raw output withheld'='child_operation_failed'
