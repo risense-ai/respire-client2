@@ -88,6 +88,9 @@ func (m *Manager) legacyMigrationProfiles() ([]legacyMigrationProfile, error) {
 	if err := profileDirectory(home); err != nil {
 		return nil, err
 	}
+	if err := profileDirectory(m.DataRoot); err != nil {
+		return nil, err
+	}
 	accounts, err := profileSubdirectories(filepath.Join(m.DataRoot, "accounts"))
 	if err != nil {
 		return nil, err
