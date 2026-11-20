@@ -34,18 +34,9 @@ func (m *Manager) desktopAgentSettings() (json.RawMessage, error) {
 	if err != nil {
 		return nil, err
 	}
-	profile := m.DataRoot
-	if selected, present := device["data_dir"]; present {
-		directory, ok := selected.(string)
-		if !ok {
-			return nil, errors.New("data_dir 必须是路径")
-		}
-		if directory != "" {
-			profile, err = expandTilde(directory)
-			if err != nil {
-				return nil, err
-			}
-		}
+	profile, err := desktopProfilePath(m.DataRoot, device)
+	if err != nil {
+		return nil, err
 	}
 	settings, err := readAgentSettingsObject(filepath.Join(profile, "agent.json"))
 	if err != nil {
