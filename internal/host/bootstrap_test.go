@@ -169,7 +169,6 @@ func fixtureReleaseJSON(t *testing.T, tree string, meta RuntimeMetadata) ([]byte
 	}
 	fields["files"], fields["source_commit"] = files, strings.Repeat("0", 40)
 	fields["protocol_range"] = map[string]int{"minimum": 1, "maximum": 1}
-	fields["capabilities"] = map[string]string{"business_executor": "1", "mcp_server": "1"}
 	return json.Marshal(fields)
 }
 
@@ -585,154 +584,8 @@ func TestPublishRuntimeStagingAndPromotion(t *testing.T) {
 			t.Fatal("failed verification must not publish")
 		}
 	})
-	t.Run("legacy migration proof sources", func(t *testing.T) {
-		for _, tc := range []struct {
-			name, damage, want string
-			requests           int
-			missing, pathError bool
-		}{
-			{name: "valid embedded proof"},
-			{name: "absent payload uses online proof", damage: "absent", requests: 1},
-			{name: "online failure is returned without mirror", damage: "online failure", want: "online Runtime metadata: release source HTTP 503", requests: 1},
-			{name: "missing payload manifest", damage: "missing manifest", want: "bootstrap payload", missing: true},
-			{name: "missing embedded proof", damage: "missing proof", want: "embedded Runtime metadata", missing: true, pathError: true},
-			{name: "unreadable embedded proof", damage: "unreadable proof", want: "embedded Runtime metadata", pathError: true},
-			{name: "empty embedded proof", damage: "empty proof", want: "embedded Runtime metadata"},
-			{name: "invalid embedded proof", damage: "invalid proof", want: "embedded Runtime metadata"},
-			{name: "corrupt legacy receipt", damage: "corrupt receipt", want: "Runtime 发布凭据摘要不匹配"},
-		} {
-			t.Run(tc.name, func(t *testing.T) {
-				bundle := filepath.Join(t.TempDir(), "bootstrap")
-				proofPath := filepath.Join(bundle, "runtime-build-"+meta.Target+".json")
-				if tc.damage != "absent" && tc.damage != "online failure" && tc.damage != "corrupt receipt" {
-					if err := os.MkdirAll(bundle, 0700); err != nil {
-						t.Fatal(err)
-					}
-					manifest, err := os.ReadFile(filepath.Join(payload.Dir, bootstrapManifestFile))
-					if err != nil {
-						t.Fatal(err)
-					}
-					if err = os.WriteFile(filepath.Join(bundle, bootstrapManifestFile), manifest, 0600); err != nil {
-						t.Fatal(err)
-					}
-					if err = os.WriteFile(proofPath, []byte(meta.ProofJSON), 0600); err != nil {
-						t.Fatal(err)
-					}
-					switch tc.damage {
-					case "missing manifest":
-						err = os.Remove(filepath.Join(bundle, bootstrapManifestFile))
-					case "missing proof":
-						err = os.Remove(proofPath)
-					case "unreadable proof":
-						if err = os.Remove(proofPath); err == nil {
-							err = os.Mkdir(proofPath, 0700)
-						}
-					case "empty proof":
-						err = os.WriteFile(proofPath, nil, 0600)
-					case "invalid proof":
-						err = os.WriteFile(proofPath, []byte("{"), 0600)
-					}
-					if err != nil {
-						t.Fatal(err)
-					}
-				}
-				t.Setenv(bootstrapEnvOverride, bundle)
-				requests := make(chan string, 4)
-				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-					requests <- r.URL.Path
-					if tc.damage == "online failure" {
-						http.Error(w, "release unavailable", http.StatusServiceUnavailable)
-						return
-					}
-					if _, err := io.WriteString(w, meta.ProofJSON); err != nil {
-						t.Errorf("write proof fixture: %v", err)
-					}
-				}))
-				defer server.Close()
-				m := newInstallTestManager(t)
-				m.HTTPClient = &http.Client{Transport: fakeGH{server: server.URL}}
-				legacy := filepath.Join(m.Root, "runtime", meta.RuntimeVersion)
-				if err := copyTree(filepath.Join(payload.Dir, bootstrapRuntimeDir), legacy); err != nil {
-					t.Fatal(err)
-				}
-				selection := sharedRuntimeReceipt{Version: meta.RuntimeVersion, SHA256: meta.BinaryHash}
-				if tc.damage == "corrupt receipt" {
-					selection.Release = &releaseProof{Hash: strings.Repeat("0", 64)}
-				}
-				if err := writeJSON(filepath.Join(m.Root, "runtime.json"), selection); err != nil {
-					t.Fatal(err)
-				}
-				err := m.MigrateRuntime()
-				if tc.want == "" {
-					if err != nil {
-						t.Fatalf("valid proof must migrate: %v", err)
-					}
-					if err = m.verifyInstalled(InstalledRuntime{Version: meta.RuntimeVersion, SHA256: meta.BinaryHash}); err != nil {
-						t.Fatalf("migrated Runtime must verify: %v", err)
-					}
-				} else {
-					if err == nil || !strings.Contains(err.Error(), tc.want) {
-						t.Fatalf("migration must expose %q: %v", tc.want, err)
-					}
-					if tc.missing && !errors.Is(err, os.ErrNotExist) {
-						t.Fatalf("missing component must retain its cause: %v", err)
-					}
-					if tc.pathError {
-						var pathErr *os.PathError
-						if !errors.As(err, &pathErr) || pathErr.Path != proofPath {
-							t.Fatalf("embedded proof read error must retain its path: %v", err)
-						}
-					}
-					if tc.damage == "empty proof" || tc.damage == "invalid proof" {
-						var syntaxErr *json.SyntaxError
-						if !errors.As(err, &syntaxErr) {
-							t.Fatalf("invalid proof must retain its JSON error: %v", err)
-						}
-					}
-					if tc.damage == "online failure" {
-						var statusErr *httpStatusError
-						if !errors.As(err, &statusErr) || statusErr.code != http.StatusServiceUnavailable {
-							t.Fatalf("online failure must retain its HTTP status: %v", err)
-						}
-					}
-					if _, installedErr := m.Installed(); !errors.Is(installedErr, os.ErrNotExist) {
-						t.Fatalf("failed migration must not select a Runtime: %v", installedErr)
-					}
-				}
-				if len(requests) != tc.requests {
-					t.Fatalf("got %d release requests, want %d", len(requests), tc.requests)
-				}
-				if _, err = os.Stat(filepath.Join(legacy, runtimeBinary())); err != nil {
-					t.Fatalf("migration must preserve the original Runtime: %v", err)
-				}
-			})
-		}
-	})
-	t.Run("legacy receipt migrates once and preserves its original tree", func(t *testing.T) {
+	t.Run("installation lock excludes another publisher", func(t *testing.T) {
 		m := newInstallTestManager(t)
-		legacy := filepath.Join(m.Root, "runtime", meta.RuntimeVersion)
-		if err := copyTree(filepath.Join(payload.Dir, bootstrapRuntimeDir), legacy); err != nil {
-			t.Fatal(err)
-		}
-		receipt, err := runtimeReceipt(meta)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err = writeJSON(filepath.Join(m.Root, "runtime.json"), receipt); err != nil {
-			t.Fatal(err)
-		}
-		if err = m.MigrateRuntime(); err != nil {
-			t.Fatal(err)
-		}
-		if err = m.verifyInstalled(InstalledRuntime{Version: meta.RuntimeVersion, SHA256: meta.BinaryHash}); err != nil {
-			t.Fatal(err)
-		}
-		if _, err = os.Stat(filepath.Join(legacy, runtimeBinary())); err != nil {
-			t.Fatal("migration removed the old installation")
-		}
-		if err = m.MigrateRuntime(); err != nil {
-			t.Fatal(err)
-		}
 		ctx, cancel := context.WithCancel(context.Background())
 		lock, err := m.lockRuntime(ctx)
 		if err != nil {
@@ -817,8 +670,11 @@ func buildTarGz(t *testing.T, dir string) []byte {
 func TestRuntimeStartInstallationState(t *testing.T) {
 	t.Run("absent Runtime and CLI allow first install", func(t *testing.T) {
 		m := newInstallTestManager(t)
+		if err := os.WriteFile(filepath.Join(m.DataRoot, "runtime.json"), []byte("{broken legacy receipt"), 0600); err != nil {
+			t.Fatal(err)
+		}
 		if err := m.Start(); !errors.Is(err, ErrRuntimeNotInstalled) {
-			t.Fatalf("missing installation must be classified explicitly: %v", err)
+			t.Fatalf("an obsolete receipt must not override missing installation: %v", err)
 		}
 	})
 	t.Run("missing Runtime does not inspect an external CLI", func(t *testing.T) {
@@ -951,7 +807,7 @@ func TestBootstrapPayloadRejectsInvalidLocalComponents(t *testing.T) {
 		{"mismatched Runtime compatibility", damageMetadata(func(meta map[string]any) {
 			meta["compat"] = map[string]string{"min_cli": "0.5.0", "max_cli": "*"}
 		}), "metadata does not match bootstrap manifest", false},
-		{"incomplete Runtime proof", damageMetadata(func(meta map[string]any) { delete(meta, "files") }), "Runtime 发布凭据缺少完整文件清单或协议能力", false},
+		{"incomplete Runtime proof", damageMetadata(func(meta map[string]any) { delete(meta, "files") }), "Runtime 发布凭据缺少完整文件清单或有效协议范围", false},
 		{"invalid manifest", func(dir string) error {
 			return os.WriteFile(filepath.Join(dir, bootstrapManifestFile), []byte("{"), 0600)
 		}, "unexpected EOF", false},
