@@ -146,7 +146,7 @@ func verifyRuntime(dir, binaryHash string) error {
 // rename is atomic; any interruption or failed verification leaves the
 // existing installation untouched. An existing directory for the same version
 // is only verified and reused, never merged.
-func (m *Manager) publishRuntime(meta RuntimeMetadata, fill func(stage string) error) error {
+func (m *Manager) publishRuntime(meta RuntimeMetadata, fill func(stage string) error, reportProgress bool) error {
 	receipt, err := runtimeReceipt(meta)
 	if err != nil {
 		return err
@@ -172,7 +172,9 @@ func (m *Manager) publishRuntime(meta RuntimeMetadata, fill func(stage string) e
 	if err = fill(stage); err != nil {
 		return err
 	}
-	m.progress("校验并准备 Runtime", 0, 0)
+	if reportProgress {
+		m.progress("校验并准备 Runtime", 0, 0)
+	}
 	if err = verifyRuntime(stage, meta.BinaryHash); err != nil {
 		return err
 	}
@@ -192,7 +194,7 @@ func (m *Manager) publishRuntime(meta RuntimeMetadata, fill func(stage string) e
 
 // stageDownloadRuntime materializes the online release into the staging
 // directory: the raw binary plus the verified archive expansion.
-func (m *Manager) stageDownloadRuntime(ctx context.Context, release ReleaseInfo, meta RuntimeMetadata) func(string) error {
+func (m *Manager) stageDownloadRuntime(ctx context.Context, release ReleaseInfo, meta RuntimeMetadata, reportProgress bool) func(string) error {
 	return func(stage string) error {
 		binURL, err := ReleaseAssetURL(release, runtimeRepo, meta.Binary)
 		if err != nil {
@@ -202,14 +204,14 @@ func (m *Manager) stageDownloadRuntime(ctx context.Context, release ReleaseInfo,
 		if err != nil {
 			return err
 		}
-		if err = m.download(ctx, binURL, filepath.Join(stage, runtimeBinary()), meta.BinaryHash, 128<<20); err != nil {
+		if err = m.download(ctx, binURL, filepath.Join(stage, runtimeBinary()), meta.BinaryHash, 128<<20, reportProgress); err != nil {
 			return err
 		}
 		if err = os.Chmod(filepath.Join(stage, runtimeBinary()), 0700); err != nil {
 			return err
 		}
 		archive := filepath.Join(stage, "runtime.tar.gz")
-		if err = m.download(ctx, archiveURL, archive, meta.ArchiveHash, 128<<20); err != nil {
+		if err = m.download(ctx, archiveURL, archive, meta.ArchiveHash, 128<<20, reportProgress); err != nil {
 			return err
 		}
 		if err = extractRuntime(archive, stage); err != nil {
@@ -239,7 +241,7 @@ func (m *Manager) installOnlineCLI(ctx context.Context) error {
 	}
 	defer os.RemoveAll(stage)
 	source := filepath.Join(stage, cliBinary())
-	if err = m.download(ctx, url, source, meta.BinaryHash, 128<<20); err != nil {
+	if err = m.download(ctx, url, source, meta.BinaryHash, 128<<20, true); err != nil {
 		return err
 	}
 	if meta.Schema == 2 {
@@ -296,13 +298,7 @@ func (m *Manager) EnsureCoreConfigHost(ctx context.Context) error {
 	if m.HasActiveOperations() {
 		return errors.New("业务操作尚未完成，未升级 CLI；原事务保留")
 	}
-	lock, err := m.lockRuntime(ctx)
-	if err != nil {
-		return err
-	}
-	defer lock.Close()
-	// Exclude running host commands while replacing only the CLI. Runtime
-	// selection, processes and supervisor ownership are never changed here.
+	// CLI preparation must not hold the shared Runtime installation lock.
 	m.cliInstallMu.Lock()
 	if m.HasActiveOperations() {
 		err = errors.New("业务操作尚未完成，未升级 CLI；原事务保留")
@@ -333,34 +329,35 @@ func (m *Manager) InstallRuntime(automatic bool, restart bool) error {
 		return err
 	}
 
+	// Publishing a verified version directory does not require the lifecycle task.
+	if err := m.publishRuntime(meta, m.stageDownloadRuntime(ctx, release, meta, !automatic), !automatic); err != nil {
+		return err
+	}
 	previous, previousErr := m.Installed()
 	selected := InstalledRuntime{Version: meta.RuntimeVersion, SHA256: meta.BinaryHash}
-	if automatic && previousErr == nil && previous == selected {
-		if !restart {
-			return nil
-		}
-		h, _, err := m.Health(ctx)
-		if err != nil {
-			return err
-		}
-		if m.runtimeMatchesRelease(h, selected) {
-			return nil
-		}
+	if automatic && previousErr == nil && previous == selected && !restart {
+		return nil
 	}
 	apply := func() error {
-		if err := m.publishRuntime(meta, m.stageDownloadRuntime(ctx, release, meta)); err != nil {
-			return err
-		}
-		if previousErr != nil && !errors.Is(previousErr, os.ErrNotExist) && !errors.Is(previousErr, errInvalidRuntimeSelection) {
+		if previousErr != nil && !errors.Is(previousErr, os.ErrNotExist) &&
+			(automatic || !errors.Is(previousErr, errInvalidRuntimeSelection)) {
 			return fmt.Errorf("已暂存 Runtime，但无法读取当前选择: %w", previousErr)
 		}
-		if previousErr == nil && semver.Compare("v"+previous.Version, "v"+selected.Version) > 0 {
-			if err := m.verifyInstalled(previous); err != nil {
-				return fmt.Errorf("已暂存 Runtime，但无法验证较新的已选版本: %w", err)
+		if automatic && errors.Is(previousErr, os.ErrNotExist) {
+			return errRuntimeUpdateDeferred
+		}
+		if previousErr == nil {
+			newerSelection := semver.Compare("v"+previous.Version, "v"+selected.Version) > 0
+			if newerSelection || (automatic && previous != selected) {
+				if err := m.verifyInstalled(previous); err != nil {
+					return fmt.Errorf("已暂存 Runtime，但无法验证当前选择: %w", err)
+				}
 			}
-			selected = previous
-			if automatic && !restart {
-				return nil
+			if newerSelection {
+				if automatic {
+					return errRuntimeUpdateDeferred
+				}
+				selected = previous
 			}
 		}
 		return m.activateRuntimeRelease(ctx, selected, automatic, restart, previousErr == nil && previous == selected)
@@ -380,14 +377,16 @@ func (m *Manager) runtimeMatchesRelease(h HealthInfo, selected InstalledRuntime)
 }
 
 func (m *Manager) activateRuntimeRelease(ctx context.Context, selected InstalledRuntime, automatic, restart, alreadySelected bool) error {
-	if !restart {
+	if !automatic && !restart {
 		return m.selectRuntime(selected)
 	}
 
-	h, body, err := m.Health(ctx)
+	healthCtx, cancelHealth := context.WithTimeout(ctx, 3*time.Second)
+	h, body, err := m.Health(healthCtx)
+	cancelHealth()
 	if err == nil {
 		if automatic && alreadySelected && m.runtimeMatchesRelease(h, selected) {
-			return nil
+			return errRuntimeUpdateDeferred
 		}
 		if !m.Owns(h.Exe) || !samePath(h.InstallationRoot, m.DataRoot) {
 			return errors.New("RPC 端口由其他 Runtime 实例使用，已保留暂存包")
@@ -400,6 +399,8 @@ func (m *Manager) activateRuntimeRelease(ctx context.Context, selected Installed
 		}
 	} else if !IsUnavailable(err) {
 		return err
+	} else if automatic {
+		return errRuntimeUpdateDeferred
 	}
 	if m.HasActiveOperations() {
 		if automatic {
@@ -407,7 +408,10 @@ func (m *Manager) activateRuntimeRelease(ctx context.Context, selected Installed
 		}
 		return errors.New("客户端业务操作尚未完成，已保留暂存包")
 	}
-	if automatic && err == nil {
+	if !restart {
+		return m.selectRuntime(selected)
+	}
+	if automatic {
 		var load struct {
 			RPC struct {
 				Running *int `json:"executing_until_reply"`
@@ -424,7 +428,7 @@ func (m *Manager) activateRuntimeRelease(ctx context.Context, selected Installed
 			return errRuntimeUpdateDeferred
 		}
 	}
-	if h.PID != 0 && !samePath(h.Exe, filepath.Join(m.runtimeDir(selected.Version), runtimeBinary())) {
+	if h.PID != 0 && !m.runtimeMatchesRelease(h, selected) {
 		m.progress("等待 Runtime 停止", 0, 0)
 		if err := m.stopManaged(ctx, h); err != nil {
 			return err
@@ -433,11 +437,14 @@ func (m *Manager) activateRuntimeRelease(ctx context.Context, selected Installed
 	if err := m.selectRuntime(selected); err != nil {
 		return err
 	}
-	if err := m.Start(); err != nil {
+	startCtx, cancelStart := context.WithTimeout(ctx, 90*time.Second)
+	defer cancelStart()
+	active, err := m.startDetached(startCtx, selected)
+	if err != nil {
 		return fmt.Errorf("新版 Runtime 启动失败，已保留新版选择和原始错误: %w", err)
 	}
-	if err := m.requireActive(selected); err != nil {
-		return fmt.Errorf("新版 Runtime 未通过启动验证，已保留新版选择和原始错误: %w", err)
+	if !m.runtimeMatchesRelease(active, selected) {
+		return errors.New("新版 Runtime 未通过启动验证，已保留新版选择")
 	}
-	return nil
+	return m.unlockIfNeeded(active)
 }

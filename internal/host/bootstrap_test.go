@@ -508,7 +508,7 @@ func TestPublishRuntimeStagingAndPromotion(t *testing.T) {
 
 	t.Run("payload copy verifies and publishes", func(t *testing.T) {
 		m := newInstallTestManager(t)
-		if err = m.publishRuntime(meta, stageBootstrapRuntime(payload.Dir)); err != nil {
+		if err = m.publishRuntime(meta, stageBootstrapRuntime(payload.Dir), true); err != nil {
 			t.Fatalf("publish failed: %v", err)
 		}
 		if err = verifyRuntime(m.runtimeDir(meta.RuntimeVersion), meta.BinaryHash); err != nil {
@@ -524,13 +524,13 @@ func TestPublishRuntimeStagingAndPromotion(t *testing.T) {
 	t.Run("existing version dir rejects unauthenticated files without deleting them", func(t *testing.T) {
 		m := newInstallTestManager(t)
 		dest := m.runtimeDir(meta.RuntimeVersion)
-		if err = m.publishRuntime(meta, stageBootstrapRuntime(payload.Dir)); err != nil {
+		if err = m.publishRuntime(meta, stageBootstrapRuntime(payload.Dir), true); err != nil {
 			t.Fatal(err)
 		}
 		if err = copyTree(filepath.Join(payload.Dir, bootstrapRuntimeDir, "core-notices"), filepath.Join(dest, "core-notices")); err != nil {
 			t.Fatal(err)
 		}
-		if err = m.publishRuntime(meta, stageBootstrapRuntime(payload.Dir)); err != nil {
+		if err = m.publishRuntime(meta, stageBootstrapRuntime(payload.Dir), true); err != nil {
 			t.Fatal(err)
 		}
 		if _, err = os.Stat(filepath.Join(dest, "core-notices", "NOTICES.txt")); err != nil {
@@ -540,7 +540,7 @@ func TestPublishRuntimeStagingAndPromotion(t *testing.T) {
 		if err = os.WriteFile(stray, []byte("user data"), 0600); err != nil {
 			t.Fatal(err)
 		}
-		if err = m.publishRuntime(meta, stageBootstrapRuntime(payload.Dir)); err == nil {
+		if err = m.publishRuntime(meta, stageBootstrapRuntime(payload.Dir), true); err == nil {
 			t.Fatal("unauthenticated files must prevent reuse")
 		}
 		if _, err = os.Stat(stray); err != nil {
@@ -551,7 +551,7 @@ func TestPublishRuntimeStagingAndPromotion(t *testing.T) {
 		m := newInstallTestManager(t)
 		err = m.publishRuntime(meta, func(stage string) error {
 			return errors.New("interrupted mid-copy")
-		})
+		}, true)
 		if err == nil {
 			t.Fatal("interrupted fill must fail")
 		}
@@ -576,7 +576,7 @@ func TestPublishRuntimeStagingAndPromotion(t *testing.T) {
 			t.Fatal(err)
 		}
 		// The tampered tree replaces the payload runtime dir wholesale.
-		err = m.publishRuntime(meta, func(stage string) error { return copyTree(tampered, stage) })
+		err = m.publishRuntime(meta, func(stage string) error { return copyTree(tampered, stage) }, true)
 		if err == nil || !strings.Contains(err.Error(), "checksum mismatch") {
 			t.Fatalf("tampered tree must fail verification, got %v", err)
 		}
@@ -1003,6 +1003,7 @@ func TestInstallRuntimeIndependently(t *testing.T) {
 			t.Fatal(err)
 		}
 		var denyCLI atomic.Bool
+		var runtimeQueries atomic.Int32
 		denyCLI.Store(true)
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			name := r.URL.Path
@@ -1015,6 +1016,7 @@ func TestInstallRuntimeIndependently(t *testing.T) {
 				}
 				_, _ = w.Write(cliList)
 			case name == "/repos/risense-ai/respire-runtime/releases" && r.URL.Query().Get("per_page") == "20":
+				runtimeQueries.Add(1)
 				_, _ = w.Write(list)
 			case name == "/repos/risense-ai/respire-runtime/releases/tags/"+retainedMeta.Tag:
 				_, _ = w.Write(retainedReleaseJSON)
@@ -1045,9 +1047,41 @@ func TestInstallRuntimeIndependently(t *testing.T) {
 		if err := os.WriteFile(filepath.Join(m.DataRoot, "runtime.json"), []byte("{broken legacy receipt"), 0600); err != nil {
 			t.Fatal(err)
 		}
-		m.Endpoint = newFakeRuntimeServer(t, "/external/rsrs-runtime", "foreign-supervisor").URL
+		incompatible := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			_, _ = io.WriteString(w, `{"server":"respire","v":2,"pid":1}`)
+		}))
+		defer incompatible.Close()
+		m.Endpoint = incompatible.URL
+		if err := m.RunTask("existing lifecycle task", func() error {
+			before := m.TaskSnapshot()
+			if err := m.InstallRuntime(true, true); err == nil || !strings.Contains(err.Error(), "已有操作正在执行") {
+				t.Fatalf("expected activation to be blocked by the lifecycle task, got %v", err)
+			}
+			if err := m.verifyInstalled(InstalledRuntime{Version: meta.RuntimeVersion, SHA256: binaryHash}); err != nil {
+				t.Fatalf("busy lifecycle task prevented Runtime staging: %v", err)
+			}
+			if m.TaskSnapshot() != before {
+				t.Fatalf("Runtime staging overwrote the active task: %+v", m.TaskSnapshot())
+			}
+			return nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+		if err = m.InstallRuntime(true, true); !errors.Is(err, errInvalidRuntimeSelection) {
+			t.Fatalf("a bad selection requires explicit activation: %v", err)
+		}
+		if selection, err := os.ReadFile(m.runtimeManifest()); err != nil || string(selection) != "{broken receipt" {
+			t.Fatalf("blocked activation changed the selection: %q, %v", selection, err)
+		}
 		if err = m.InstallRuntime(false, false); err != nil {
-			t.Fatalf("online Runtime install was blocked by old state: %v", err)
+			t.Fatalf("explicit installation could not select the staged version: %v", err)
+		}
+		if err = m.InstallRuntime(true, true); err == nil || !strings.Contains(err.Error(), "不是兼容") {
+			t.Fatalf("incompatible Runtime must block activation: %v", err)
+		}
+		m.Endpoint = newFakeRuntimeServer(t, "/external/rsrs-runtime", "foreign-supervisor").URL
+		if err = m.InstallRuntime(true, true); err == nil || !strings.Contains(err.Error(), "其他 Runtime 实例") {
+			t.Fatalf("foreign Runtime must block activation: %v", err)
 		}
 		m.Endpoint = "http://127.0.0.1:1"
 		installed, err := m.Installed()
@@ -1057,6 +1091,55 @@ func TestInstallRuntimeIndependently(t *testing.T) {
 		cli := filepath.Join(m.DataRoot, "bin", cliBinary())
 		if _, err := os.Stat(cli); !errors.Is(err, os.ErrNotExist) {
 			t.Fatalf("Runtime preparation touched the CLI: %v", err)
+		}
+
+		endpoint := filepath.Join(m.DataRoot, "runtime", "endpoint.json")
+		if err := os.MkdirAll(filepath.Dir(endpoint), 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(endpoint, []byte("obsolete registration"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		old := InstalledRuntime{Version: "2.0.0-dev.8", SHA256: binaryHash}
+		if err := writeJSON(m.runtimeManifest(), old); err != nil {
+			t.Fatal(err)
+		}
+		queries := runtimeQueries.Load()
+		if err := m.PrepareRuntimeForStartup(context.Background()); !errors.Is(err, os.ErrNotExist) || errors.Is(err, ErrRuntimeNotInstalled) {
+			t.Fatalf("cold startup must preserve the bad local selection error: %v", err)
+		}
+		if runtimeQueries.Load() != queries {
+			t.Fatal("cold startup queried releases after local verification failed")
+		}
+		if err := m.InstallRuntime(true, true); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("automatic activation must leave an unverifiable selection for explicit repair: %v", err)
+		}
+		if current, err := m.Installed(); err != nil || current != old {
+			t.Fatalf("automatic activation changed the bad selection: %+v, %v", current, err)
+		}
+		if err := m.InstallRuntime(false, false); err != nil {
+			t.Fatal(err)
+		}
+		library, err := lockRuntimeDatabase(context.Background(), m.DataRoot, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		queries = runtimeQueries.Load()
+		startErr := m.PrepareRuntimeForStartup(context.Background())
+		if err := library.Close(); err != nil {
+			t.Fatal(err)
+		}
+		if runtimeQueries.Load() != queries {
+			t.Fatal("cold startup queried releases with a verified local selection")
+		}
+		if startErr == nil || !strings.Contains(startErr.Error(), "数据库锁") {
+			t.Fatalf("cold startup must report the occupied library: %v", startErr)
+		}
+		if _, err := os.Stat(endpoint); err != nil {
+			t.Fatalf("blocked startup must retain the old endpoint record: %v", err)
+		}
+		if current, err := m.Installed(); err != nil || current != installed {
+			t.Fatalf("blocked startup must retain the verified selection: %+v, %v", current, err)
 		}
 
 		for _, running := range []int{0, 1} {
