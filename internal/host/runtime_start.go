@@ -46,6 +46,9 @@ func (m *Manager) startDetachedLocked(ctx context.Context, info InstalledRuntime
 	if endpoint.Scheme != "http" || endpoint.Hostname() != "127.0.0.1" || endpoint.Port() == "" {
 		return HealthInfo{}, errors.New("Runtime 启动要求本机环回端口")
 	}
+	if err := requireAbsentRuntimeAccountFile(filepath.Join(m.DataRoot, "runtime", "autostart", "offline-keygen.json")); err != nil {
+		return HealthInfo{}, fmt.Errorf("离线初始化尚未完成，请在操作记录中查询原请求: %w", err)
+	}
 	if err := archiveTerminalRuntimeMaintenance(m.DataRoot); err != nil {
 		return HealthInfo{}, err
 	}

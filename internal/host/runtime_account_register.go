@@ -81,10 +81,14 @@ func prepareDesktopRegistration(ctx context.Context, operation, profile, supplie
 	if suppliedSuper != "" {
 		return material, errors.New("新账户注册由 Client2 生成 Super Key")
 	}
+	return newRuntimeVaultMaterial(operation)
+}
+
+func newRuntimeVaultMaterial(operation string) (runtimeRegisterMaterial, error) {
 	var urk [32]byte
 	defer clear(urk[:])
 	if _, err := rand.Read(urk[:]); err != nil {
-		return material, err
+		return runtimeRegisterMaterial{}, err
 	}
 	return wrapRuntimeVaultKey(operation, urk[:])
 }

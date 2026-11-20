@@ -30,6 +30,7 @@ type Operation struct {
 	MaterialPending bool              `json:"materialPending,omitempty"`
 	write, host     bool
 	inputBlocked    bool
+	keygenRecovery  string
 	coreChange      *coreConfigChange
 }
 
@@ -122,6 +123,23 @@ func (m *Manager) Operation(id string) (Operation, error) {
 		return Operation{}, errors.New("操作记录不存在")
 	}
 	copy := *job
+	if job.keygenRecovery != "" {
+		var envelope map[string]json.RawMessage
+		if err := json.Unmarshal(copy.Envelope, &envelope); err != nil {
+			return Operation{}, err
+		}
+		details, err := json.Marshal(map[string]string{"super": job.keygenRecovery})
+		if err != nil {
+			return Operation{}, err
+		}
+		defer clear(details)
+		envelope["details"] = details
+		copy.Envelope, err = json.Marshal(envelope)
+		if err != nil {
+			return Operation{}, err
+		}
+		job.keygenRecovery, copy.keygenRecovery = "", ""
+	}
 	copy.Input = pendingHostInput(copy)
 	copy.MaterialPending = copy.materialPending()
 	return copy, nil
@@ -288,6 +306,7 @@ func (m *Manager) runOperation(spec commandSpec, args []string, secret, id strin
 		ctx = timedCtx
 	}
 	var envelope json.RawMessage
+	var keygenRecovery string
 	var err error
 	switch {
 	case spec.method == "model.apply-engine":
@@ -322,6 +341,8 @@ func (m *Manager) runOperation(spec commandSpec, args []string, secret, id strin
 		envelope, err = m.desktopProfileSwitch(ctx, args[0], spec.method == "desktop.space-use")
 	case spec.method == "desktop.space-create":
 		envelope, err = m.desktopSpaceCreate(ctx, args[0])
+	case spec.method == "desktop.offline-keygen":
+		envelope, keygenRecovery, err = m.desktopOfflineKeygen(ctx, id, false)
 	case spec.method == "auth.login", spec.method == "auth.login.browser", spec.method == "auth.register":
 		envelope, err = m.desktopRuntimeAccountLogin(ctx, args, secret, id, spec.method)
 	case spec.method == "desktop.logout", spec.method == "desktop.logout-full":
@@ -383,6 +404,7 @@ func (m *Manager) runOperation(spec commandSpec, args []string, secret, id strin
 	finished := time.Now().UTC()
 	job.Finished = &finished
 	job.Envelope = envelope
+	job.keygenRecovery = keygenRecovery
 	job.State = "done"
 	if err != nil {
 		job.State = "failed"
@@ -545,7 +567,8 @@ func (m *Manager) Recover(id string) (Operation, error) {
 		return Operation{}, errors.New("操作记录不存在")
 	}
 	job := *original
-	if job.State != "unconfirmed" && !job.materialPending() {
+	if job.State != "unconfirmed" && !job.materialPending() &&
+		!(job.Name == "keygen" && job.State == "done" && len(job.Envelope) == 0) {
 		m.mu.Unlock()
 		return job, nil
 	}
@@ -571,6 +594,8 @@ func (m *Manager) Recover(id string) (Operation, error) {
 		err = &unconfirmedError{id, errors.New("请核对本机设备配置、Runtime 状态和维护记录")}
 	case job.Name == "space_create":
 		err = &unconfirmedError{id, errors.New("请核对 client.json、目标目录的 space_owner.json 和 Runtime 维护记录，再处理原创建操作")}
+	case job.Name == "keygen":
+		envelope, _, err = m.desktopOfflineKeygen(ctx, id, true)
 	case job.Name == "agent_set" && job.host && job.Transaction == nil:
 		err = &unconfirmedError{id, errors.New("请核对工作区设置和 Runtime 维护记录")}
 	case job.Name == "agent_set" && !job.host:

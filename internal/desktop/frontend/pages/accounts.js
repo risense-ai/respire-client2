@@ -232,13 +232,13 @@ export function accounts(root, ctx) {
           if (
             !(await confirm(
               "初始化离线记忆库",
-              "将为当前未初始化的本机记忆库创建密钥。CLI 会拒绝覆盖已有记忆或云端密钥。请保存随后显示的恢复材料。",
+              "仅为当前全新的本机记忆库创建密钥。运行中的本机 Runtime 会先停止。请保存随后显示的恢复材料，再启动 Runtime。",
               "创建本机密钥",
             ))
           )
             return;
           const result = await execute("keygen");
-          showText("请保存本机恢复材料", raw(result.details || result.summary));
+          if (!recoveryMaterialDialog(result)) notify("离线记忆库已初始化");
           await ctx.refresh();
           await load();
           return;
