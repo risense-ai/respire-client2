@@ -2,9 +2,7 @@ package desktop
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
-	"net"
 	"path/filepath"
 	"testing"
 
@@ -24,144 +22,52 @@ func TestDirWritableRejectsMissingDirectory(t *testing.T) {
 }
 
 type startupRuntimeFixture struct {
-	selected       string
-	running        string
-	starts         int
-	unavailable    error
-	healthErr      error
-	installErr     error
-	startErr       error
-	allowAutomatic bool
-	installs       int
-	healthCalls    int
+	selected   string
+	installs   int
+	installErr error
+	startErr   error
 }
 
 func (m *startupRuntimeFixture) InstallRuntime(automatic, restart bool) error {
-	if automatic && !m.allowAutomatic {
-		return errors.New("startup install must not be automatic")
+	if automatic || restart {
+		return errors.New("first installation must only select the Runtime")
 	}
 	m.installs++
 	if m.installErr != nil {
 		return m.installErr
 	}
 	m.selected = "new"
-	if restart {
-		m.running = m.selected
-	}
 	return nil
 }
 
-func (m *startupRuntimeFixture) Health(context.Context) (host.HealthInfo, json.RawMessage, error) {
-	m.healthCalls++
-	if m.healthErr != nil {
-		return host.HealthInfo{}, nil, m.healthErr
+func (m *startupRuntimeFixture) PrepareRuntimeForStartup(context.Context) error {
+	if m.selected == "" {
+		return host.ErrRuntimeNotInstalled
 	}
-	if m.running == "" {
-		return host.HealthInfo{}, nil, m.unavailable
-	}
-	return host.HealthInfo{Exe: "fixture-owned"}, nil, nil
-}
-
-func (m *startupRuntimeFixture) Owns(exe string) bool { return exe == "fixture-owned" }
-
-func (m *startupRuntimeFixture) Start() error {
-	m.starts++
-	if m.startErr != nil {
-		return m.startErr
-	}
-	m.running = m.selected
-	return nil
+	return m.startErr
 }
 
 func TestInstallRuntimeForStartup(t *testing.T) {
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	address := listener.Addr().String()
-	if err = listener.Close(); err != nil {
-		t.Fatal(err)
-	}
-	conn, unavailable := net.Dial("tcp", address)
-	if conn != nil {
-		conn.Close()
-	}
-	if !host.IsUnavailable(unavailable) {
-		t.Fatalf("expected a refused connection, got %v", unavailable)
-	}
-
+	badSelection := errors.New("installed Runtime failed validation")
+	installFailure := errors.New("release query failed")
 	for _, tc := range []struct {
-		name, selected, running, wantRunning string
-		restart                              bool
-		wantStarts                           int
+		name, selected, wantSelection string
+		startErr, installErr, wantErr error
+		wantInstalls                  int
 	}{
-		{name: "first install starts runtime", wantRunning: "new", wantStarts: 1},
-		{name: "updating stopped runtime starts new version", selected: "old", wantRunning: "new", wantStarts: 1},
-		{name: "updating running runtime preserves it", selected: "old", running: "old", wantRunning: "old"},
-		{name: "automatic restart applies new version", selected: "old", running: "old", restart: true, wantRunning: "new"},
+		{name: "first start installs the missing Runtime", wantSelection: "new", wantInstalls: 1},
+		{name: "cold startup uses the selected local Runtime", selected: "local", wantSelection: "local"},
+		{name: "bad selection does not trigger an installation", selected: "bad", startErr: badSelection, wantErr: badSelection, wantSelection: "bad"},
+		{name: "failed first installation is reported", installErr: installFailure, wantErr: installFailure, wantInstalls: 1},
+		{name: "failed start after first installation is reported", startErr: badSelection, wantErr: badSelection, wantSelection: "new", wantInstalls: 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			m := &startupRuntimeFixture{selected: tc.selected, running: tc.running, unavailable: unavailable}
-			if err := installRuntimeForStartup(m, tc.restart); err != nil {
-				t.Fatal(err)
+			m := &startupRuntimeFixture{selected: tc.selected, startErr: tc.startErr, installErr: tc.installErr}
+			if err := startRuntimeForStartup(context.Background(), m); !errors.Is(err, tc.wantErr) {
+				t.Fatalf("got %v, want %v", err, tc.wantErr)
 			}
-			if m.selected != "new" || m.running != tc.wantRunning || m.starts != tc.wantStarts {
-				t.Fatalf("selected=%q running=%q starts=%d", m.selected, m.running, m.starts)
-			}
-		})
-	}
-
-	for _, stage := range []string{"install", "health", "start"} {
-		t.Run(stage+" failure is returned", func(t *testing.T) {
-			want := errors.New(stage + " failed")
-			m := &startupRuntimeFixture{unavailable: unavailable}
-			switch stage {
-			case "install":
-				m.installErr = want
-			case "health":
-				m.healthErr = want
-			case "start":
-				m.startErr = want
-			}
-			if err := installRuntimeForStartup(m, false); !errors.Is(err, want) {
-				t.Fatalf("got %v, want %v", err, want)
-			}
-			if stage != "start" && m.starts != 0 {
-				t.Fatal("must not start after an earlier failure")
-			}
-		})
-	}
-	for _, stage := range []string{"preparation", "health", "install", "success"} {
-		t.Run("background update "+stage, func(t *testing.T) {
-			want := errors.New(stage + " failed")
-			m := &startupRuntimeFixture{allowAutomatic: true, running: "old", selected: "old"}
-			var preparationErr error
-			switch stage {
-			case "preparation":
-				preparationErr = want
-			case "health":
-				m.healthErr = want
-			case "install":
-				m.installErr = want
-			}
-			err := updateRuntimeForBackground(context.Background(), m, preparationErr, true)
-			switch stage {
-			case "success":
-				if err != nil || m.installs != 1 || m.healthCalls != 1 || m.running != "new" {
-					t.Fatalf("background Runtime update did not activate successfully: %v, %+v", err, m)
-				}
-			case "preparation", "health":
-				if !errors.Is(err, want) || m.installs != 0 || m.running != "old" {
-					t.Fatalf("failed preparation or health check entered Runtime update: %v, %+v", err, m)
-				}
-			case "install":
-				if !errors.Is(err, want) || m.running != "old" {
-					t.Fatalf("background update hid install error: %v, %+v", err, m)
-				}
-				m.installErr = nil
-				if err := updateRuntimeForBackground(context.Background(), m, nil, true); err != nil || m.installs != 2 || m.running != "new" {
-					t.Fatalf("later scheduled update did not activate Runtime: %v, %+v", err, m)
-				}
+			if m.selected != tc.wantSelection || m.installs != tc.wantInstalls {
+				t.Fatalf("selected=%q installs=%d", m.selected, m.installs)
 			}
 		})
 	}

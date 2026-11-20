@@ -3,7 +3,6 @@ package desktop
 import (
 	"context"
 	"embed"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -265,47 +264,17 @@ func updateInterval(value string) time.Duration {
 	}
 }
 
-func installRuntimeForStartup(m interface {
+func startRuntimeForStartup(ctx context.Context, m interface {
 	InstallRuntime(bool, bool) error
-	Health(context.Context) (host.HealthInfo, json.RawMessage, error)
-	Start() error
-}, restart bool) error {
-	if err := m.InstallRuntime(false, restart); err != nil {
+	PrepareRuntimeForStartup(context.Context) error
+}) error {
+	if err := m.PrepareRuntimeForStartup(ctx); !errors.Is(err, host.ErrRuntimeNotInstalled) {
 		return err
 	}
-	if restart {
-		return nil
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-	_, _, err := m.Health(ctx)
-	cancel()
-	if host.IsUnavailable(err) {
-		return m.Start()
-	}
-	return err
-}
-
-func updateRuntimeForBackground(ctx context.Context, m interface {
-	InstallRuntime(bool, bool) error
-	Health(context.Context) (host.HealthInfo, json.RawMessage, error)
-	Owns(string) bool
-}, preparationErr error, restart bool) error {
-	if preparationErr != nil {
-		return preparationErr
-	}
-	healthCtx, healthCancel := context.WithTimeout(ctx, 3*time.Second)
-	h, _, err := m.Health(healthCtx)
-	healthCancel()
-	if host.IsUnavailable(err) {
-		return nil
-	}
-	if err != nil {
+	if err := m.InstallRuntime(false, false); err != nil {
 		return err
 	}
-	if !m.Owns(h.Exe) {
-		return nil
-	}
-	return m.InstallRuntime(true, restart)
+	return m.PrepareRuntimeForStartup(ctx)
 }
 
 func (d *desktop) background() {
@@ -323,26 +292,15 @@ func (d *desktop) background() {
 			log.Printf("CLI 自动更新失败: %v", err)
 		}
 	}()
-	startupPreparationErr := d.task("连接 Runtime", func() error {
-		prefs := d.m.Preferences()
-		if !prefs.AutoRuntime {
-			return nil
-		}
-		if prefs.RuntimeAutoUpdate {
-			_, err := d.m.Installed()
-			if errors.Is(err, os.ErrNotExist) {
-				return installRuntimeForStartup(d.m, prefs.RuntimeAutoRestart)
+	go func() {
+		d.task("连接 Runtime", func() error {
+			prefs := d.m.Preferences()
+			if !prefs.AutoRuntime {
+				return nil
 			}
-			if err != nil {
-				return err
-			}
-		}
-		err := d.m.Start()
-		if errors.Is(err, host.ErrRuntimeNotInstalled) {
-			return installRuntimeForStartup(d.m, d.m.Preferences().RuntimeAutoRestart)
-		}
-		return err
-	})
+			return startRuntimeForStartup(ctx, d.m)
+		})
+	}()
 	// Client and Runtime update on their own cadences (update page); a staged
 	// client update re-checks every minute so it applies once operations end.
 	var lastClient, lastRuntime time.Time
@@ -373,10 +331,10 @@ func (d *desktop) background() {
 				}
 			}
 		}
-		if startupPreparationErr == nil && prefs.RuntimeAutoUpdate &&
+		if prefs.RuntimeAutoUpdate &&
 			(lastRuntime.IsZero() || now.Sub(lastRuntime) >= updateInterval(prefs.RuntimeUpdateInterval)) {
 			lastRuntime = now
-			if err := updateRuntimeForBackground(ctx, d.m, startupPreparationErr, d.m.Preferences().RuntimeAutoRestart); err != nil {
+			if err := d.m.InstallRuntime(true, prefs.RuntimeAutoRestart); err != nil {
 				log.Printf("Runtime 自动更新失败: %v", err)
 			}
 		}

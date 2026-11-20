@@ -481,22 +481,22 @@ func fileHash(path string) (string, error) {
 	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
-func (m *Manager) download(ctx context.Context, url, dest, hash string, max int64) error {
-	err := m.downloadOnce(ctx, url, dest, hash, max)
+func (m *Manager) download(ctx context.Context, url, dest, hash string, max int64, reportProgress bool) error {
+	err := m.downloadOnce(ctx, url, dest, hash, max, reportProgress)
 	if err == nil {
 		return nil
 	}
 	// Blocked or flaky GitHub: retry once through the gh-proxy mirror.
 	if mirrored := mirrorURL(url); mirrored != url {
 		_ = os.Remove(dest)
-		if retryErr := m.downloadOnce(ctx, mirrored, dest, hash, max); retryErr == nil {
+		if retryErr := m.downloadOnce(ctx, mirrored, dest, hash, max, reportProgress); retryErr == nil {
 			return nil
 		}
 	}
 	return err
 }
 
-func (m *Manager) downloadOnce(ctx context.Context, url, dest, hash string, max int64) error {
+func (m *Manager) downloadOnce(ctx context.Context, url, dest, hash string, max int64, reportProgress bool) error {
 	if !validHash(hash) {
 		return errors.New("missing artifact SHA256")
 	}
@@ -530,7 +530,9 @@ func (m *Manager) downloadOnce(ctx context.Context, url, dest, hash string, max 
 				break
 			}
 			done += int64(n)
-			m.progress("下载 "+filepath.Base(dest), done, res.ContentLength)
+			if reportProgress {
+				m.progress("下载 "+filepath.Base(dest), done, res.ContentLength)
+			}
 		}
 		if re != nil {
 			if re != io.EOF {

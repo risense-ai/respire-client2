@@ -43,11 +43,20 @@ func (m *Manager) Owns(exe string) bool {
 }
 
 func (m *Manager) Start() error {
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-	h, _, err := m.Health(ctx)
+	return m.start(context.Background(), true)
+}
+
+// PrepareRuntimeForStartup reuses a running Runtime or starts the verified local selection.
+func (m *Manager) PrepareRuntimeForStartup(ctx context.Context) error {
+	return m.start(ctx, false)
+}
+
+func (m *Manager) start(ctx context.Context, switchRunning bool) error {
+	healthCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	h, _, err := m.Health(healthCtx)
 	cancel()
 	if err == nil {
-		if m.Owns(h.Exe) {
+		if switchRunning && m.Owns(h.Exe) {
 			info, installedErr := m.Installed()
 			if installedErr != nil {
 				return fmt.Errorf("读取 Runtime 安装信息失败: %w", installedErr)
@@ -71,23 +80,10 @@ func (m *Manager) Start() error {
 	if err != nil {
 		return fmt.Errorf("读取 Runtime 安装信息失败: %w", err)
 	}
-	ctx, cancel = context.WithTimeout(context.Background(), 90*time.Second)
+	ctx, cancel = context.WithTimeout(ctx, 90*time.Second)
 	defer cancel()
 	h, err = m.startDetached(ctx, info)
 	if err != nil {
-		return err
-	}
-	return m.unlockIfNeeded(h)
-}
-
-func (m *Manager) requireActive(info InstalledRuntime) error {
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-	defer cancel()
-	h, _, err := m.Health(ctx)
-	if err != nil {
-		return err
-	}
-	if err := m.verifySelectedHealth(h, info); err != nil {
 		return err
 	}
 	return m.unlockIfNeeded(h)
