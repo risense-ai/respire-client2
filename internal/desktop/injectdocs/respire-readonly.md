@@ -1,6 +1,6 @@
 # Respire read-only workflow
 
-In the command examples below, `rsrs` means an absolute executable path. Use `~/.rsrs/bin/rsrs` (`rsrs.exe` on Windows) for a managed installation, or the verified absolute path of your standalone CLI. In PowerShell, use `&` before the quoted path. Confirm the intended release with `--version` and use the same executable with `--client-only` for memory commands. If it is missing or outdated, report the path so the user can update it.
+In the command examples below, `rsrs` means an absolute executable path. Use the configured managed binary (`rsrs.exe` on Windows, `rsrs` elsewhere), or the verified path of your standalone CLI. For the CLI, check `RSRS_BIN_DIR` first. Otherwise use the `bin` directory under `RSRS_DATA_DIR` when set, or under `~/.rsrs` by default. In PowerShell, use `&` before the quoted path. Verify the intended release with `--version`, then use that path with `--client-only`. If it is missing or outdated, report the path so the user can update it.
 
 ## Historical memory trust boundary
 
