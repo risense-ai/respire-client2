@@ -47,7 +47,7 @@ func (m *Manager) setDesktopWorkspaceMode(ctx context.Context, setting string) (
 	}
 	switch change.mode {
 	case "normal", "readonly", "off":
-		return m.changeDeviceConfig(ctx, deviceConfigIntent{}, &change)
+		return m.changeDeviceConfig(ctx, deviceConfigIntent{}, &change, false)
 	default:
 		return nil, errors.New("workspace_mode 必须为 normal、readonly 或 off")
 	}
