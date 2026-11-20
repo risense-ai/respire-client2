@@ -174,8 +174,7 @@ func NormalizeRuntimeMetadata(b []byte) (RuntimeMetadata, error) {
 }
 
 // CheckRuntimeMetadata verifies a normalized metadata against the release it
-// was fetched from and the local build target: identity, asset names, hashes,
-// and the declared CLI compatibility window must all be intact.
+// was fetched from and the local build target: identity, asset names and hashes.
 func CheckRuntimeMetadata(meta RuntimeMetadata, releaseTag, target string) error {
 	if meta.RuntimeVersion == "" || meta.RuntimeVersion != strings.TrimPrefix(meta.Tag, "v") {
 		return metadataMismatch("runtime_version does not match tag")
@@ -194,12 +193,6 @@ func CheckRuntimeMetadata(meta RuntimeMetadata, releaseTag, target string) error
 	}
 	if !validHash(meta.BinaryHash) || !validHash(meta.ArchiveHash) {
 		return metadataMismatch("invalid SHA-256")
-	}
-	if !validVersion(meta.Compat.MinCLI) {
-		return metadataMismatch("compat.min_cli")
-	}
-	if meta.Compat.MaxCLI != "*" && !validVersion(meta.Compat.MaxCLI) {
-		return metadataMismatch("compat.max_cli")
 	}
 	return nil
 }

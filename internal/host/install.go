@@ -301,17 +301,13 @@ func (m *Manager) EnsureCoreConfigHost(ctx context.Context) error {
 		return err
 	}
 	defer lock.Close()
-	compat, err := m.coreHostCompat(ctx)
-	if err != nil {
-		return err
-	}
 	// Exclude running host commands while replacing only the CLI. Runtime
 	// selection, processes and supervisor ownership are never changed here.
 	m.cliInstallMu.Lock()
 	if m.HasActiveOperations() {
 		err = errors.New("业务操作尚未完成，未升级 CLI；原事务保留")
 	} else {
-		err = m.installOnlineCLI(ctx, compat)
+		err = m.installOnlineCLI(ctx, Compat{MinCLI: "0.0.0", MaxCLI: "*"})
 	}
 	m.cliInstallMu.Unlock()
 	if err != nil {
@@ -321,72 +317,6 @@ func (m *Manager) EnsureCoreConfigHost(ctx context.Context) error {
 		return fmt.Errorf("当前渠道的 CLI 不满足核心配置协议，未启动业务: %w", err)
 	}
 	return nil
-}
-
-// coreHostCompat intersects the published contracts of selected and running
-// Runtime bytes. With no Runtime yet, it uses channel discovery without installing it.
-func (m *Manager) coreHostCompat(ctx context.Context) (Compat, error) {
-	compat := Compat{MinCLI: "0.0.0", MaxCLI: "*"}
-	found := false
-	include := func(version, hash string) error {
-		if !validVersion(version) || !validHash(hash) {
-			return errors.New("无法确认现用 Runtime 的版本或摘要，未升级 CLI")
-		}
-		target, err := runtimeTarget()
-		if err != nil {
-			return err
-		}
-		var raw json.RawMessage
-		if err = m.fetchJSON(ctx, "https://github.com/risense-ai/"+runtimeRepo+"/releases/download/v"+version+"/runtime-build-"+target+".json", &raw); err != nil {
-			return err
-		}
-		meta, err := NormalizeRuntimeMetadata(raw)
-		if err != nil {
-			return err
-		}
-		if err = CheckRuntimeMetadata(meta, "v"+version, target); err != nil {
-			return err
-		}
-		if meta.BinaryHash != hash {
-			return errors.New("现用 Runtime 与发布摘要不匹配，未升级 CLI")
-		}
-		if semver.Compare("v"+meta.Compat.MinCLI, "v"+compat.MinCLI) > 0 {
-			compat.MinCLI = meta.Compat.MinCLI
-		}
-		if meta.Compat.MaxCLI != "*" && (compat.MaxCLI == "*" || semver.Compare("v"+meta.Compat.MaxCLI, "v"+compat.MaxCLI) < 0) {
-			compat.MaxCLI = meta.Compat.MaxCLI
-		}
-		found = true
-		return CheckCLICompat(compat.MinCLI, compat)
-	}
-	selected, err := m.Installed()
-	if err == nil {
-		if err = m.verifyInstalled(selected); err != nil {
-			return compat, err
-		}
-		if err = include(selected.Version, selected.SHA256); err != nil {
-			return compat, err
-		}
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return compat, err
-	}
-	health, _, err := m.Health(ctx)
-	if err == nil {
-		hash, hashErr := fileHash(health.Exe)
-		if hashErr != nil {
-			return compat, hashErr
-		}
-		if err = include(health.Version, hash); err != nil {
-			return compat, err
-		}
-	} else if !IsUnavailable(err) {
-		return compat, err
-	}
-	if !found {
-		_, meta, err := m.LatestRuntime(ctx)
-		return meta.Compat, err
-	}
-	return compat, nil
 }
 
 func (m *Manager) InstallRuntime(automatic bool, restart bool) error {

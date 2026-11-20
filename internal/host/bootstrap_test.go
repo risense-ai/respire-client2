@@ -1259,7 +1259,7 @@ func TestInstallRuntimeIndependently(t *testing.T) {
 			{"0", meta.RuntimeVersion, ""},
 			{"once", meta.RuntimeVersion, ""},
 			{"1", meta.RuntimeVersion, "协议"},
-			{"once", retainedMeta.RuntimeVersion, "最低版本"},
+			{"once", retainedMeta.RuntimeVersion, ""},
 		} {
 			unsupported := scenario.unsupported
 			t.Run("startup CLI-only capabilities "+unsupported+" runtime "+scenario.runtimeVersion, func(t *testing.T) {
@@ -1270,9 +1270,7 @@ func TestInstallRuntimeIndependently(t *testing.T) {
 				// The Runtime belongs to a CLI supervisor. Preparing CLI capabilities
 				// must neither replace its bytes nor select or restart any Runtime.
 				health := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-					if r.URL.Path != "/api/health" || r.Method != "GET" {
-						t.Error("CLI-only preparation attempted a Runtime operation")
-					}
+					t.Errorf("CLI-only preparation accessed Runtime: %s %s", r.Method, r.URL.Path)
 					_ = json.NewEncoder(w).Encode(HealthInfo{Server: "respire", Protocol: 1, PID: 4242,
 						Version: scenario.runtimeVersion, Exe: filepath.Join(tree, "rsrs-runtime-"+target), ManagedID: "fixture-supervisor"})
 				}))

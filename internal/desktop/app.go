@@ -19,7 +19,6 @@ import (
 	"github.com/wailsapp/wails/v3/pkg/events"
 	"github.com/wailsapp/wails/v3/pkg/services/notifications"
 	"github.com/wailsapp/wails/v3/pkg/updater"
-	"golang.org/x/mod/semver"
 	"respire-client2/internal/host"
 )
 
@@ -330,8 +329,8 @@ func (d *desktop) background() {
 			return nil
 		}
 		if prefs.RuntimeAutoUpdate {
-			info, err := d.m.Installed()
-			if errors.Is(err, os.ErrNotExist) || err == nil && semver.Compare("v"+info.Version, "v2.0.0-dev.27") < 0 {
+			_, err := d.m.Installed()
+			if errors.Is(err, os.ErrNotExist) {
 				return installRuntimeForStartup(d.m, prefs.RuntimeAutoRestart)
 			}
 			if err != nil {
