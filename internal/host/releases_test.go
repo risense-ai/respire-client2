@@ -149,8 +149,8 @@ func TestCheckRuntimeMetadataRejectsIdentityAndHashDrift(t *testing.T) {
 	}
 	wrong = base
 	wrong.Compat.MaxCLI = "not-a-version"
-	if err := CheckRuntimeMetadata(wrong, "v1.2.3", target); err == nil {
-		t.Fatal("invalid compat.max_cli must be rejected")
+	if err := CheckRuntimeMetadata(wrong, "v1.2.3", target); err != nil {
+		t.Fatal("Runtime package validation must ignore obsolete CLI version bounds", err)
 	}
 	wrong = base
 	wrong.RuntimeVersion = "1.2.4"
