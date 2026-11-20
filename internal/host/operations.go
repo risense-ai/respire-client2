@@ -315,6 +315,8 @@ func (m *Manager) runOperation(spec commandSpec, args []string, secret, id strin
 		envelope, err = m.desktopSpaceMembers(args)
 	case spec.method == "desktop.account-use", spec.method == "desktop.space-use":
 		envelope, err = m.desktopProfileSwitch(ctx, args[0], spec.method == "desktop.space-use")
+	case spec.method == "desktop.space-create":
+		envelope, err = m.desktopSpaceCreate(ctx, args[0])
 	case spec.method == "auth.login", spec.method == "auth.login.browser", spec.method == "auth.register":
 		envelope, err = m.desktopRuntimeAccountLogin(ctx, args, secret, id, spec.method)
 	case spec.method == "auth.recover", spec.method == "auth.reset":
@@ -554,6 +556,8 @@ func (m *Manager) Recover(id string) (Operation, error) {
 	case job.Name == "server_set", job.Name == "autosync_set", job.Name == "cure_auto_set", job.Name == "data_dir_set",
 		job.Name == "account_use", job.Name == "space_use":
 		err = &unconfirmedError{id, errors.New("请核对本机设备配置、Runtime 状态和维护记录")}
+	case job.Name == "space_create":
+		err = &unconfirmedError{id, errors.New("请核对 client.json、目标目录的 space_owner.json 和 Runtime 维护记录，再处理原创建操作")}
 	case job.Name == "agent_set" && job.host && job.Transaction == nil:
 		err = &unconfirmedError{id, errors.New("请核对工作区设置和 Runtime 维护记录")}
 	case job.Name == "agent_set" && !job.host:
