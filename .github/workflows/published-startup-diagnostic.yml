@@ -8,10 +8,6 @@ on:
         default: existing-keys
         type: choice
         options: [existing-keys, default-online]
-      cli_reader_ref:
-        description: 'Default-online only: exact trusted CLI main reader SHA, separate from product source'
-        required: false
-        type: string
       runtime_run_id:
         description: 'Default-online only: successful public Runtime producer run ID'
         type: string
@@ -20,21 +16,17 @@ on:
         required: true
         type: string
       cli_run_id:
-        description: 'Existing Windows CLI artifact run ID (no build is triggered)'
-        required: true
+        description: 'Existing-keys only: Windows CLI artifact run ID'
         type: string
       cli_version:
-        description: 'Exact CLI artifact version, without v'
-        required: true
+        description: 'Existing-keys only: exact CLI artifact version, without v'
         type: string
       cli_run_attempt:
-        description: 'Attempt that produced the CLI artifact'
-        required: true
+        description: 'Existing-keys only: attempt that produced the CLI artifact'
         default: '1'
         type: string
       cli_source_sha:
-        description: 'Full CLI commit SHA; must match run and schema2 build metadata'
-        required: true
+        description: 'Existing-keys only: full CLI commit SHA'
         type: string
       client2_run_id:
         description: 'Successful sealed Desktop producer run ID'
@@ -67,55 +59,37 @@ jobs:
       INPUT_ATTEMPT: ${{ inputs.client2_run_attempt }}
       CANDIDATE_SOURCE: ${{ inputs.client2_source_sha }}
       CANDIDATE_VERSION: ${{ inputs.client2_version }}
-      CLI_VERSION: ${{ inputs.cli_version }}
-      CLIENT2_SOURCE_SHA: ${{ inputs.client2_source_sha }}
-      CLI_READER_REF: ${{ inputs.cli_reader_ref }}
+      DIAGNOSTIC_SCOPE: ${{ inputs.scope }}
     steps:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
       - uses: actions/checkout@v7
+        if: inputs.scope == 'existing-keys'
         with:
           repository: risense-ai/respire-cli
-          ref: ${{ inputs.scope == 'default-online' && inputs.cli_reader_ref || inputs.cli_source_sha }}
+          ref: ${{ inputs.cli_source_sha }}
           fetch-depth: 0
           path: .cli
           persist-credentials: false
       - uses: actions/setup-python@v7
         with:
           python-version: '3.12'
-      - uses: actions/setup-node@v7
-        if: inputs.scope == 'default-online'
-        with:
-          node-version: '24'
-      - name: Require a trusted main reader before importing its code
-        if: inputs.scope == 'default-online'
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          if ($env:GITHUB_REF -cne 'refs/heads/main' -or $env:CLI_READER_REF -cnotmatch '^[0-9a-f]{40}$') {
-            throw 'Default-online requires main dispatch and an explicit reader SHA'
-          }
-          $reader = git -C .cli rev-parse HEAD
-          if ($LASTEXITCODE -or $reader -cne $env:CLI_READER_REF) { throw 'Reader checkout differs' }
-          git -C .cli merge-base --is-ancestor $env:CLI_READER_REF origin/main
-          if ($LASTEXITCODE) { throw 'Reader is not a trusted main ancestor' }
-      - name: Verify the selected CLI, Client2 and public Runtime artifacts
+      - name: Verify the existing-key CLI fixture
+        if: inputs.scope == 'existing-keys'
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
           CLI_RUN_ID: ${{ inputs.cli_run_id }}
           CLI_RUN_ATTEMPT: ${{ inputs.cli_run_attempt }}
           CLI_SOURCE_SHA: ${{ inputs.cli_source_sha }}
+          CLI_VERSION: ${{ inputs.cli_version }}
         run: |
           $ErrorActionPreference = 'Stop'
           $versionPattern = '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?(\+[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$'
           if ($env:CLI_RUN_ID -cnotmatch '^[1-9][0-9]*$' -or $env:CLI_RUN_ATTEMPT -cnotmatch '^[1-9][0-9]*$' -or
-              $env:CLI_SOURCE_SHA -cnotmatch '^[0-9a-f]{40}$' -or $env:CLIENT2_SOURCE_SHA -cnotmatch '^[0-9a-f]{40}$' -or
-              $env:INPUT_RUN_ID -cnotmatch '^[1-9][0-9]*$' -or $env:INPUT_ATTEMPT -cnotmatch '^[1-9][0-9]*$' -or
-              $env:CLI_VERSION -cnotmatch $versionPattern -or $env:CANDIDATE_VERSION -cnotmatch $versionPattern -or
-              $env:RUNTIME_VERSION -cnotmatch $versionPattern) {
-            throw 'Require exact producer runs, attempts, source SHAs and input versions'
+              $env:CLI_SOURCE_SHA -cnotmatch '^[0-9a-f]{40}$' -or $env:CLI_VERSION -cnotmatch $versionPattern) {
+            throw 'Require the exact CLI producer run, attempt, source SHA and version'
           }
           if (Test-Path Env:RSRS_CORE_TEST_MODE) { throw 'Core test mode is forbidden for real startup acceptance' }
           $assets = Join-Path $env:RUNNER_TEMP 'startup-assets'
@@ -153,6 +127,22 @@ jobs:
               $cliBuild.binary_file -cne $cliFile.Name -or $cliBuild.binary_size -ne $cliFile.Length -or
               $cliBuild.producer.run_id -ne $env:CLI_RUN_ID -or $cliBuild.producer.run_attempt -ne $env:CLI_RUN_ATTEMPT -or
               (Get-FileHash $cliFile.FullName -Algorithm SHA256).Hash.ToLowerInvariant() -cne $cliBuild.binary_sha256) { throw 'CLI schema2 source or binary proof differs' }
+          @{cli=$cliBuild; cli_artifact=$artifact[0]; cli_build_job=$jobs[0]} |
+            ConvertTo-Json -Depth 20 | Set-Content "$assets/cli-proof.json" -Encoding utf8NoBOM
+      - name: Verify sealed Client2 and public Runtime artifacts
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $versionPattern = '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?(\+[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$'
+          if ($env:CANDIDATE_SOURCE -cnotmatch '^[0-9a-f]{40}$' -or
+              $env:INPUT_RUN_ID -cnotmatch '^[1-9][0-9]*$' -or $env:INPUT_ATTEMPT -cnotmatch '^[1-9][0-9]*$' -or
+              $env:CANDIDATE_VERSION -cnotmatch $versionPattern -or $env:RUNTIME_VERSION -cnotmatch $versionPattern) {
+            throw 'Require exact producer run, attempt, source SHA and versions'
+          }
+          if (Test-Path Env:RSRS_CORE_TEST_MODE) { throw 'Core test mode is forbidden for real startup acceptance' }
+          $assets = Join-Path $env:RUNNER_TEMP 'startup-assets'
           gh release download "v$env:RUNTIME_VERSION" -R risense-ai/respire-runtime -p rsrs-runtime-x86_64-pc-windows-msvc.tar.gz -p runtime-build-x86_64-pc-windows-msvc.json -D "$assets/runtime"
           if ($LASTEXITCODE) { throw 'Runtime release download failed' }
           $runtimeBuild = Get-Content "$assets/runtime/runtime-build-x86_64-pc-windows-msvc.json" -Raw | ConvertFrom-Json
@@ -169,79 +159,78 @@ jobs:
           $sealed = $sealedOutput | ConvertFrom-Json
           $candidate = Get-Content "$assets/client/candidate.json" -Raw | ConvertFrom-Json
           $clientHash = (Get-FileHash "$assets/client/respire-windows-amd64.exe" -Algorithm SHA256).Hash.ToLowerInvariant()
-          [ordered]@{
-            schema = 1; scope = 'sealed Client2 real-SDK existing-key startup; not full GUI acceptance'
+          $scope = if ($env:DIAGNOSTIC_SCOPE -ceq 'existing-keys') {
+            'sealed Client2 real-SDK existing-key startup; not full GUI acceptance'
+          } else { 'sealed Client2 Runtime-only online installation references' }
+          $proof = [ordered]@{
+            schema = 1; scope = $scope
             core_test_mode = $false
-            cli = $cliBuild; cli_artifact = $artifact[0]; cli_build_job = $jobs[0]
             runtime = @{version=$env:RUNTIME_VERSION; source_sha=$runtimeBuild.source_commit; archive_sha256=$runtimeBuild.archive_sha256;
               binary_sha256=$runtimeBuild.binary_sha256; metadata_sha256=(Get-FileHash "$assets/runtime/runtime-build-x86_64-pc-windows-msvc.json" -Algorithm SHA256).Hash.ToLowerInvariant()}
             client2 = @{version=$candidate.version; source_sha=$candidate.source; sha256=$clientHash;
               producer=$candidate.producer; artifact_id=$sealed.artifact_id; artifact_zip_digest=$sealed.artifact_zip_digest;
               manifest_sha256=(Get-FileHash "$assets/client/candidate.json" -Algorithm SHA256).Hash.ToLowerInvariant(); six_package_receipts_verified=$true}
-          } | ConvertTo-Json -Depth 20 | Set-Content "$assets/input-proof.json" -Encoding utf8NoBOM
-      - name: Verify actual public latest assets with the selected trusted reader
+          }
+          if ($env:DIAGNOSTIC_SCOPE -ceq 'existing-keys') {
+            $cliProof = Get-Content "$assets/cli-proof.json" -Raw | ConvertFrom-Json -AsHashtable
+            foreach ($field in $cliProof.Keys) { $proof[$field] = $cliProof[$field] }
+          }
+          $proof | ConvertTo-Json -Depth 20 | Set-Content "$assets/input-proof.json" -Encoding utf8NoBOM
+      - name: Bind the sealed Client2 and Runtime reference to public release bytes
         if: inputs.scope == 'default-online'
-        shell: bash
+        shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          node --input-type=module <<'NODE'
-          import assert from 'node:assert/strict';
-          import {createHash} from 'node:crypto';
-          import {readFileSync,writeFileSync,mkdirSync} from 'node:fs';
-          import {join} from 'node:path';
-          import {execFileSync} from 'node:child_process';
-          import {parsePublishedAssets,publishedAssetNames,verifyPublishedTarget,downloadPublishedAsset} from './.cli/npm/scripts/extract-artifact.mjs';
-          const e=process.env,sha=b=>createHash('sha256').update(b).digest('hex');
-          const api=p=>JSON.parse(execFileSync('gh',['api',p],{encoding:'utf8'}));
-          const pages=p=>JSON.parse(execFileSync('gh',['api','--paginate','--slurp',p],{encoding:'utf8'}));
-          const assets=join(e.RUNNER_TEMP,'startup-assets'),proof=JSON.parse(readFileSync(join(assets,'input-proof.json')));
-          const target='x86_64-pc-windows-msvc',targets=JSON.parse(readFileSync('.cli/npm/artifact-manifest.json')).targets.map(t=>t.triple);
-          const publicPart=(kind,version,source,producer)=>{
-            const repository=`risense-ai/respire-${kind}`,release=api(`repos/${repository}/releases/tags/v${version}`);
-            assert.equal(release.draft,false);assert.ok(release.published_at);assert.equal(release.tag_name,`v${version}`);
-            const commit=api(`repos/${repository}/commits/v${version}`).sha;assert.equal(commit,source);
-            const inventory=pages(`repos/${repository}/releases/${release.id}/assets?per_page=100`).flat();
-            const selected=targets.flatMap(t=>publishedAssetNames(kind,t)).map(name=>{
-              const matches=inventory.filter(a=>a.name===name);assert.equal(matches.length,1);
-              const a=matches[0];assert.equal(a.state,'uploaded');assert.match(a.digest,/^sha256:[0-9a-f]{64}$/);
-              return {id:a.id,name,size:a.size,sha256:a.digest.slice(7)};
-            });
-            return {repository,release_id:release.id,version,source_sha:source,producer,assets:selected};
-          };
-          assert.match(e.RUNTIME_RUN_ID||'',/^[1-9]\d*$/,'Require the exact public Runtime producer run ID');
-          const runtimeRun=api(`repos/risense-ai/respire-runtime/actions/runs/${e.RUNTIME_RUN_ID}`);
-          assert.equal(runtimeRun.head_sha,proof.runtime.source_sha);
-          assert.equal(runtimeRun.path,'.github/workflows/release.yml');
-          assert.equal(runtimeRun.status,'completed');
-          assert.equal(runtimeRun.conclusion,'success');
-          const spec={schema:2,cli:publicPart('cli',e.CLI_VERSION,proof.cli.git_sha,{run_id:Number(proof.cli.producer.run_id),run_attempt:Number(proof.cli.producer.run_attempt)}),
-            runtime:publicPart('runtime',e.RUNTIME_VERSION,proof.runtime.source_sha,{run_id:runtimeRun.id,run_attempt:runtimeRun.run_attempt})};
-          const text=JSON.stringify(spec),hash=sha(text);parsePublishedAssets(text,hash,targets);
-          const expected=(part,name)=>part.assets.find(a=>a.name===name);
-          assert.equal(expected(spec.cli,proof.cli.binary_file).sha256,proof.cli.binary_sha256);
-          assert.equal(expected(spec.runtime,'rsrs-runtime-'+target+'.exe').sha256,proof.runtime.binary_sha256);
-          assert.equal(expected(spec.runtime,'rsrs-runtime-'+target+'.tar.gz').sha256,proof.runtime.archive_sha256);
-          const root=join(assets,'public-online');mkdirSync(root);
-          writeFileSync(join(root,'published-assets.json'),text);
-          const receipt=await verifyPublishedTarget(spec,target,join(root,'reference'),hash,{token:e.GH_TOKEN});
-          assert.equal(receipt.assets_verified,true);assert.equal(receipt.payloads_verified,true);assert.equal(receipt.full_passed,false);
-          const clientTag='v'+e.CANDIDATE_VERSION;
-          const client=api('repos/risense-ai/respire-client2/releases/tags/'+clientTag);
-          assert.equal(client.draft,false);assert.ok(client.published_at);assert.equal(client.tag_name,clientTag);
-          assert.equal(api('repos/risense-ai/respire-client2/commits/'+clientTag).sha,proof.client2.source_sha);
-          const matches=client.assets.filter(a=>a.name==='respire-windows-amd64.exe');assert.equal(matches.length,1);
-          const clientAsset=matches[0];assert.equal(clientAsset.state,'uploaded');assert.equal(clientAsset.digest,'sha256:'+proof.client2.sha256);
-          mkdirSync(join(root,'client'));
-          await downloadPublishedAsset({repository:'risense-ai/respire-client2'},
-            {id:clientAsset.id,name:clientAsset.name,size:clientAsset.size,sha256:proof.client2.sha256},join(root,'client'),{token:e.GH_TOKEN});
-          const runtimeMetadata=join(root,'reference','runtime',`runtime-build-${target}.json`);
-          const inputs={schema:1,scope:'latest-default-online-install-diagnostic',diagnostic_only:true,full_passed:false,
-            harness_sha:e.GITHUB_SHA,reader_sha:e.CLI_READER_REF,published_assets_sha256:hash,cli:spec.cli,runtime:spec.runtime,
-            client2:{release_id:client.id,version:e.CANDIDATE_VERSION,source_sha:proof.client2.source_sha,asset_id:clientAsset.id,sha256:proof.client2.sha256},
-            payload_identity:receipt.payload_identity,runtime_metadata_path:runtimeMetadata,runtime_metadata_sha256:sha(readFileSync(runtimeMetadata))};
-          writeFileSync(join(root,'online-inputs.json'),JSON.stringify(inputs,null,2));
-          NODE
+          $ErrorActionPreference = 'Stop'
+          if ($env:GITHUB_REF -cne 'refs/heads/main' -or $env:RUNTIME_RUN_ID -cnotmatch '^[1-9][0-9]*$') {
+            throw 'Default-online requires main dispatch and the exact public Runtime producer run'
+          }
+          function Read-GitHub([string]$Path) {
+            $json = gh api $Path
+            if ($LASTEXITCODE) { throw "GitHub lookup failed ($Path)" }
+            return ($json | ConvertFrom-Json)
+          }
+          function Public-Release([string]$Repository, [string]$Tag, [string]$Source) {
+            $release = Read-GitHub "repos/$Repository/releases/tags/$Tag"
+            if ($release.draft -ne $false -or -not $release.published_at -or $release.tag_name -cne $Tag -or
+                (Read-GitHub "repos/$Repository/commits/$Tag").sha -cne $Source) {
+              throw "Public release source differs ($Repository $Tag)"
+            }
+            return $release
+          }
+          function Public-Asset($Release, [string]$Name, [string]$Sha256) {
+            $match = @($Release.assets | Where-Object name -CEQ $Name)
+            if ($match.Count -ne 1 -or $match[0].state -cne 'uploaded' -or $match[0].digest -cne "sha256:$Sha256") {
+              throw "Public release asset differs ($Name)"
+            }
+            return $match[0].id
+          }
+          $assets = Join-Path $env:RUNNER_TEMP 'startup-assets'
+          $proof = Get-Content "$assets/input-proof.json" -Raw | ConvertFrom-Json
+          $runtimeRun = Read-GitHub "repos/risense-ai/respire-runtime/actions/runs/$env:RUNTIME_RUN_ID"
+          if ($runtimeRun.id -ne $env:RUNTIME_RUN_ID -or $runtimeRun.head_sha -cne $proof.runtime.source_sha -or
+              $runtimeRun.path -cne '.github/workflows/release.yml' -or
+              $runtimeRun.status -cne 'completed' -or $runtimeRun.conclusion -cne 'success') {
+            throw 'Public Runtime producer differs'
+          }
+          $runtime = Public-Release 'risense-ai/respire-runtime' "v$env:RUNTIME_VERSION" $proof.runtime.source_sha
+          $runtimeMetadata = Join-Path $assets 'runtime/runtime-build-x86_64-pc-windows-msvc.json'
+          $metadataAsset = Public-Asset $runtime (Split-Path -Leaf $runtimeMetadata) $proof.runtime.metadata_sha256
+          $archiveAsset = Public-Asset $runtime 'rsrs-runtime-x86_64-pc-windows-msvc.tar.gz' $proof.runtime.archive_sha256
+          $binaryAsset = Public-Asset $runtime 'rsrs-runtime-x86_64-pc-windows-msvc.exe' $proof.runtime.binary_sha256
+          $client = Public-Release 'risense-ai/respire-client2' "v$env:CANDIDATE_VERSION" $proof.client2.source_sha
+          $clientAsset = Public-Asset $client 'respire-windows-amd64.exe' $proof.client2.sha256
+          @{
+            schema=1; scope='latest-default-online-install-diagnostic'; diagnostic_only=$true; full_passed=$false
+            harness_sha=$env:GITHUB_SHA
+            runtime=@{version=$proof.runtime.version; source_sha=$proof.runtime.source_sha; binary_sha256=$proof.runtime.binary_sha256;
+              archive_sha256=$proof.runtime.archive_sha256; release_id=$runtime.id; run_id=$runtimeRun.id;
+              run_attempt=$runtimeRun.run_attempt; asset_ids=@($metadataAsset,$archiveAsset,$binaryAsset)}
+            client2=@{version=$proof.client2.version; source_sha=$proof.client2.source_sha; sha256=$proof.client2.sha256;
+              release_id=$client.id; asset_id=$clientAsset}
+            runtime_metadata_path=$runtimeMetadata; runtime_metadata_sha256=$proof.runtime.metadata_sha256
+          } | ConvertTo-Json -Depth 8 | Set-Content "$assets/online-inputs.json" -Encoding utf8NoBOM
       - name: Explicitly install the official public model and verify real CPU inference
         if: inputs.scope != 'default-online'
         shell: pwsh
@@ -290,9 +279,8 @@ jobs:
         run: |
           $assets = Join-Path $env:RUNNER_TEMP 'startup-assets'
           ./scripts/diagnose-published-startup.ps1 `
-            -DefaultOnline -PublicInputs "$assets/public-online/online-inputs.json" `
-            -Cli "$assets/cli/rsrs-x86_64-pc-windows-msvc.exe" `
-            -Client "$assets/public-online/client/respire-windows-amd64.exe" `
+            -DefaultOnline -PublicInputs "$assets/online-inputs.json" `
+            -Client "$assets/client/respire-windows-amd64.exe" `
             -RuntimeArchive "$assets/runtime/rsrs-runtime-x86_64-pc-windows-msvc.tar.gz" `
             -RuntimeVersion $env:RUNTIME_VERSION `
             -OutputDirectory "$env:RUNNER_TEMP/default-online-diagnostic"
@@ -307,9 +295,7 @@ jobs:
             ${{ runner.temp }}/startup-assets/model-inference.json
             ${{ runner.temp }}/published-startup-diagnostic/startup-diagnostic.json
             ${{ runner.temp }}/published-startup-diagnostic/client.log
-            ${{ runner.temp }}/startup-assets/public-online/published-assets.json
-            ${{ runner.temp }}/startup-assets/public-online/online-inputs.json
-            ${{ runner.temp }}/startup-assets/public-online/reference/published-assets-receipt.json
+            ${{ runner.temp }}/startup-assets/online-inputs.json
             ${{ runner.temp }}/default-online-diagnostic/startup-diagnostic.json
           if-no-files-found: error
           retention-days: 3
