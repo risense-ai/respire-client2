@@ -220,7 +220,7 @@ func (m *Manager) stageDownloadRuntime(ctx context.Context, release ReleaseInfo,
 }
 
 // installOnlineCLI resolves the same channel without coupling CLI/Runtime versions.
-func (m *Manager) installOnlineCLI(ctx context.Context, compat Compat) error {
+func (m *Manager) installOnlineCLI(ctx context.Context) error {
 	release, meta, err := m.LatestCLIBuild(ctx)
 	if err != nil {
 		return err
@@ -229,7 +229,7 @@ func (m *Manager) installOnlineCLI(ctx context.Context, compat Compat) error {
 	if err != nil {
 		return err
 	}
-	reuse, err := m.canReuseFrontendCLI(ctx, meta.Version, meta.BinaryHash, compat)
+	reuse, err := m.canReuseFrontendCLI(ctx, meta.Version, meta.BinaryHash)
 	if err != nil || reuse {
 		return err
 	}
@@ -251,7 +251,7 @@ func (m *Manager) installOnlineCLI(ctx context.Context, compat Compat) error {
 			return errors.New("CLI release binary size mismatch")
 		}
 	}
-	return m.installFrontendCLI(ctx, source, meta.Version, meta.BinaryHash, compat)
+	return m.installFrontendCLI(ctx, source, meta.Version, meta.BinaryHash)
 }
 
 // RequireCoreConfigHost only probes capabilities; it never installs or replays.
@@ -277,7 +277,7 @@ func (m *Manager) UpdateInstalledCLI(ctx context.Context) error {
 	if m.HasActiveOperations() {
 		return errors.New("业务操作尚未完成，未升级 CLI；原事务保留")
 	}
-	return m.installOnlineCLI(ctx, Compat{MinCLI: "0.0.0", MaxCLI: "*"})
+	return m.installOnlineCLI(ctx)
 }
 
 // EnsureCoreConfigHost prepares the legacy CLI capability for explicit host operations.
@@ -307,7 +307,7 @@ func (m *Manager) EnsureCoreConfigHost(ctx context.Context) error {
 	if m.HasActiveOperations() {
 		err = errors.New("业务操作尚未完成，未升级 CLI；原事务保留")
 	} else {
-		err = m.installOnlineCLI(ctx, Compat{MinCLI: "0.0.0", MaxCLI: "*"})
+		err = m.installOnlineCLI(ctx)
 	}
 	m.cliInstallMu.Unlock()
 	if err != nil {

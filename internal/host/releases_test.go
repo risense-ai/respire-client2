@@ -180,25 +180,6 @@ func TestSelectReleaseByChannel(t *testing.T) {
 	}
 }
 
-func TestCheckCLICompat(t *testing.T) {
-	compat := Compat{MinCLI: "1.0.20", MaxCLI: "2.0.0"}
-	if err := CheckCLICompat("1.5.0", compat); err != nil {
-		t.Fatalf("in-range CLI must pass: %v", err)
-	}
-	if err := CheckCLICompat("1.0.19", compat); err == nil {
-		t.Fatal("CLI below min must fail")
-	}
-	if err := CheckCLICompat("2.0.1", compat); err == nil {
-		t.Fatal("CLI above max must fail")
-	}
-	if err := CheckCLICompat("99.0.0", Compat{MinCLI: "1.0.0", MaxCLI: "*"}); err != nil {
-		t.Fatalf("max_cli * must be unbounded: %v", err)
-	}
-	if err := CheckCLICompat("garbage", compat); err == nil {
-		t.Fatal("unparseable CLI version must fail")
-	}
-}
-
 func TestNormalizeCLIMetadataValidatesIdentity(t *testing.T) {
 	target, targetErr := runtimeTarget()
 	if targetErr != nil {
