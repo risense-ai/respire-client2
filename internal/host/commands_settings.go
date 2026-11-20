@@ -20,7 +20,7 @@ var settingsCommands = map[string]commandSpec{
 	"agent_set":             {words: []string{"agent-config"}, host: true, write: true, args: []argument{requiredOpt("setting", "--set")}},
 	"account_list":          {method: "desktop.account-list"},
 	"account_use":           {method: "desktop.account-use", host: true, write: true, args: []argument{pos("name")}},
-	"migration_list":        {words: []string{"migrate"}, host: true},
+	"migration_list":        {method: "desktop.migration-list"},
 	"migration_apply":       {words: []string{"migrate"}, host: true, write: true, args: []argument{requiredOpt("source", "--source"), requiredOpt("account", "--account")}},
 	"login":                 {method: "auth.login.browser", host: true, write: true, args: []argument{opt("addr", "--addr")}},
 	"logout":                {words: []string{"logout"}, host: true, write: true},

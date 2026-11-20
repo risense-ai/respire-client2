@@ -313,6 +313,8 @@ func (m *Manager) runOperation(spec commandSpec, args []string, secret, id strin
 		envelope, err = m.desktopProfileList(spec.method == "desktop.space-list")
 	case spec.method == "desktop.space-members":
 		envelope, err = m.desktopSpaceMembers(args)
+	case spec.method == "desktop.migration-list":
+		envelope, err = m.desktopLegacyProfiles()
 	case spec.method == "desktop.account-use", spec.method == "desktop.space-use":
 		envelope, err = m.desktopProfileSwitch(ctx, args[0], spec.method == "desktop.space-use")
 	case spec.method == "auth.login", spec.method == "auth.login.browser", spec.method == "auth.register":
