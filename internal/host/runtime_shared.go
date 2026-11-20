@@ -81,13 +81,12 @@ func receiptFiles(receipt sharedRuntimeReceipt) ([]releaseFile, error) {
 			Minimum int `json:"minimum"`
 			Maximum int `json:"maximum"`
 		} `json:"protocol_range"`
-		Capabilities map[string]string `json:"capabilities"`
 	}
 	if err = json.Unmarshal([]byte(receipt.Release.JSON), &inventory); err != nil {
 		return nil, err
 	}
-	if len(inventory.Commit) != 40 || inventory.Protocol.Minimum != 1 || inventory.Protocol.Maximum < 1 || inventory.Capabilities["business_executor"] != "1" || inventory.Capabilities["mcp_server"] != "1" || len(inventory.Files) == 0 || len(inventory.Files) > 4096 {
-		return nil, errors.New("Runtime 发布凭据缺少完整文件清单或协议能力")
+	if len(inventory.Commit) != 40 || inventory.Protocol.Minimum < 1 || inventory.Protocol.Maximum < inventory.Protocol.Minimum || len(inventory.Files) == 0 || len(inventory.Files) > 4096 {
+		return nil, errors.New("Runtime 发布凭据缺少完整文件清单或有效协议范围")
 	}
 	if _, err = hex.DecodeString(inventory.Commit); err != nil {
 		return nil, errors.New("Runtime 发布提交标识无效")

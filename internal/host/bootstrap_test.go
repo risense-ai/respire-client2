@@ -169,7 +169,6 @@ func fixtureReleaseJSON(t *testing.T, tree string, meta RuntimeMetadata) ([]byte
 	}
 	fields["files"], fields["source_commit"] = files, strings.Repeat("0", 40)
 	fields["protocol_range"] = map[string]int{"minimum": 1, "maximum": 1}
-	fields["capabilities"] = map[string]string{"business_executor": "1", "mcp_server": "1"}
 	return json.Marshal(fields)
 }
 
@@ -808,7 +807,7 @@ func TestBootstrapPayloadRejectsInvalidLocalComponents(t *testing.T) {
 		{"mismatched Runtime compatibility", damageMetadata(func(meta map[string]any) {
 			meta["compat"] = map[string]string{"min_cli": "0.5.0", "max_cli": "*"}
 		}), "metadata does not match bootstrap manifest", false},
-		{"incomplete Runtime proof", damageMetadata(func(meta map[string]any) { delete(meta, "files") }), "Runtime 发布凭据缺少完整文件清单或协议能力", false},
+		{"incomplete Runtime proof", damageMetadata(func(meta map[string]any) { delete(meta, "files") }), "Runtime 发布凭据缺少完整文件清单或有效协议范围", false},
 		{"invalid manifest", func(dir string) error {
 			return os.WriteFile(filepath.Join(dir, bootstrapManifestFile), []byte("{"), 0600)
 		}, "unexpected EOF", false},
