@@ -845,22 +845,26 @@ export function createWizard(ctx) {
       return true;
     }
     executeStatus("正在下载模型文件…");
-    const { done } = openDownloadModal({
-      model: state.model,
-      variant: cpuBaseline ? "baseline" : state.variant,
-      label: modelLabel(state.model),
-      getMirror: () => "auto",
-    });
-    const ok = await done;
-    const stage = ctx.desktop?.task || {};
-    if (!ok && stage.stage !== "完成") {
-      // Download still running after the modal was closed: the wizard keeps
-      // tracking it from the task snapshot without resubmitting.
-      const tracked = await trackRunningDownload();
-      if (!tracked) {
+    const downloads = [cpuBaseline ? "baseline" : state.variant];
+    // Legacy M3 weight downloads do not include the tokenizer.
+    if (!cpuBaseline && !isProfileModel(state.model) && !inventory.tokenizer_installed) {
+      if (variant?.installed) downloads.pop();
+      downloads.unshift("tokenizer");
+    }
+    for (const [index, variant] of downloads.entries()) {
+      const { element, done } = openDownloadModal({
+        model: state.model,
+        variant,
+        label: modelLabel(state.model),
+        getMirror: () => "auto",
+      });
+      const ok = await done;
+      // Follow a download whose modal was closed without resubmitting it.
+      if (!ok && !(await trackRunningDownload())) {
         failure("download", "下载未完成。");
         return false;
       }
+      if (index + 1 < downloads.length) element.close();
     }
     try {
       inventory = await fetchInventory(state.model);
