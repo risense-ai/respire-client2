@@ -19,7 +19,7 @@ var runtimeCommands = map[string]commandSpec{
 	"model_cancel":          {method: "model.control", write: true, args: []argument{pos("id")}},
 	"model_uninstall":       {method: "desktop.model-uninstall", write: true},
 	"model_probe":           {words: []string{"model", "probe"}, args: []argument{opt("text", "--text")}},
-	"model_install_engines": {words: []string{"model", "install-engines"}, host: true, write: true},
+	"model_install_engines": {method: "desktop.install-engines", host: true, write: true},
 	"index_prepare":         {method: "index.prepare", write: true},
 	"index_rebuild":         {words: []string{"reembed"}, write: true},
 }
