@@ -3,13 +3,13 @@ on:
   workflow_dispatch:
     inputs:
       scope:
-        description: 'Existing-key restart or fresh public default installation; diagnostics only'
+        description: 'Existing-key restart, fresh public install, or fresh sealed candidate install; diagnostics only'
         required: true
         default: existing-keys
         type: choice
-        options: [existing-keys, default-online]
+        options: [existing-keys, default-online, candidate-online]
       runtime_run_id:
-        description: 'Default-online only: successful public Runtime producer run ID'
+        description: 'Online scopes only: successful public Runtime producer run ID'
         type: string
       runtime_version:
         description: 'Exact published Runtime version, without v'
@@ -176,15 +176,15 @@ jobs:
             foreach ($field in $cliProof.Keys) { $proof[$field] = $cliProof[$field] }
           }
           $proof | ConvertTo-Json -Depth 20 | Set-Content "$assets/input-proof.json" -Encoding utf8NoBOM
-      - name: Bind the sealed Client2 and Runtime reference to public release bytes
-        if: inputs.scope == 'default-online'
+      - name: Bind online inputs to verified Runtime and Client2 bytes
+        if: inputs.scope == 'default-online' || inputs.scope == 'candidate-online'
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           $ErrorActionPreference = 'Stop'
           if ($env:GITHUB_REF -cne 'refs/heads/main' -or $env:RUNTIME_RUN_ID -cnotmatch '^[1-9][0-9]*$') {
-            throw 'Default-online requires main dispatch and the exact public Runtime producer run'
+            throw 'Online diagnostics require main dispatch and the exact public Runtime producer run'
           }
           function Read-GitHub([string]$Path) {
             $json = gh api $Path
@@ -219,20 +219,33 @@ jobs:
           $metadataAsset = Public-Asset $runtime (Split-Path -Leaf $runtimeMetadata) $proof.runtime.metadata_sha256
           $archiveAsset = Public-Asset $runtime 'rsrs-runtime-x86_64-pc-windows-msvc.tar.gz' $proof.runtime.archive_sha256
           $binaryAsset = Public-Asset $runtime 'rsrs-runtime-x86_64-pc-windows-msvc.exe' $proof.runtime.binary_sha256
-          $client = Public-Release 'risense-ai/respire-client2' "v$env:CANDIDATE_VERSION" $proof.client2.source_sha
-          $clientAsset = Public-Asset $client 'respire-windows-amd64.exe' $proof.client2.sha256
+          $clientInput = @{version=$proof.client2.version; source_sha=$proof.client2.source_sha; sha256=$proof.client2.sha256}
+          if ($env:DIAGNOSTIC_SCOPE -ceq 'default-online') {
+            $client = Public-Release 'risense-ai/respire-client2' "v$env:CANDIDATE_VERSION" $proof.client2.source_sha
+            $clientInput.asset_id = Public-Asset $client 'respire-windows-amd64.exe' $proof.client2.sha256
+            $clientInput.release_id = $client.id
+            $scope = 'latest-default-online-install-diagnostic'
+          } elseif ($env:DIAGNOSTIC_SCOPE -ceq 'candidate-online') {
+            $clientInput.producer = $proof.client2.producer
+            $clientInput.artifact_id = $proof.client2.artifact_id
+            $clientInput.artifact_zip_digest = $proof.client2.artifact_zip_digest
+            $clientInput.manifest_sha256 = $proof.client2.manifest_sha256
+            $clientInput.six_package_receipts_verified = $proof.client2.six_package_receipts_verified
+            $scope = 'sealed-candidate-online-install-diagnostic'
+          } else {
+            throw 'Invalid online diagnostic scope'
+          }
           @{
-            schema=1; scope='latest-default-online-install-diagnostic'; diagnostic_only=$true; full_passed=$false
+            schema=1; scope=$scope; diagnostic_only=$true; full_passed=$false
             harness_sha=$env:GITHUB_SHA
             runtime=@{version=$proof.runtime.version; source_sha=$proof.runtime.source_sha; binary_sha256=$proof.runtime.binary_sha256;
               archive_sha256=$proof.runtime.archive_sha256; release_id=$runtime.id; run_id=$runtimeRun.id;
               run_attempt=$runtimeRun.run_attempt; asset_ids=@($metadataAsset,$archiveAsset,$binaryAsset)}
-            client2=@{version=$proof.client2.version; source_sha=$proof.client2.source_sha; sha256=$proof.client2.sha256;
-              release_id=$client.id; asset_id=$clientAsset}
+            client2=$clientInput
             runtime_metadata_path=$runtimeMetadata; runtime_metadata_sha256=$proof.runtime.metadata_sha256
           } | ConvertTo-Json -Depth 8 | Set-Content "$assets/online-inputs.json" -Encoding utf8NoBOM
       - name: Explicitly install the official public model and verify real CPU inference
-        if: inputs.scope != 'default-online'
+        if: inputs.scope == 'existing-keys'
         shell: pwsh
         env:
           RSRS_ENGINE: cpu
@@ -262,7 +275,7 @@ jobs:
           & $cli --runtime-internal --stop --json
           if ($LASTEXITCODE) { throw 'Model preparation Runtime stop failed' }
       - name: Diagnose sealed desktop real-SDK existing-key restart
-        if: inputs.scope != 'default-online'
+        if: inputs.scope == 'existing-keys'
         shell: pwsh
         run: |
           $assets = Join-Path $env:RUNNER_TEMP 'startup-assets'
@@ -273,17 +286,24 @@ jobs:
             -ModelDirectory "$env:RUNNER_TEMP/startup-model-preparation/models/bge-m3" `
             -RuntimeVersion $env:RUNTIME_VERSION `
             -OutputDirectory "$env:RUNNER_TEMP/published-startup-diagnostic"
-      - name: Diagnose latest public default installation only
-        if: inputs.scope == 'default-online'
+      - name: Diagnose fresh online installation only
+        if: inputs.scope == 'default-online' || inputs.scope == 'candidate-online'
         shell: pwsh
         run: |
+          $ErrorActionPreference = 'Stop'
           $assets = Join-Path $env:RUNNER_TEMP 'startup-assets'
-          ./scripts/diagnose-published-startup.ps1 `
-            -DefaultOnline -PublicInputs "$assets/online-inputs.json" `
+          if ($env:DIAGNOSTIC_SCOPE -ceq 'default-online') {
+            $mode = @{DefaultOnline=$true; PublicInputs="$assets/online-inputs.json"}
+          } elseif ($env:DIAGNOSTIC_SCOPE -ceq 'candidate-online') {
+            $mode = @{CandidateOnline=$true; CandidateInputs="$assets/online-inputs.json"}
+          } else {
+            throw 'Invalid online diagnostic scope'
+          }
+          ./scripts/diagnose-published-startup.ps1 @mode `
             -Client "$assets/client/respire-windows-amd64.exe" `
             -RuntimeArchive "$assets/runtime/rsrs-runtime-x86_64-pc-windows-msvc.tar.gz" `
             -RuntimeVersion $env:RUNTIME_VERSION `
-            -OutputDirectory "$env:RUNNER_TEMP/default-online-diagnostic"
+            -OutputDirectory "$env:RUNNER_TEMP/$env:DIAGNOSTIC_SCOPE-diagnostic"
       - uses: actions/upload-artifact@v7
         if: always()
         with:
@@ -297,5 +317,6 @@ jobs:
             ${{ runner.temp }}/published-startup-diagnostic/client.log
             ${{ runner.temp }}/startup-assets/online-inputs.json
             ${{ runner.temp }}/default-online-diagnostic/startup-diagnostic.json
+            ${{ runner.temp }}/candidate-online-diagnostic/startup-diagnostic.json
           if-no-files-found: error
           retention-days: 3
