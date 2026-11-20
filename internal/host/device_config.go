@@ -53,7 +53,7 @@ func (m *Manager) desktopDeviceConfig(ctx context.Context, intent deviceConfigIn
 	if err := m.requireNoDeviceMaintenance(); err != nil {
 		return nil, err
 	}
-	edit, err := m.reviewDeviceConfig(intent)
+	edit, err := m.reviewDeviceConfig(intent, "")
 	if err != nil {
 		return nil, err
 	}
@@ -231,7 +231,7 @@ func deviceProfilePath(value string) (string, error) {
 	return path, nil
 }
 
-func (m *Manager) reviewDeviceConfig(intent deviceConfigIntent) (deviceConfigEdit, error) {
+func (m *Manager) reviewDeviceConfig(intent deviceConfigIntent, workspaceMode string) (deviceConfigEdit, error) {
 	edit := deviceConfigEdit{path: filepath.Join(m.DataRoot, "client.json")}
 	data, before, err := m.readDeviceConfig()
 	if err != nil {
@@ -267,6 +267,12 @@ func (m *Manager) reviewDeviceConfig(intent deviceConfigIntent) (deviceConfigEdi
 	}
 	if intent.CureAuto != nil {
 		fields["cure_auto"] = json.RawMessage(fmt.Sprint(*intent.CureAuto))
+	}
+	if workspaceMode != "" {
+		fields["service_mode"], err = json.Marshal(workspaceMode)
+		if err != nil {
+			return edit, err
+		}
 	}
 	edit.candidate, err = json.MarshalIndent(fields, "", "  ")
 	if err != nil {
