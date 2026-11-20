@@ -3,11 +3,11 @@ on:
   workflow_dispatch:
     inputs:
       scope:
-        description: 'Existing-key restart, fresh public install, or fresh sealed candidate install; diagnostics only'
+        description: 'Existing-key restart, fresh install, or sealed candidate lifecycle; diagnostics only'
         required: true
         default: existing-keys
         type: choice
-        options: [existing-keys, default-online, candidate-online]
+        options: [existing-keys, default-online, candidate-online, candidate-lifecycle]
       runtime_run_id:
         description: 'Online scopes only: successful public Runtime producer run ID'
         type: string
@@ -49,7 +49,55 @@ permissions:
   contents: read
   actions: read
 jobs:
+  candidate-lifecycle:
+    if: inputs.scope == 'candidate-lifecycle'
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {runner: windows-latest, platform: windows-amd64, target: x86_64-pc-windows-msvc}
+          - {runner: windows-11-arm, platform: windows-arm64, target: aarch64-pc-windows-msvc}
+          - {runner: macos-15-intel, platform: darwin-amd64, target: x86_64-apple-darwin}
+          - {runner: macos-15, platform: darwin-arm64, target: aarch64-apple-darwin}
+          - {runner: ubuntu-22.04, platform: linux-amd64, target: x86_64-unknown-linux-gnu}
+          - {runner: ubuntu-22.04-arm, platform: linux-arm64, target: aarch64-unknown-linux-gnu}
+    env:
+      INPUT_RUN_ID: ${{ inputs.client2_run_id }}
+      INPUT_ATTEMPT: ${{ inputs.client2_run_attempt }}
+      CANDIDATE_SOURCE: ${{ inputs.client2_source_sha }}
+      CANDIDATE_VERSION: ${{ inputs.client2_version }}
+      RUNTIME_VERSION: ${{ inputs.runtime_version }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - name: Install the desktop executable's Linux dependencies
+        if: runner.os == 'Linux'
+        run: sudo apt-get update -qq && sudo apt-get install -y libgtk-3-0 libwebkit2gtk-4.1-0
+      - name: Verify and unpack the exact sealed candidate
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python scripts/desktop-candidate.py producer --root sealed
+      - name: Run the sealed executable with an isolated Runtime profile
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARGET_PLATFORM: ${{ matrix.platform }}
+          RUNTIME_TARGET: ${{ matrix.target }}
+        run: python scripts/check-sealed-runtime-lifecycle.py
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: sealed-runtime-lifecycle-${{ github.run_attempt }}-${{ matrix.platform }}
+          path: lifecycle-report.json
+          if-no-files-found: error
+
   existing-keys:
+    if: inputs.scope != 'candidate-lifecycle'
     runs-on: windows-latest
     timeout-minutes: 25
     env:
