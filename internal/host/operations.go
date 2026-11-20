@@ -331,6 +331,8 @@ func (m *Manager) runOperation(spec commandSpec, args []string, secret, id strin
 		envelope, err = m.uninstallM3(ctx)
 	case spec.method == "desktop.space-kick":
 		envelope, err = m.desktopSpaceKick(ctx, id, args, "")
+	case spec.method == "desktop.space-remove":
+		envelope, err = m.removeDesktopSpace(ctx, id, args[0], false)
 	case spec.host:
 		envelope, err = m.hostOperation(ctx, args, secret, spec.method, id)
 	default:
@@ -570,6 +572,8 @@ func (m *Manager) Recover(id string) (Operation, error) {
 		err = &unconfirmedError{id, errors.New("请核对 BGE-M3 模型目录及 .bge-m3-uninstall 暂存目录")}
 	case job.Name == "space_kick", job.Name == "space_kick_all":
 		envelope, err = m.desktopSpaceKick(ctx, id, nil, job.Name)
+	case job.Name == "space_remove":
+		envelope, err = m.removeDesktopSpace(ctx, id, "", true)
 	case job.host:
 		envelope, err = m.recoverHost(ctx, job)
 	default:

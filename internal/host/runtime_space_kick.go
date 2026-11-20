@@ -299,39 +299,44 @@ func (m *Manager) publishSpaceKickMarker(ctx context.Context, r spaceKickRecord,
 
 func (m *Manager) claimSpaceKickMarker(ctx context.Context, r spaceKickRecord, path string) ([]byte, error) {
 	return m.stoppedSpaceKick(ctx, r, func() ([]byte, error) {
-		raw, err := readCredentialConfig(path, runtimeMaintenanceLimit)
-		var marker runtimeMaintenanceMarker
-		if err != nil || json.Unmarshal(raw, &marker) != nil || marker.Schema != 1 || marker.Phase != "Paused" ||
-			marker.Token != r.Token || !hostOperationID.MatchString(r.Token) || marker.ExpectedProfile != r.Profile ||
-			marker.OwnerPID <= 0 || marker.OwnerBirth == "" || marker.ExpectedVersion == "" {
-			return nil, errors.New("原成员撤销维护记录无效")
-		}
-		registration, err := readCredentialConfig(filepath.Join(filepath.Dir(path), "registration.json"), controlFrameLimit)
-		if err != nil && !errors.Is(err, os.ErrNotExist) {
-			return nil, err
-		}
-		coordinator, err := runtimeRegistrationCoordinator(r.Root, registration)
-		if err != nil || coordinator != marker.ID {
-			return nil, errors.New("原成员撤销协调器已改变")
-		}
-		birth, err := hostControlBirth(ctx)
-		if err != nil {
-			return nil, err
-		}
-		if marker.OwnerPID == os.Getpid() && marker.OwnerBirth == birth {
-			return raw, nil
-		}
-		previous, err := runtimeControlProcessBirth(ctx, marker.OwnerPID)
-		if err != nil || previous == marker.OwnerBirth {
-			return nil, errors.New("无法确认原成员撤销协调器已退出")
-		}
-		marker.OwnerPID, marker.OwnerBirth = os.Getpid(), birth
-		data, err := json.Marshal(marker)
-		if err != nil {
-			return nil, err
-		}
-		return data, writeRuntimeAccountRecord(path, data, raw)
+		return claimPausedRuntimeMarker(ctx, path, r.Root, r.Profile, r.Token)
 	})
+}
+
+// The caller holds takeover and has verified the stopped owner and library locks.
+func claimPausedRuntimeMarker(ctx context.Context, path, root, profile, token string) ([]byte, error) {
+	raw, err := readCredentialConfig(path, runtimeMaintenanceLimit)
+	var marker runtimeMaintenanceMarker
+	if err != nil || json.Unmarshal(raw, &marker) != nil || marker.Schema != 1 || marker.Phase != "Paused" ||
+		marker.Token != token || !hostOperationID.MatchString(token) || marker.ExpectedProfile != profile ||
+		marker.OwnerPID <= 0 || marker.OwnerBirth == "" || marker.ExpectedVersion == "" {
+		return nil, errors.Join(errors.New("原 Runtime 维护记录无效"), err)
+	}
+	registration, err := readCredentialConfig(filepath.Join(filepath.Dir(path), "registration.json"), controlFrameLimit)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return nil, err
+	}
+	coordinator, err := runtimeRegistrationCoordinator(root, registration)
+	if err != nil || coordinator != marker.ID {
+		return nil, errors.New("原 Runtime 维护协调器已改变")
+	}
+	birth, err := hostControlBirth(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if marker.OwnerPID == os.Getpid() && marker.OwnerBirth == birth {
+		return raw, nil
+	}
+	previous, err := runtimeControlProcessBirth(ctx, marker.OwnerPID)
+	if err != nil || previous == marker.OwnerBirth {
+		return nil, errors.New("无法确认原 Runtime 维护协调器已退出")
+	}
+	marker.OwnerPID, marker.OwnerBirth = os.Getpid(), birth
+	data, err := json.Marshal(marker)
+	if err != nil {
+		return nil, err
+	}
+	return data, writeRuntimeAccountRecord(path, data, raw)
 }
 
 func verifiedSpaceKickReply(reply rpcResponse, r spaceKickRecord) (json.RawMessage, error) {
