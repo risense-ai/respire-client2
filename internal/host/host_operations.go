@@ -39,6 +39,9 @@ func (m *Manager) hostExecutable(ctx context.Context) (string, error) {
 }
 
 func (m *Manager) hostOperation(ctx context.Context, args []string, secret, method, id string) (json.RawMessage, error) {
+	if method == "desktop.install-engines" {
+		return m.installModelEngines(ctx)
+	}
 	m.cliInstallMu.RLock()
 	defer m.cliInstallMu.RUnlock()
 	return m.hostOperationLocked(ctx, args, secret, method, id)

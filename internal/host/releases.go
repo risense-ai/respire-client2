@@ -482,21 +482,21 @@ func fileHash(path string) (string, error) {
 }
 
 func (m *Manager) download(ctx context.Context, url, dest, hash string, max int64, reportProgress bool) error {
-	err := m.downloadOnce(ctx, url, dest, hash, max, reportProgress)
+	err := m.downloadOnce(ctx, m.HTTPClient, url, dest, hash, max, reportProgress)
 	if err == nil {
 		return nil
 	}
 	// Blocked or flaky GitHub: retry once through the gh-proxy mirror.
 	if mirrored := mirrorURL(url); mirrored != url {
 		_ = os.Remove(dest)
-		if retryErr := m.downloadOnce(ctx, mirrored, dest, hash, max, reportProgress); retryErr == nil {
+		if retryErr := m.downloadOnce(ctx, m.HTTPClient, mirrored, dest, hash, max, reportProgress); retryErr == nil {
 			return nil
 		}
 	}
 	return err
 }
 
-func (m *Manager) downloadOnce(ctx context.Context, url, dest, hash string, max int64, reportProgress bool) error {
+func (m *Manager) downloadOnce(ctx context.Context, client *http.Client, url, dest, hash string, max int64, reportProgress bool) error {
 	if !validHash(hash) {
 		return errors.New("missing artifact SHA256")
 	}
@@ -504,7 +504,7 @@ func (m *Manager) downloadOnce(ctx context.Context, url, dest, hash string, max 
 	if err != nil {
 		return err
 	}
-	res, err := m.HTTPClient.Do(req)
+	res, err := client.Do(req)
 	if err != nil {
 		return err
 	}
