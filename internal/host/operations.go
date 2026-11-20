@@ -315,6 +315,8 @@ func (m *Manager) runOperation(spec commandSpec, args []string, secret, id strin
 		envelope, err = m.desktopSpaceMembers(args)
 	case spec.method == "desktop.migration-list":
 		envelope, err = m.desktopLegacyProfiles()
+	case spec.method == "desktop.migration-apply":
+		envelope, err = m.desktopLegacyMigration(ctx, id, args, false)
 	case spec.method == "desktop.account-use", spec.method == "desktop.space-use":
 		envelope, err = m.desktopProfileSwitch(ctx, args[0], spec.method == "desktop.space-use")
 	case spec.method == "desktop.space-create":
@@ -557,6 +559,8 @@ func (m *Manager) Recover(id string) (Operation, error) {
 	}
 	var envelope json.RawMessage
 	switch {
+	case job.Name == "migration_apply":
+		envelope, err = m.desktopLegacyMigration(ctx, id, nil, true)
 	case job.Name == "server_set", job.Name == "autosync_set", job.Name == "cure_auto_set", job.Name == "data_dir_set",
 		job.Name == "account_use", job.Name == "space_use":
 		err = &unconfirmedError{id, errors.New("请核对本机设备配置、Runtime 状态和维护记录")}
