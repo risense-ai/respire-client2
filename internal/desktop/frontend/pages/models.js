@@ -755,6 +755,13 @@ export function models(root, ctx) {
       const savedModel = localStorage.getItem("respire-model");
       if (savedModel && MODEL_OPTIONS.some(([id]) => id === savedModel))
         modelID = savedModel;
+      const mirror = ctx.desktop.preferences.modelMirror || "auto";
+      const mirrorSel = $("[data-mirror] [name=mirror]", root);
+      const customMirror = ![...mirrorSel.options].some((option) => option.value === mirror);
+      mirrorSel.value = customMirror ? "custom" : mirror;
+      $("[data-mirror-custom]", root).hidden = !customMirror;
+      $("[name=mirror-custom]", root).value = customMirror ? mirror : "";
+      $("[data-mirror-state]", root).textContent = "当前来源：" + mirror;
       const jobs = await api("operations");
       fusion.requestId = jobs.find((job) => job.name === "agent_set" &&
         job.state === "unconfirmed" && (!job.transaction || job.transaction.kind === "core_config"))?.id || null;
@@ -772,16 +779,6 @@ export function models(root, ctx) {
         adoptFusion(agent.recall_fusion_runtime);
         $("[data-recall] [name=mode]", root).value =
           agent.recall_mode || "fast";
-        const mirror = agent.model_mirror || "auto";
-        const mirrorSel = $("[data-mirror] [name=mirror]", root);
-        if ([...mirrorSel.options].some((option) => option.value === mirror))
-          mirrorSel.value = mirror;
-        else {
-          mirrorSel.value = "custom";
-          $("[data-mirror-custom]", root).hidden = false;
-          $("[name=mirror-custom]", root).value = mirror;
-        }
-        $("[data-mirror-state]", root).textContent = "当前来源：" + mirror;
       }
       if (values[1].status === "fulfilled") {
         const state = summary(values[1].value);
@@ -1120,9 +1117,7 @@ export function models(root, ctx) {
     event.preventDefault();
     action($("[type=submit]", event.target), async () => {
       const mirror = currentMirror();
-      await execute("agent_set", {
-        setting: "model_mirror=" + (mirror || "auto"),
-      });
+      await ctx.savePreferences({ modelMirror: mirror || "auto" });
       $("[data-mirror-state]", root).textContent =
         "当前来源：" + (mirror || "auto");
       notify("下载来源已保存，之后的下载任务使用该镜像。");

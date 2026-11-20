@@ -68,7 +68,7 @@ func (m *Manager) desktopAgentSettings() (json.RawMessage, error) {
 	}
 
 	result := map[string]any{"workspace_mode": mode}
-	for _, name := range []string{"diary_mode", "recall_mode", "model_mirror", "recall_api_base", "recall_model"} {
+	for _, name := range []string{"diary_mode", "recall_mode", "recall_api_base", "recall_model"} {
 		if value, present := settings[name]; present {
 			if _, ok := value.(string); !ok {
 				return nil, fmt.Errorf("%s 必须是字符串", name)

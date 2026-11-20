@@ -2,13 +2,11 @@ package host
 
 // Multi-threaded downloads for BGE-M3 weights: the client fetches the pinned
 // files itself with parallel Range chunks and SHA256 verification.
-// URLs and hashes mirror respire-cli's cli/src/model_install.rs.
 
 import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -107,39 +105,11 @@ func modelFileURLOf(definition modelDefinition, origin, rel string) string {
 	return origin + "/" + definition.Repo + "/resolve/" + definition.Revision + "/" + filepath.ToSlash(rel)
 }
 
-// modelMirrorSetting resolves the download source the same way the CLI does:
-// an explicit choice wins, otherwise agent.json model_mirror, otherwise auto.
 func (m *Manager) modelMirrorSetting(explicit string) string {
 	if strings.TrimSpace(explicit) != "" {
 		return explicit
 	}
-	agent := readAgentConfig(m.DataRoot)
-	if mirror, _ := agent["model_mirror"].(string); mirror != "" {
-		return mirror
-	}
-	return "auto"
-}
-
-// readAgentConfig reads the agent.json in the effective data dir (client.json
-// data_dir when set, mirroring the CLI's data_dir resolution).
-func readAgentConfig(dataRoot string) map[string]any {
-	config := map[string]any{}
-	if data, err := os.ReadFile(filepath.Join(dataRoot, "client.json")); err == nil {
-		var parsed map[string]any
-		if json.Unmarshal(data, &parsed) == nil {
-			if dir, _ := parsed["data_dir"].(string); dir != "" {
-				if expanded, err := expandTilde(dir); err == nil {
-					dataRoot = expanded
-				}
-			}
-		}
-	}
-	data, err := os.ReadFile(filepath.Join(dataRoot, "agent.json"))
-	if err != nil {
-		return config
-	}
-	json.Unmarshal(data, &config)
-	return config
+	return m.Preferences().ModelMirror
 }
 
 func expandTilde(p string) (string, error) {
