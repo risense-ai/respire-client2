@@ -327,6 +327,8 @@ func (m *Manager) runOperation(spec commandSpec, args []string, secret, id strin
 		envelope, err = m.setDesktopWorkspaceMode(ctx, strings.TrimPrefix(args[1], "--set="))
 	case spec.method == "desktop.model-uninstall":
 		envelope, err = m.uninstallM3(ctx)
+	case spec.method == "desktop.space-kick":
+		envelope, err = m.desktopSpaceKick(ctx, id, args, "")
 	case spec.host:
 		envelope, err = m.hostOperation(ctx, args, secret, spec.method, id)
 	default:
@@ -562,6 +564,8 @@ func (m *Manager) Recover(id string) (Operation, error) {
 		envelope, err = m.recoverDesktopCoreConfig(ctx, job)
 	case job.Name == "model_uninstall":
 		err = &unconfirmedError{id, errors.New("请核对 BGE-M3 模型目录及 .bge-m3-uninstall 暂存目录")}
+	case job.Name == "space_kick", job.Name == "space_kick_all":
+		envelope, err = m.desktopSpaceKick(ctx, id, nil, job.Name)
 	case job.host:
 		envelope, err = m.recoverHost(ctx, job)
 	default:
