@@ -334,16 +334,7 @@ func (m *Manager) InstallRuntime(automatic bool, restart bool) error {
 	}
 
 	previous, previousErr := m.Installed()
-	if previousErr != nil && !errors.Is(previousErr, os.ErrNotExist) && !errors.Is(previousErr, errInvalidRuntimeSelection) {
-		return previousErr
-	}
 	selected := InstalledRuntime{Version: meta.RuntimeVersion, SHA256: meta.BinaryHash}
-	if previousErr == nil && semver.Compare("v"+previous.Version, "v"+selected.Version) > 0 {
-		if err := m.verifyInstalled(previous); err != nil {
-			return fmt.Errorf("无法验证较新的已选 Runtime: %w", err)
-		}
-		selected = previous
-	}
 	if automatic && previousErr == nil && previous == selected {
 		if !restart {
 			return nil
@@ -352,14 +343,27 @@ func (m *Manager) InstallRuntime(automatic bool, restart bool) error {
 		if err != nil {
 			return err
 		}
-		if h.Version == selected.Version && h.RuntimeVersion == selected.Version && h.ImageSHA256 == selected.SHA256 &&
-			samePath(h.InstallationRoot, m.DataRoot) &&
-			samePath(h.Exe, filepath.Join(m.runtimeDir(selected.Version), runtimeBinary())) {
+		if m.runtimeMatchesRelease(h, selected) {
 			return nil
 		}
 	}
 	apply := func() error {
-		return m.applyRuntimeRelease(ctx, release, meta, selected, automatic, restart)
+		if err := m.publishRuntime(meta, m.stageDownloadRuntime(ctx, release, meta)); err != nil {
+			return err
+		}
+		if previousErr != nil && !errors.Is(previousErr, os.ErrNotExist) && !errors.Is(previousErr, errInvalidRuntimeSelection) {
+			return fmt.Errorf("已暂存 Runtime，但无法读取当前选择: %w", previousErr)
+		}
+		if previousErr == nil && semver.Compare("v"+previous.Version, "v"+selected.Version) > 0 {
+			if err := m.verifyInstalled(previous); err != nil {
+				return fmt.Errorf("已暂存 Runtime，但无法验证较新的已选版本: %w", err)
+			}
+			selected = previous
+			if automatic && !restart {
+				return nil
+			}
+		}
+		return m.activateRuntimeRelease(ctx, selected, automatic, restart, previousErr == nil && previous == selected)
 	}
 	if automatic {
 		return m.RunTask("更新 Runtime", apply)
@@ -369,19 +373,22 @@ func (m *Manager) InstallRuntime(automatic bool, restart bool) error {
 
 var errRuntimeUpdateDeferred = errors.New("Runtime update deferred while requests are active")
 
-func (m *Manager) applyRuntimeRelease(ctx context.Context, release ReleaseInfo, meta RuntimeMetadata,
-	selected InstalledRuntime, automatic, restart bool) error {
-	if selected.Version == meta.RuntimeVersion {
-		if err := m.publishRuntime(meta, m.stageDownloadRuntime(ctx, release, meta)); err != nil {
-			return err
-		}
-	}
+func (m *Manager) runtimeMatchesRelease(h HealthInfo, selected InstalledRuntime) bool {
+	return h.Version == selected.Version && h.RuntimeVersion == selected.Version && h.ImageSHA256 == selected.SHA256 &&
+		samePath(h.InstallationRoot, m.DataRoot) &&
+		samePath(h.Exe, filepath.Join(m.runtimeDir(selected.Version), runtimeBinary()))
+}
+
+func (m *Manager) activateRuntimeRelease(ctx context.Context, selected InstalledRuntime, automatic, restart, alreadySelected bool) error {
 	if !restart {
 		return m.selectRuntime(selected)
 	}
 
 	h, body, err := m.Health(ctx)
 	if err == nil {
+		if automatic && alreadySelected && m.runtimeMatchesRelease(h, selected) {
+			return nil
+		}
 		if !m.Owns(h.Exe) || !samePath(h.InstallationRoot, m.DataRoot) {
 			return errors.New("RPC 端口由其他 Runtime 实例使用，已保留暂存包")
 		}

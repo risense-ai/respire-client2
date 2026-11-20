@@ -1262,6 +1262,21 @@ func TestInstallRuntimeIndependently(t *testing.T) {
 		if _, err := os.Stat(cli); !errors.Is(err, os.ErrNotExist) {
 			t.Fatalf("retaining Runtime attempted to repair the CLI: %v", err)
 		}
+		if err := os.Remove(m.runtimeReceiptPath(retained.Version)); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Remove(m.runtimeReceiptPath(installed.Version)); err != nil {
+			t.Fatal(err)
+		}
+		if err := m.InstallRuntime(false, false); err == nil || !strings.Contains(err.Error(), "已暂存 Runtime") {
+			t.Fatalf("invalid retained release must report the activation error after staging: %v", err)
+		}
+		if err := m.verifyInstalled(installed); err != nil {
+			t.Fatalf("incoming release must be staged before verifying the retained release: %v", err)
+		}
+		if current, err := m.Installed(); err != nil || current != retained {
+			t.Fatalf("staging changed the selected Runtime: %+v %v", current, err)
+		}
 		for _, failure := range []string{"hash", "size"} {
 			cliMeta["binary_sha256"] = sha256Hex(t, cliBytes)
 			cliMeta["binary_size"] = len(cliBytes)
