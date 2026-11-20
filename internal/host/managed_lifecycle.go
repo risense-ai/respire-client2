@@ -11,7 +11,7 @@ import (
 	"regexp"
 )
 
-// The CLI lifecycle owner must pause supervision before stopping its actor.
+// Only the supervising host can pause its own restart policy.
 func (m *Manager) stopManaged(ctx context.Context, h HealthInfo) error {
 	if h.InstallationRoot == "" || !filepath.IsAbs(h.InstallationRoot) {
 		return errors.New("受监督 Runtime 未报告有效安装根目录")
@@ -22,19 +22,18 @@ func (m *Manager) stopManaged(ctx context.Context, h HealthInfo) error {
 	if err := verifyExecutable(h.Exe); err != nil {
 		return err
 	}
-	if h.ManagedID == "" {
-		lock, err := m.lockRuntimeTakeover(ctx)
-		if err != nil {
-			return err
-		}
-		defer lock.Close()
-		if err := m.stopDetached(ctx, h); err != nil {
-			return err
-		}
-	} else if _, err := m.hostOperation(ctx, []string{"runtime", "stop"}, "", "runtime.stop", ""); err != nil {
-		return fmt.Errorf("通过 CLI 生命周期协调器停止 Runtime: %w", err)
+	if h.ManagedID != "" {
+		return errors.New("请由当前监督宿主暂停自动拉起并停止 Runtime")
 	}
-	_, _, err := m.Health(ctx)
+	lock, err := m.lockRuntimeTakeover(ctx)
+	if err != nil {
+		return err
+	}
+	defer lock.Close()
+	if err := m.stopDetached(ctx, h); err != nil {
+		return err
+	}
+	_, _, err = m.Health(ctx)
 	if IsUnavailable(err) {
 		return nil
 	}
