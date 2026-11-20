@@ -217,7 +217,10 @@ func TestOpenCodeInstructionsPreserveEntries(t *testing.T) {
 }
 
 func TestWorkspaceModeResolution(t *testing.T) {
-	root := t.TempDir()
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
 	t.Setenv("RSRS_DATA_DIR", root)
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
