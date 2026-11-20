@@ -90,11 +90,13 @@ def check(report):
         }
         child_env.update(PATH=fixture_path, RSRS_DATA_DIR=str(profile), RSRS_RPC_PORT=str(port))
 
-        def client(action, data_dir=profile, success=True):
+        def client(action, data_dir=profile, expected_error=None):
             process = subprocess.run([image, "--headless", action], cwd=root, capture_output=True,
                                      env=dict(child_env, RSRS_DATA_DIR=str(data_dir)), timeout=180)
             result = json.loads(process.stdout)
-            require(result["ok"] is success and (process.returncode == 0) is success,
+            success = expected_error is None
+            require(result["ok"] is success and process.returncode == (0 if success else 1)
+                    and result.get("error") == expected_error,
                     f"Unexpected Client2 result for {action}: {result.get('error')}")
             return result.get("result")
 
@@ -133,7 +135,14 @@ def check(report):
             with opener.open(request, timeout=5) as response:
                 return json.load(response)
 
-        client("status", success=False)
+        def assert_listener_absent():
+            try:
+                with socket.create_connection(("127.0.0.1", port), timeout=5):
+                    raise RuntimeError("The fixture port still has a listener")
+            except ConnectionRefusedError:
+                return
+
+        assert_listener_absent()
         try:
             client("start")
         except RuntimeError:
@@ -157,13 +166,13 @@ def check(report):
             checks.append("repeat_start_same_instance")
             foreign = root / "foreign"
             foreign.mkdir()
-            client("stop", data_dir=foreign, success=False)
+            client("stop", data_dir=foreign, expected_error="独立 Runtime 未报告完整的停止身份")
             repeated = health()
             require(all(repeated[key] == value for key, value in identity.items()), "Foreign stop changed the instance")
             checks.append("foreign_stop_rejected")
         finally:
             client("stop")
-        client("status", success=False)
+        assert_listener_absent()
         receipt = profile / "runtime" / f"stop-{initial['instance_id']}.json"
         require(json.loads(receipt.read_bytes())["state"] == "drained", "Missing drained stop receipt")
         require(assert_runtime_only() == expected, "Runtime selection or CLI absence changed")
