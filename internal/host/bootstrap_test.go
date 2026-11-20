@@ -28,7 +28,16 @@ func TestArchiveStoppedEndpointWithExtendedWindowsProfile(t *testing.T) {
 		t.Skip("Windows extended paths")
 	}
 	t.Setenv("RSRS_DEFAULT_DATA_DIR", "")
-	root := t.TempDir()
+	// The production caller holds a takeover lock on the resolved installation.
+	// Temp may contain a runner junction or a short-name alias.
+	profile, err := canonicalSessionDirectory(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := windowsDOSPath(profile)
+	if root == profile {
+		t.Fatal("expected a Windows extended path and its DOS form")
+	}
 	endpoint := filepath.Join(root, "runtime", "endpoint.json")
 	if err := os.MkdirAll(filepath.Dir(endpoint), 0700); err != nil {
 		t.Fatal(err)
@@ -47,13 +56,17 @@ func TestArchiveStoppedEndpointWithExtendedWindowsProfile(t *testing.T) {
 	}
 	m := &Manager{DataRoot: root}
 	config := filepath.Join(root, "client.json")
-	if err := writeJSON(config, map[string]string{"data_dir": `\\?\` + t.TempDir()}); err != nil {
+	foreign, err := canonicalSessionDirectory(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := writeJSON(config, map[string]string{"data_dir": foreign}); err != nil {
 		t.Fatal(err)
 	}
 	if err := m.archiveStoppedEndpoint(context.Background(), address); err == nil || !strings.Contains(err.Error(), "不属于当前安装") {
 		t.Fatalf("archive accepted an unrelated account directory: %v", err)
 	}
-	if err := writeJSON(config, map[string]string{"data_dir": `\\?\` + root}); err != nil {
+	if err := writeJSON(config, map[string]string{"data_dir": profile}); err != nil {
 		t.Fatal(err)
 	}
 	if err := m.archiveStoppedEndpoint(context.Background(), address); err != nil {
