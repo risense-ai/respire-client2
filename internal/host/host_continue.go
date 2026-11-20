@@ -10,7 +10,6 @@ import (
 	"time"
 )
 
-// Only public input requirements are exposed to the desktop; custody stays in CLI.
 type hostInputRequest struct {
 	Method         string   `json:"method"`
 	RequiredInputs []string `json:"required_inputs"`
@@ -19,7 +18,8 @@ type hostInputRequest struct {
 }
 
 func pendingHostInput(job Operation) *hostInputRequest {
-	if job.State != "unconfirmed" || job.inputBlocked || job.Transaction == nil || job.Transaction.Register {
+	if job.State != "unconfirmed" || job.inputBlocked || job.Transaction == nil || job.Transaction.Register ||
+		(!job.Transaction.RuntimeLogin && !job.Transaction.RuntimeKey) {
 		return nil
 	}
 	var envelope struct {
@@ -63,6 +63,9 @@ func (m *Manager) Continue(id, transportID string, input json.RawMessage) (Opera
 	if job.TransportID == transportID {
 		return Operation{}, errors.New("此传输请求已经提交，请查询原操作")
 	}
+	if !job.Transaction.RuntimeLogin && !job.Transaction.RuntimeKey {
+		return Operation{}, errors.New("请通过原宿主查询或续接这笔历史事务，桌面未重新提交")
+	}
 	if pendingHostInput(*job) == nil {
 		return Operation{}, errors.New("请先查询原操作，只有等待补充输入的事务可以续接")
 	}
@@ -73,7 +76,7 @@ func (m *Manager) Continue(id, transportID string, input json.RawMessage) (Opera
 		*job = previous
 		return Operation{}, err
 	}
-	go m.runHostContinuation(previous, transportID, input)
+	go m.runHostContinuation(previous, input)
 	return *job, nil
 }
 
@@ -89,7 +92,7 @@ func continuationParams(job Operation, input json.RawMessage) (string, map[strin
 	requested := map[string]bool{}
 	for _, field := range request.RequiredInputs {
 		if requested[field] {
-			return "", nil, errors.New("CLI 返回重复的补充输入字段")
+			return "", nil, errors.New("原事务返回重复的补充输入字段")
 		}
 		requested[field] = true
 	}
@@ -123,20 +126,20 @@ func continuationParams(job Operation, input json.RawMessage) (string, map[strin
 			case "legacy_password", "account_secret", "source_secret", "secret_key", "new_super", "merge_local":
 				values[field] = value
 			default:
-				return "", nil, errors.New("CLI 请求了桌面不能构造的登录输入")
+				return "", nil, errors.New("原事务请求了桌面不能构造的登录输入")
 			}
 		} else {
 			switch field {
 			case "password", "super_password", "account_secret", "totp":
 				values[field] = value
 			default:
-				return "", nil, errors.New("CLI 请求了桌面不能构造的密钥输入")
+				return "", nil, errors.New("原事务请求了桌面不能构造的密钥输入")
 			}
 		}
 	}
 	for field := range requested {
 		if field == "host_credentials" && request.Method == "auth.login.continue" {
-			continue // CLI recovers its own custody; the desktop supplies no material.
+			continue // The host reads its stored credentials.
 		}
 		if _, ok := supplied[field]; !ok {
 			return "", nil, fmt.Errorf("请提供原事务请求的 %s", field)
@@ -150,43 +153,7 @@ func continuationParams(job Operation, input json.RawMessage) (string, map[strin
 	return request.Method, params, nil
 }
 
-var errHostMethodUnsupported = errors.New("CLI 协议能力不兼容")
-
-func (m *Manager) requireHostMethod(ctx context.Context, method string) error {
-	m.cliInstallMu.RLock()
-	defer m.cliInstallMu.RUnlock()
-	return m.requireHostMethodLocked(ctx, method)
-}
-
-func (m *Manager) requireHostMethodLocked(ctx context.Context, method string) error {
-	raw, err := m.runHostCommandLocked(ctx, []string{"capabilities"}, "", false, false, "capabilities", "")
-	if err != nil {
-		return err
-	}
-	var envelope struct {
-		Summary struct {
-			Capabilities struct {
-				HostRPC struct {
-					Version   int      `json:"version"`
-					Transport string   `json:"transport"`
-					Methods   []string `json:"methods"`
-				} `json:"host_rpc"`
-			} `json:"capabilities"`
-		} `json:"summary"`
-	}
-	if err := json.Unmarshal(raw, &envelope); err != nil {
-		return err
-	}
-	rpc := envelope.Summary.Capabilities.HostRPC
-	for _, candidate := range rpc.Methods {
-		if rpc.Version == 1 && rpc.Transport == "stdio" && candidate == method {
-			return nil
-		}
-	}
-	return fmt.Errorf("%w: CLI 未声明 %s 能力，请更新 CLI；原事务保留，未重新认证", errHostMethodUnsupported, method)
-}
-
-func (m *Manager) runHostContinuation(job Operation, transportID string, input json.RawMessage) {
+func (m *Manager) runHostContinuation(job Operation, input json.RawMessage) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	raw, err := m.recoverHost(ctx, job)
@@ -195,7 +162,7 @@ func (m *Manager) runHostContinuation(job Operation, transportID string, input j
 	if len(raw) > 0 && (err == nil || errors.As(err, &unknown)) {
 		current := job
 		current.Envelope = raw
-		if pendingHostInput(current) != nil && (job.Transaction.RuntimeLogin || job.Transaction.RuntimeKey) {
+		if pendingHostInput(current) != nil {
 			var reply json.RawMessage
 			var continueErr error
 			if job.Transaction.RuntimeKey {
@@ -212,32 +179,6 @@ func (m *Manager) runHostContinuation(job Operation, transportID string, input j
 					raw = reply
 					confirmedInput = true
 				}
-			}
-		} else if pendingHostInput(current) != nil {
-			method, params, prepareErr := continuationParams(current, input)
-			if prepareErr == nil {
-				prepareErr = m.requireHostMethod(ctx, method)
-			}
-			if prepareErr == nil {
-				var payload []byte
-				payload, prepareErr = json.Marshal(map[string]any{"v": 1, "id": transportID, "method": method, "params": params})
-				if prepareErr == nil && len(payload) > 65536 {
-					prepareErr = errors.New("续接请求超过 64 KiB")
-				}
-				if prepareErr == nil {
-					var reply json.RawMessage
-					reply, err = m.runHostCommand(ctx, []string{"--host-rpc-stdio"}, string(payload), true, true, method, transportID)
-					returned := transactionFromEnvelope(job.Name, reply)
-					if returned == nil || *returned != *job.Transaction {
-						err = &unconfirmedError{job.ID, errors.New("续接未返回匹配的原宿主事务身份，请查询原事务")}
-					} else {
-						raw = reply
-						confirmedInput = true
-					}
-				}
-			}
-			if prepareErr != nil {
-				err = &unconfirmedError{job.ID, prepareErr}
 			}
 		}
 	}

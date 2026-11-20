@@ -143,16 +143,11 @@ func resetMaterialEnvelope(t *testing.T, m *Manager, outcome string) []byte {
 }
 
 func TestHistoricalResetMaterialSurvivesRestartUntilExplicitSave(t *testing.T) {
-	m, id, reply, calls := recoveryMaterialFixture(t)
-	if err := os.WriteFile(reply, resetMaterialEnvelope(t, m, "committed"), 0600); err != nil {
-		t.Fatal(err)
-	}
-	legacy, err := m.hostOperation(context.Background(), nil, "{}", "auth.reset", id)
-	if err != nil {
-		t.Fatal(err)
-	}
+	m, id, _, calls := recoveryMaterialFixture(t)
+	legacy := resetMaterialEnvelope(t, m, "committed")
+	original := transactionFromEnvelope("auth_reset", legacy)
 	m.jobs[id] = &Operation{ID: id, Name: "auth_reset", State: "done", Started: time.Now(), host: true, write: true,
-		Envelope: legacy, Transaction: transactionFromEnvelope("auth_reset", legacy)}
+		Envelope: legacy, Transaction: original}
 	if err := m.persistOperationsLocked(); err != nil {
 		t.Fatal(err)
 	}
@@ -160,74 +155,29 @@ func TestHistoricalResetMaterialSurvivesRestartUntilExplicitSave(t *testing.T) {
 	if err != nil || job.State != "done" || !job.MaterialPending || job.MaterialSaved {
 		t.Fatal("committed reset must await material save", err)
 	}
-	original := *job.Transaction
 	if err := m.Acknowledge(id); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := m.Continue(id, "desktop-20000000-0000-4000-8000-000000000003", json.RawMessage(`{}`)); err == nil {
-		t.Fatal("committed reset cannot be continued as input")
-	}
-	assertJournal := func() {
-		t.Helper()
-		raw, err := os.ReadFile(filepath.Join(m.Root, "requests.json"))
-		if err != nil {
-			t.Fatal(err)
-		}
-		for _, forbidden := range []string{"synthetic-issued-recovery-material", "super", "envelope", "materialPending"} {
-			if strings.Contains(string(raw), forbidden) {
-				t.Fatal("journal contains recovery material or transient receipt fields")
-			}
-		}
-	}
-	assertJournal()
 	for restart := 0; restart < 2; restart++ {
 		m = &Manager{Root: m.Root, DataRoot: m.DataRoot, Endpoint: m.Endpoint}
 		if err := m.loadOperations(); err != nil {
 			t.Fatal(err)
 		}
-		listed := m.Operations()
-		if len(listed) != 1 || !listed[0].MaterialPending || len(listed[0].Envelope) != 0 || *listed[0].Transaction != original {
-			t.Fatal("restart lost pending material or original identity")
+		job, err = m.Recover(id)
+		if err != nil || job.State != "unconfirmed" || !job.MaterialPending || len(job.Envelope) != 0 ||
+			job.Transaction == nil || *job.Transaction != *original || !strings.Contains(job.Error, "原宿主") {
+			t.Fatalf("restart must retain the original material receipt and direct the user to the original host: %+v %v", job, err)
 		}
 		if err := m.AcknowledgeRecoveryMaterial(id); err == nil {
-			t.Fatal("must query and display original material before saving")
+			t.Fatal("missing receipt material must stay unacknowledged")
 		}
-		job, err = m.Recover(id)
-		if err != nil || job.State != "done" || !job.MaterialPending || *job.Transaction != original || !strings.Contains(string(job.Envelope), "synthetic-issued-recovery-material") {
-			t.Fatal("original material was not recovered", err)
+		raw, err := os.ReadFile(filepath.Join(m.Root, "requests.json"))
+		if err != nil || strings.Contains(string(raw), "synthetic-issued-recovery-material") {
+			t.Fatal("the journal must retain identity without persisting recovery material", err)
 		}
-		assertJournal()
 	}
-	if err := m.AcknowledgeRecoveryMaterial(id); err != nil {
-		t.Fatal(err)
-	}
-	if err := m.AcknowledgeRecoveryMaterial(id); err != nil {
-		t.Fatal("save acknowledgement must be idempotent", err)
-	}
-	assertJournal()
-	if err := m.loadOperations(); err != nil {
-		t.Fatal(err)
-	}
-	job, err = m.Recover(id)
-	if err != nil || job.MaterialPending || !job.MaterialSaved || *job.Transaction != original {
-		t.Fatal("saved material must stay acknowledged after restart", err)
-	}
-	logged, err := os.ReadFile(calls)
-	if err != nil {
-		t.Fatal(err)
-	}
-	lines := strings.Split(strings.TrimSpace(string(logged)), "\n")
-	if len(lines) != 3 || strings.Count(string(logged), "--host-rpc-stdio") != 1 || strings.Count(string(logged), "key-result") != 2 || strings.Contains(string(logged), "synthetic-issued-recovery-material") {
-		t.Fatal("recovery repeated reset, queried after save, or logged material")
-	}
-	for _, line := range lines[1:] {
-		var args []string
-		if err := json.Unmarshal([]byte(line), &args); err != nil {
-			t.Fatal(err)
-		}
-		if len(args) != 5 || args[3] != "--operation-id="+original.OperationID || args[4] != "--source-profile="+original.SourceProfile {
-			t.Fatal("query changed original identity")
-		}
+	if _, err := os.Stat(calls); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("historical recovery attempted to execute the CLI", err)
 	}
 }
 
@@ -249,244 +199,28 @@ func TestResetMaterialSaveFailureRetainsPendingReceipt(t *testing.T) {
 	}
 }
 
-func TestResetMaterialRecoveryPreservesFailuresAndIdentity(t *testing.T) {
-	for _, outcome := range []string{"warn", "warn-supported", "nonzero", "nonzero-supported", "malformed"} {
-		t.Run("capability_probe_"+outcome, func(t *testing.T) {
-			m, id, _, calls := recoveryMaterialFixture(t)
-			t.Setenv("RESPIRE_TEST_CORE_UNSUPPORTED", outcome)
-			if err := m.EnsureCoreConfigHost(context.Background()); err == nil || errors.Is(err, errHostMethodUnsupported) {
-				t.Fatal("failed probe was treated as a missing method", err)
-			}
-			if _, err := os.Stat(filepath.Join(m.DataRoot, "bin", "runtime", ".install.lock")); !errors.Is(err, os.ErrNotExist) {
-				t.Fatal("failed probe entered automatic installation", err)
-			}
-			for _, method := range []string{"core_config.set", "core_config.result"} {
-				if _, err := m.hostOperation(context.Background(), nil, "", method, id); err == nil || errors.Is(err, errHostMethodUnsupported) {
-					t.Fatal("failed probe allowed RPC or reported missing method", method, err)
-				}
-			}
-			if _, err := os.Stat(calls); !errors.Is(err, os.ErrNotExist) {
-				t.Fatal("failed probe sent a business request", err)
-			}
-		})
+func TestHistoricalCoreConfigRecoveryPreservesIdentity(t *testing.T) {
+	m, id, _, calls := recoveryMaterialFixture(t)
+	binding := hostTransaction{OperationID: strings.TrimPrefix(id, "desktop-"), Kind: "core_config", RequestBound: true}
+	m.jobs[id] = &Operation{ID: id, Name: "agent_set", State: "unconfirmed", Started: time.Now(), host: true, write: true, Transaction: &binding}
+	if err := m.persistOperationsLocked(); err != nil {
+		t.Fatal(err)
 	}
-	for _, method := range []string{"core_config.set", "core_config.result"} {
-		t.Run("unsupported_"+method, func(t *testing.T) {
-			m, id, _, calls := recoveryMaterialFixture(t)
-			t.Setenv("RESPIRE_TEST_CORE_UNSUPPORTED", "result")
-			_, err := m.hostOperation(context.Background(), nil, "", method, id)
-			if !errors.Is(err, errHostMethodUnsupported) || !strings.Contains(err.Error(), "core_config.result") {
-				t.Fatal("missing capability was not rejected", err)
-			}
-			if _, err := os.Stat(calls); !errors.Is(err, os.ErrNotExist) {
-				t.Fatal("unsupported method sent a business request", err)
-			}
-		})
+	m = &Manager{Root: m.Root, DataRoot: m.DataRoot, Endpoint: m.Endpoint}
+	if err := m.loadOperations(); err != nil {
+		t.Fatal(err)
 	}
-	t.Run("historical_cli_core_config_entire_reply_lost", func(t *testing.T) {
-		m, id, reply, calls := recoveryMaterialFixture(t)
-		t.Setenv("RESPIRE_TEST_CORE_DROP_REPLY", "1")
-		full := hostTransaction{OperationID: strings.TrimPrefix(id, "desktop-"), Kind: "core_config",
-			SourceProfile: filepath.Join(m.DataRoot, "profiles", "actual"), Scope: runtimeScope{"synthetic", "original", 1}}
-		raw, err := json.Marshal(map[string]any{"status": "ok", "details": full,
-			"summary": map[string]any{"core_application": map[string]any{"state": "applied"}}})
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(reply, raw, 0600); err != nil {
-			t.Fatal(err)
-		}
-		binding := hostTransaction{OperationID: strings.TrimPrefix(id, "desktop-"), Kind: "core_config", RequestBound: true}
-		m.jobs[id] = &Operation{ID: id, Name: "agent_set", State: "running", Started: time.Now(), host: true, write: true, Transaction: &binding}
-		if err := m.persistOperationsLocked(); err != nil {
-			t.Fatal(err)
-		}
-		legacy, _ := operationSpec("agent_set")
-		legacy.method = "core_config.set"
-		go m.runOperation(legacy, []string{"agent-config", `--set=recall_fusion={"fusion":"legacy"}`}, "", id)
-		var job Operation
-		deadline := time.Now().Add(10 * time.Second)
-		for {
-			job, err = m.Operation(id)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if job.State != "running" {
-				break
-			}
-			if time.Now().After(deadline) {
-				t.Fatal("host reply-loss test timed out")
-			}
-			time.Sleep(time.Millisecond)
-		}
-		if job.State != "unconfirmed" || job.Transaction == nil || !job.Transaction.RequestBound || job.Transaction.SourceProfile != "" {
-			t.Fatal("missing reply erased prebound identity", job.State, job.Error, job.Transaction)
-		}
-		restarted := &Manager{Root: m.Root, DataRoot: m.DataRoot, Endpoint: m.Endpoint}
-		if err := restarted.loadOperations(); err != nil {
-			t.Fatal(err)
-		}
-		t.Setenv("RESPIRE_TEST_CORE_UNSUPPORTED", "1")
-		job, err = restarted.Recover(id)
-		if err != nil || job.State != "unconfirmed" || job.Transaction == nil || !job.Transaction.RequestBound || !strings.Contains(job.Error, "core_config.result") {
-			t.Fatal("unsupported query did not preserve Unknown and explain capability failure", err, job)
-		}
-		logBefore, err := os.ReadFile(calls)
-		if err != nil || len(strings.Split(strings.TrimSpace(string(logBefore)), "\n")) != 1 {
-			t.Fatal("capability failure sent a query or replayed setter", err)
-		}
-		t.Setenv("RESPIRE_TEST_CORE_UNSUPPORTED", "0")
-		job, err = restarted.Recover(id)
-		full.RequestBound = true
-		if err != nil || job.State != "done" || job.Transaction == nil || *job.Transaction != full {
-			t.Fatal("original-ID query did not discover CLI-bound profile/scope", err, job)
-		}
-		log, err := os.ReadFile(calls)
-		if err != nil {
-			t.Fatal(err)
-		}
-		lines := strings.Split(strings.TrimSpace(string(log)), "\n")
-		if len(lines) != 2 || strings.Contains(string(log), "--set") {
-			t.Fatal("recovery replayed the setter")
-		}
-		t.Setenv("RESPIRE_TEST_CORE_DROP_REPLY", "0")
-		for _, response := range []struct{ raw, state string }{
-			{`{"status":"ok","summary":{}}`, "unconfirmed"},
-			{`{"status":"fail","summary":{"reason":"invalid_input"}}`, "failed"},
-			{`{"status":"fail","details":{"error_type":"outcome_unknown"}}`, "unconfirmed"},
-		} {
-			if err := os.WriteFile(reply, []byte(response.raw), 0600); err != nil {
-				t.Fatal(err)
-			}
-			bound := hostTransaction{OperationID: strings.TrimPrefix(id, "desktop-"), Kind: "core_config", RequestBound: true}
-			m.jobs[id] = &Operation{ID: id, Name: "agent_set", State: "running", host: true, write: true, Transaction: &bound}
-			spec, _ := operationSpec("agent_set")
-			spec.method = "core_config.set"
-			m.runOperation(spec, []string{"agent-config", "--set=recall_fusion={\"fusion\":\"legacy\"}"}, "", id)
-			job, err := m.Operation(id)
-			if err != nil || job.State != response.state || job.Transaction == nil || *job.Transaction != bound {
-				t.Fatal("missing identity was accepted or erased", job.State, err)
-			}
-		}
-	})
-	for _, outcome := range []string{"unknown", "applied", "rejected", "foreign_scope"} {
-		t.Run("core_config_"+outcome, func(t *testing.T) {
-			m, id, reply, calls := recoveryMaterialFixture(t)
-			identity := hostTransaction{OperationID: "20000000-0000-4000-8000-000000000002",
-				SourceProfile: m.DataRoot, Kind: "core_config", Scope: runtimeScope{"synthetic", "original-instance", 7}}
-			m.jobs[id] = &Operation{ID: id, Name: "agent_set", State: "unconfirmed", host: true, write: true, Transaction: &identity}
-			if err := m.persistOperationsLocked(); err != nil {
-				t.Fatal(err)
-			}
-			m.jobs = map[string]*Operation{}
-			if err := m.loadOperations(); err != nil {
-				t.Fatal(err)
-			}
-			returned := identity
-			state, status, errorType := outcome, "ok", ""
-			if outcome == "unknown" {
-				status, errorType = "fail", "outcome_unknown"
-			}
-			if outcome == "foreign_scope" {
-				returned.Scope.Generation++
-				state = "applied"
-			}
-			if outcome == "rejected" {
-				status = "fail"
-			}
-			details, err := json.Marshal(returned)
-			if err != nil {
-				t.Fatal(err)
-			}
-			var metadata map[string]any
-			if err := json.Unmarshal(details, &metadata); err != nil {
-				t.Fatal(err)
-			}
-			metadata["error_type"] = errorType
-			raw, err := json.Marshal(map[string]any{"status": status, "details": metadata,
-				"summary": map[string]any{"core_application": map[string]any{"state": state}}})
-			if err != nil {
-				t.Fatal(err)
-			}
-			if err := os.WriteFile(reply, raw, 0600); err != nil {
-				t.Fatal(err)
-			}
-			job, err := m.Recover(id)
-			if err != nil {
-				t.Fatal(err)
-			}
-			want := "done"
-			if outcome == "unknown" || outcome == "foreign_scope" {
-				want = "unconfirmed"
-			}
-			if outcome == "rejected" {
-				want = "failed"
-			}
-			if job.State != want || *job.Transaction != identity || job.MaterialSaved {
-				t.Fatal("core query changed state or original identity")
-			}
-			log, err := os.ReadFile(calls)
-			if err != nil {
-				t.Fatal(err)
-			}
-			lines := strings.Split(strings.TrimSpace(string(log)), "\n")
-			if len(lines) != 1 {
-				t.Fatal("core query replayed a command")
-			}
-			var args []string
-			if err := json.Unmarshal([]byte(lines[0]), &args); err != nil {
-				t.Fatal(err)
-			}
-			if len(args) != 5 || args[2] != "core-config-result" || args[4] != "--source-profile="+identity.SourceProfile {
-				t.Fatal("query did not use original result command")
-			}
-			var context struct {
-				Scope       runtimeScope `json:"scope"`
-				OperationID string       `json:"operation_id"`
-				Key         string       `json:"idempotency_key"`
-			}
-			if err := json.Unmarshal([]byte(strings.TrimPrefix(args[3], "--context=")), &context); err != nil {
-				t.Fatal(err)
-			}
-			if context.Scope != identity.Scope || context.OperationID != identity.OperationID || context.Key != identity.OperationID {
-				t.Fatal("query changed original scope or operation")
-			}
-		})
+	job, err := m.Recover(id)
+	if err != nil || job.State != "unconfirmed" || job.Transaction == nil || *job.Transaction != binding ||
+		!strings.Contains(job.Error, "原宿主") {
+		t.Fatalf("historical query changed the original operation: %+v %v", job, err)
 	}
-	for _, outcome := range []string{"unknown", "rolled_back", "foreign", "missing_material"} {
-		t.Run(outcome, func(t *testing.T) {
-			m, id, reply, _ := recoveryMaterialFixture(t)
-			original := resetMaterialEnvelope(t, m, "committed")
-			m.jobs[id] = &Operation{ID: id, Name: "auth_reset", State: "done", host: true, write: true, Transaction: transactionFromEnvelope("auth_reset", original)}
-			raw := resetMaterialEnvelope(t, m, outcome)
-			if outcome == "foreign" {
-				raw = []byte(strings.Replace(string(original), "20000000-0000-4000-8000-000000000002", "20000000-0000-4000-8000-000000000003", 1))
-			}
-			if outcome == "missing_material" {
-				raw = []byte(strings.Replace(string(original), "synthetic-issued-recovery-material", "", 1))
-			}
-			if err := os.WriteFile(reply, raw, 0600); err != nil {
-				t.Fatal(err)
-			}
-			identity := *m.jobs[id].Transaction
-			job, err := m.Recover(id)
-			if err != nil {
-				t.Fatal(err)
-			}
-			want := "done"
-			if outcome == "unknown" || outcome == "foreign" {
-				want = "unconfirmed"
-			}
-			if outcome == "rolled_back" {
-				want = "failed"
-			}
-			if job.State != want || *job.Transaction != identity || job.MaterialSaved {
-				t.Fatal("recovery changed failure semantics or identity")
-			}
-			if err := m.AcknowledgeRecoveryMaterial(id); err == nil {
-				t.Fatal("unverified recovery material was acknowledged")
-			}
-		})
+	if _, err := m.Continue(id, "desktop-20000000-0000-4000-8000-000000000003", json.RawMessage(`{}`)); err == nil ||
+		!strings.Contains(err.Error(), "原宿主") {
+		t.Fatal("historical operation must direct continuation to the original host", err)
+	}
+	if _, err := os.Stat(calls); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("historical recovery attempted to execute the CLI", err)
 	}
 }
 
