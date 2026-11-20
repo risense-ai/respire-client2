@@ -90,11 +90,11 @@ func (m *Manager) verifyDeviceConfigOwner(ctx context.Context, health HealthInfo
 }
 
 func (m *Manager) validateDeviceConfig(ctx context.Context, intent deviceConfigIntent) (json.RawMessage, error) {
-	return m.changeDeviceConfig(ctx, intent, nil, false)
+	return m.changeDeviceConfig(ctx, intent, nil, configTargetDefault)
 }
 
 func (m *Manager) changeDeviceConfig(ctx context.Context, intent deviceConfigIntent, workspace *workspaceModeChange,
-	requireExistingTarget bool) (result json.RawMessage, err error) {
+	targetKind deviceConfigTarget) (result json.RawMessage, err error) {
 	takeover, err := m.lockRuntimeTakeover(ctx)
 	if err != nil {
 		return nil, err
@@ -146,15 +146,33 @@ func (m *Manager) changeDeviceConfig(ctx context.Context, intent deviceConfigInt
 	if err != nil {
 		return nil, err
 	}
-	if err := os.MkdirAll(edit.before.profile, 0700); err != nil {
+	var space *freshSpaceDirectory
+	if targetKind == configTargetNewSpace {
+		if err := checkRuntimeAccountDirectory(edit.before.profile); err != nil {
+			return nil, fmt.Errorf("无法核对源数据目录: %w", err)
+		}
+		space, err = createFreshSpaceDirectory(edit.after.profile)
+		if err != nil {
+			return nil, err
+		}
+		defer func() {
+			var unknown *unconfirmedError
+			if err != nil && !errors.As(err, &unknown) {
+				err = errors.Join(err, space.removeEmpty())
+			}
+		}()
+	} else if err := os.MkdirAll(edit.before.profile, 0700); err != nil {
 		return nil, err
 	}
-	if requireExistingTarget {
+	switch targetKind {
+	case configTargetExisting:
 		if err := profileDirectory(edit.after.profile); err != nil {
 			return nil, fmt.Errorf("无法使用目标空间: %w", err)
 		}
-	} else if err := os.MkdirAll(edit.after.profile, 0700); err != nil {
-		return nil, err
+	case configTargetDefault:
+		if err := os.MkdirAll(edit.after.profile, 0700); err != nil {
+			return nil, err
+		}
 	}
 	source, err := canonicalSessionDirectory(edit.before.profile)
 	if err != nil || !samePath(source, edit.before.profile) {
@@ -171,6 +189,9 @@ func (m *Manager) changeDeviceConfig(ctx context.Context, intent deviceConfigInt
 	targetIdentity, err := deviceProfileIdentity(target)
 	if err != nil {
 		return nil, err
+	}
+	if space != nil && targetIdentity.Kind != "absent" {
+		return nil, errors.New("新空间目录已出现会话，保留目录以便核对")
 	}
 	if m.ClientVersion == "" {
 		return nil, errors.New("设备配置验证缺少 Client2 版本")
@@ -235,11 +256,15 @@ func (m *Manager) changeDeviceConfig(ctx context.Context, intent deviceConfigInt
 		return nil
 	}
 	image := filepath.Join(m.runtimeDir(info.Version), runtimeBinary())
-	staged, starting := false, false
+	staged, starting, publishingSpace := false, false, false
 	var launchID string
 	var launchedPID uint32
 	defer func() {
 		if err == nil || maintenance.Marker == nil {
+			return
+		}
+		if publishingSpace {
+			err = &unconfirmedError{cause: errors.Join(err, errors.New("空间已选定，保留目标目录和维护记录以便核对"))}
 			return
 		}
 		if workspace != nil && !wasServing && !staged {
@@ -283,6 +308,9 @@ func (m *Manager) changeDeviceConfig(ctx context.Context, intent deviceConfigInt
 			}
 		}
 		err = fmt.Errorf("配置操作失败，原配置保留，维护已暂停以便核对: %w", err)
+		if space != nil {
+			err = &unconfirmedError{cause: err}
+		}
 	}()
 
 	var teamReadonly bool
@@ -299,6 +327,11 @@ func (m *Manager) changeDeviceConfig(ctx context.Context, intent deviceConfigInt
 	}
 	if err := m.admitDeviceConfig(ctx, root, source, target, address, port, workspace == nil || wasServing, func(coordinator string) error {
 		marker.ID = coordinator
+		if space != nil {
+			if err := space.verifyIdentity(); err != nil {
+				return err
+			}
+		}
 		if workspace != nil {
 			teamReadonly, err = workspace.check(root, target)
 			if err != nil {
@@ -319,6 +352,12 @@ func (m *Manager) changeDeviceConfig(ctx context.Context, intent deviceConfigInt
 		return nil
 	}); err != nil {
 		return nil, err
+	}
+	if space != nil {
+		// SQLite may have temporary sidecars while admission holds the target lock.
+		if err := space.verifyEmpty(); err != nil {
+			return nil, err
+		}
 	}
 	var off bool
 	if workspace == nil {
@@ -353,7 +392,7 @@ func (m *Manager) changeDeviceConfig(ctx context.Context, intent deviceConfigInt
 	}
 
 	applied := false
-	idle := targetIdentity.Kind == "unbound" ||
+	idle := space != nil || targetIdentity.Kind == "unbound" ||
 		(targetIdentity.Kind == "absent" && !wasServing && source == target && sourceIdentity.Kind == "absent")
 	if workspace != nil {
 		idle = !wasServing
@@ -432,7 +471,12 @@ func (m *Manager) changeDeviceConfig(ctx context.Context, intent deviceConfigInt
 	if err := edit.verifyCandidate(source, target, sourceIdentity, targetIdentity); err != nil {
 		return nil, err
 	}
-	if workspace == nil {
+	if space != nil {
+		if err := space.verifyEmpty(); err != nil {
+			return nil, err
+		}
+		result, err = space.result()
+	} else if workspace == nil {
 		result, err = m.deviceConfigResult(ctx, edit.after, applied)
 	} else {
 		if applied {
@@ -458,6 +502,12 @@ func (m *Manager) changeDeviceConfig(ctx context.Context, intent deviceConfigInt
 	}
 	if err := updateMarker("Verified", target); err != nil {
 		return nil, err
+	}
+	if space != nil {
+		publishingSpace = true
+		if err := space.publishOwner(); err != nil {
+			return nil, err
+		}
 	}
 	if err := removeOwnedRuntimeAccountRecord(markerPath, maintenance.Marker); err != nil {
 		return nil, err

@@ -34,6 +34,14 @@ type deviceConfigEdit struct {
 	before, after       deviceConfigSnapshot
 }
 
+type deviceConfigTarget uint8
+
+const (
+	configTargetDefault deviceConfigTarget = iota
+	configTargetExisting
+	configTargetNewSpace
+)
+
 func (m *Manager) desktopDeviceConfig(ctx context.Context, intent deviceConfigIntent) (result json.RawMessage, err error) {
 	if intent == (deviceConfigIntent{}) {
 		_, snapshot, err := m.readDeviceConfig()
@@ -91,7 +99,11 @@ func (m *Manager) desktopProfileSwitch(ctx context.Context, name string, space b
 	if name != "main" {
 		profile = filepath.Join(profile, "accounts", name)
 	}
-	return m.changeDeviceConfig(ctx, deviceConfigIntent{DataDir: &profile}, nil, space)
+	target := configTargetDefault
+	if space {
+		target = configTargetExisting
+	}
+	return m.changeDeviceConfig(ctx, deviceConfigIntent{DataDir: &profile}, nil, target)
 }
 
 func (m *Manager) readDeviceConfig() ([]byte, deviceConfigSnapshot, error) {

@@ -27,7 +27,7 @@ var settingsCommands = map[string]commandSpec{
 	"keygen":                {words: []string{"keygen"}, host: true, write: true},
 	"keys_export":           {method: "desktop.keys-export", write: true, args: []argument{requiredOpt("out", "--out")}},
 	"space_list":            {method: "desktop.space-list"},
-	"space_create":          {words: []string{"space", "create"}, host: true, write: true, args: []argument{pos("name")}},
+	"space_create":          {method: "desktop.space-create", host: true, write: true, args: []argument{pos("name")}},
 	"space_use":             {method: "desktop.space-use", host: true, write: true, args: []argument{pos("name")}},
 	"space_join":            {words: []string{"space", "join"}, host: true, write: true, args: []argument{pos("code")}},
 	"space_invite":          {words: []string{"space", "invite"}, host: true, write: true, args: []argument{opt("note", "--note"), flag("readonly", "--readonly")}},
