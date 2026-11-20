@@ -291,8 +291,11 @@ export function authenticationPanel(root, ctx, refresh) {
       dialog({
         title: "更换超级密码",
         body:
-          '<p class="hint">由 CLI 重新封装现有解密密钥，不会生成新的记忆库。请保存操作完成后返回的新恢复材料。</p>' +
+          '<p class="hint">更换会重新封装现有解密密钥。请保存操作完成后返回的新恢复材料。</p>' +
           input("super", "当前超级密码（可使用本机已保存密钥）", "", {
+            type: "password",
+          }) +
+          input("password", "旧版账户的登录密码（如本机未保存）", "", {
             type: "password",
           }),
         submit: "更换并显示新材料",
@@ -310,7 +313,7 @@ export function authenticationPanel(root, ctx, refresh) {
             {},
             {
               secret: JSON.stringify(
-                values.super ? { super: values.super } : {},
+                { ...(values.super && { super: values.super }), ...(values.password && { password: values.password }) },
               ),
             },
           );

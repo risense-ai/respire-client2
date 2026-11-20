@@ -4,18 +4,12 @@ package host
 
 import (
 	"context"
-	"crypto/hkdf"
-	"crypto/pbkdf2"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"net/url"
 	"path/filepath"
 	"strconv"
 	"strings"
-
-	"golang.org/x/crypto/argon2"
 )
 
 type recoveryCustody struct {
@@ -23,7 +17,7 @@ type recoveryCustody struct {
 	Input     runtimeRecoveryInput     `json:"input"`
 }
 
-func (m *Manager) desktopRuntimeKeyRecovery(ctx context.Context, args []string, secret, id string) (raw json.RawMessage, err error) {
+func (m *Manager) desktopRuntimeKeyRecovery(ctx context.Context, args []string, secret, id, method string) (raw json.RawMessage, err error) {
 	input, err := authParams(args, secret)
 	if err != nil {
 		return nil, err
@@ -32,27 +26,57 @@ func (m *Manager) desktopRuntimeKeyRecovery(ctx context.Context, args []string, 
 	if !hostOperationID.MatchString(op) || m.ClientVersion == "" {
 		return nil, errors.New("恢复需要有效的原请求身份")
 	}
+	takeover, err := m.lockRuntimeTakeover(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { err = errors.Join(err, takeover.Close()) }()
+	root, err := canonicalSessionDirectory(m.DataRoot)
+	if err != nil {
+		return nil, err
+	}
+	source, err := selectedRuntimeLoginProfile(root)
+	if err != nil {
+		return nil, err
+	}
+	var custody recoveryCustody
+	var user string
+	controlMethod := "control.key.fivekeys"
+	if method == "auth.reset" {
+		controlMethod = "control.key.super_reset"
+		custody, user, err = prepareDesktopKeyReset(ctx, source, op, input)
+	} else {
+		custody, err = prepareDesktopFivekeys(op, input)
+		user = custody.Operation.User
+	}
+	if err != nil {
+		return nil, err
+	}
+	return m.executeDesktopRuntimeKey(ctx, id, op, source, user, controlMethod, custody)
+}
+
+func prepareDesktopFivekeys(op string, input map[string]string) (recoveryCustody, error) {
 	intent := runtimeRecoveryOperation{Kind: "fivekeys", Server: strings.TrimRight(strings.TrimSpace(input["addr"]), "/"),
 		User: input["user"], Salt: input["kdf_salt"], WrappedURK: input["wrapped_urk"], Nonce: input["urk_nonce"], UseSuper: input["super"] != ""}
 	password, hasPassword := input["password"]
 	if intent.Salt == "" || intent.WrappedURK == "" || intent.Nonce == "" || (intent.Server == "") != (intent.User == "") ||
 		(!intent.UseSuper && (!hasPassword || input["secret"] == "")) || (intent.User != "" && password == "") {
-		return nil, errors.New("恢复需要完整的密钥材料。在线恢复还需要服务器、账户和密码")
+		return recoveryCustody{}, errors.New("恢复需要完整的密钥材料。在线恢复还需要服务器、账户和密码")
 	}
 	if input["totp"] != "" {
-		return nil, errors.New("请在 Runtime 请求两步验证码后续接原恢复事务")
+		return recoveryCustody{}, errors.New("请在 Runtime 请求两步验证码后续接原恢复事务")
 	}
 	if intent.UseSuper {
 		if err := verifyRecoverySuper(intent, input["super"]); err != nil {
-			return nil, err
+			return recoveryCustody{}, err
 		}
 	} else if err := verifyRecoveryLegacy(intent, password, input["secret"]); err != nil {
-		return nil, err
+		return recoveryCustody{}, err
 	}
 	if intent.Server != "" {
 		addr, err := url.Parse(intent.Server)
 		if err != nil || addr.Hostname() == "" || (addr.Scheme != "https" && addr.Scheme != "http") || addr.User != nil || addr.RawQuery != "" || addr.Fragment != "" {
-			return nil, errors.New("恢复服务器地址无效")
+			return recoveryCustody{}, errors.New("恢复服务器地址无效")
 		}
 	}
 	material := runtimeRecoveryMaterial{Account: "login-" + strings.ReplaceAll(op, "-", ""), Backend: runtimeLoginBackend()}
@@ -64,24 +88,16 @@ func (m *Manager) desktopRuntimeKeyRecovery(ctx context.Context, args []string, 
 		legacy := input["secret"]
 		custody.Input.AccountSecret = &legacy
 	}
-	takeover, err := m.lockRuntimeTakeover(ctx)
-	if err != nil {
-		return nil, err
-	}
-	defer func() { err = errors.Join(err, takeover.Close()) }()
+	return custody, nil
+}
+
+func (m *Manager) executeDesktopRuntimeKey(ctx context.Context, id, op, source, user, controlMethod string, custody recoveryCustody) (json.RawMessage, error) {
+	intent := custody.Operation
 	info, err := m.Installed()
 	if err != nil {
 		return nil, err
 	}
 	if err := m.verifyInstalled(info); err != nil {
-		return nil, err
-	}
-	root, err := canonicalSessionDirectory(m.DataRoot)
-	if err != nil {
-		return nil, err
-	}
-	source, err := selectedRuntimeLoginProfile(root)
-	if err != nil {
 		return nil, err
 	}
 	var previous *HealthInfo
@@ -104,7 +120,7 @@ func (m *Manager) desktopRuntimeKeyRecovery(ctx context.Context, args []string, 
 		return nil, err
 	}
 	admission, err := m.publishPausedRuntimeMaintenance(ctx, source, m.ClientVersion,
-		runtimeLoginIntent{OperationID: op, User: intent.User, Server: intent.Server}, previous)
+		runtimeLoginIntent{OperationID: op, User: user, Server: intent.Server}, previous)
 	if err != nil {
 		return nil, err
 	}
@@ -128,7 +144,7 @@ func (m *Manager) desktopRuntimeKeyRecovery(ctx context.Context, args []string, 
 		}
 		return nil, &unconfirmedError{id, err}
 	}
-	receipt, err := m.exchangeRuntimeRecovery(ctx, control, record, record.Original.Identity, intent, "control.key.fivekeys", &custody.Input)
+	receipt, err := m.exchangeRuntimeRecovery(ctx, control, record, record.Original.Identity, intent, controlMethod, &custody.Input)
 	if err != nil {
 		return nil, &unconfirmedError{id, err}
 	}
@@ -145,36 +161,18 @@ func verifyRecoverySuper(intent runtimeRecoveryOperation, super string) error {
 	if err := vault.verifyExportSuper(super); err == nil {
 		return nil
 	}
-	salt, err := hex.DecodeString(intent.Salt)
-	if err != nil {
-		return errors.New("恢复材料的 KDF 盐无效")
-	}
-	key, err := pbkdf2.Key(sha256.New, super, salt, 210000, 32)
-	if err != nil {
-		return err
-	}
-	defer clear(key)
-	return vault.verifyWrapKey(key)
+	version := uint64(2)
+	vault.Version = &version
+	urk, err := vault.unwrapWithOriginalFactors(runtimeRecoveryInput{SuperPassword: &super})
+	clear(urk)
+	return err
 }
 
 func verifyRecoveryLegacy(intent runtimeRecoveryOperation, password, secret string) error {
-	salt, err := hex.DecodeString(intent.Salt)
-	if err != nil || len(salt) < 8 {
-		return errors.New("恢复材料的 KDF 盐无效")
-	}
-	intermediate := argon2.IDKey([]byte(password), salt, 2, 19456, 1, 32)
-	defer clear(intermediate)
-	domain := "onememory:kek:v1"
-	if strings.HasPrefix(intent.WrappedURK, "rsrs:v1:") {
-		domain = "rsrs:kek:v1"
-	}
-	key, err := hkdf.Key(sha256.New, intermediate, []byte(secret), domain, 32)
-	if err != nil {
-		return err
-	}
-	defer clear(key)
-	vault := exportVault{Wrapped: intent.WrappedURK, Nonce: intent.Nonce}
-	return vault.verifyWrapKey(key)
+	vault := exportVault{Salt: intent.Salt, Wrapped: intent.WrappedURK, Nonce: intent.Nonce}
+	urk, err := vault.unwrapWithOriginalFactors(runtimeRecoveryInput{Password: &password, AccountSecret: &secret})
+	clear(urk)
+	return err
 }
 
 func (m *Manager) bindDesktopRuntimeKey(id, operation, source string) error {
@@ -220,6 +218,9 @@ func persistRecoveryCustody(ctx context.Context, record runtimeAccountRecord, cu
 	defer clear(encoded)
 	private = string(encoded)
 	slots := map[string]*string{"login-control:": &private, "pass:": custody.Input.Password, "super:": custody.Input.SuperPassword, "legacy-secret:": custody.Input.AccountSecret}
+	if material.Reset != nil {
+		slots = map[string]*string{"login-control:": &private, "super:": &material.Reset.Super}
+	}
 	for prefix, value := range slots {
 		if value == nil || *value == "" {
 			continue
@@ -244,10 +245,14 @@ func desktopRecoveryEnvelope(receipt runtimeRecoveryReceipt) (json.RawMessage, e
 	if receipt.Outcome == "awaiting_input" {
 		status = "pending"
 	}
-	return json.Marshal(map[string]any{"command": "key-control", "status": status, "summary": map[string]any{
+	summary := map[string]any{
 		"operation_id": receipt.OperationID, "source_profile": receipt.Source, "outcome": receipt.Outcome,
 		"runtime_key": true, "required_inputs": receipt.RequiredInputs,
-	}})
+	}
+	if receipt.Super != nil && receipt.Outcome == "committed" {
+		summary["super"] = *receipt.Super
+	}
+	return json.Marshal(map[string]any{"command": "key-control", "status": status, "summary": summary})
 }
 
 func (m *Manager) finishDesktopRuntimeRecovery(ctx context.Context, image, digest string, record runtimeAccountRecord,
@@ -271,6 +276,9 @@ func (m *Manager) finishDesktopRuntimeRecovery(ctx context.Context, image, diges
 	if err != nil {
 		return nil, err
 	}
+	if reset := custody.Input.Material.Reset; reset != nil && (receipt.Super == nil || *receipt.Super != reset.Super) {
+		return nil, errors.New("Runtime 更换回执的 Super Key 与原私有材料不一致")
+	}
 	launch, err := m.prepareRuntimeProfileLaunch(ctx, image, digest, record, admission, target, receipt.AccountID)
 	if err != nil {
 		return nil, err
@@ -282,6 +290,11 @@ func (m *Manager) finishDesktopRuntimeRecovery(ctx context.Context, image, diges
 	}
 	if _, err := m.unlockRuntimeProfileTarget(ctx, launch, *admission, record, target, account, *receipt.SessionDigest, health.PID); err != nil {
 		return nil, err
+	}
+	if custody.Operation.Kind == "super_reset" {
+		if err := saveDesktopKeyResetReceipt(record, receipt); err != nil {
+			return nil, err
+		}
 	}
 	var marker runtimeMaintenanceMarker
 	if err := json.Unmarshal(admission.Marker, &marker); err != nil {
@@ -297,6 +310,12 @@ func (m *Manager) finishDesktopRuntimeRecovery(ctx context.Context, image, diges
 		return nil, err
 	}
 	admission.Marker = verified
+	if custody.Operation.Kind == "super_reset" {
+		if err := retireRuntimeLogin(ctx, record, admission.Marker, private); err != nil {
+			return nil, err
+		}
+		return desktopRecoveryEnvelope(receipt)
+	}
 	return m.completeDesktopRuntimeRecovery(ctx, image, digest, record, *admission, target, receipt.Identity, custody, private)
 }
 
