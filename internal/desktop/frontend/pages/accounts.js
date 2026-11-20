@@ -65,10 +65,11 @@ export function accounts(root, ctx) {
   );
   function update() {
     const s = ctx.status?.summary || {},
-      session = s.session || {};
+      session = s.session || {},
+      hasToken = session.has_token || ctx.desktop?.localSessionHasToken === true;
     const values = {
       user: session.user || "本机离线",
-      token: session.has_token ? "已登录" : "未登录",
+      token: hasToken ? "已登录" : "未登录",
       keys: session.has_local_keys ? "已保存" : "未初始化",
       dir: s.data_dir ?? "—",
     };
@@ -81,7 +82,7 @@ export function accounts(root, ctx) {
       dashboard: false,
       keygen: Boolean(session.has_local_keys),
       keys: !session.has_local_keys,
-      logout: !session.has_token,
+      logout: !hasToken,
       sync: false,
       conflicts: false,
       migration: false,
@@ -90,6 +91,7 @@ export function accounts(root, ctx) {
     for (const [kind, unavailable] of Object.entries(disabled)) {
       const button = $(`[data-account="${kind}"]`, root);
       button.disabled = unavailable || actionState.pending.has(kind);
+      if (kind === "logout") button.title = ctx.desktop?.localSessionError || "";
     }
   }
   async function accountAction(button, fn) {
@@ -260,7 +262,7 @@ export function accounts(root, ctx) {
           if (
             !(await confirm(
               "退出云端会话",
-              "退出后不再使用当前云端会话。本机记忆保留。",
+              "清除本机保存的云端会话。本机身份、密钥和记忆保留。",
               "退出",
             ))
           )
