@@ -276,43 +276,14 @@ func (m *Manager) UpdateInstalledCLI(ctx context.Context) error {
 		}
 		return err
 	}
-	if m.HasActiveOperations() {
-		return errors.New("业务操作尚未完成，未升级 CLI；原事务保留")
-	}
 	return m.installOnlineCLI(ctx)
 }
 
-// EnsureCoreConfigHost prepares the legacy CLI capability for explicit host operations.
-func (m *Manager) EnsureCoreConfigHost(ctx context.Context) error {
-	_, err := m.External(ctx)
-	missing := errors.Is(err, os.ErrNotExist)
-	if err == nil {
-		err = m.RequireCoreConfigHost(ctx)
-	}
-	if err == nil {
-		return nil
-	}
-	if !missing && !errors.Is(err, errHostMethodUnsupported) {
-		return fmt.Errorf("无法确认 CLI 核心配置能力，未升级: %w", err)
-	}
-	if m.HasActiveOperations() {
-		return errors.New("业务操作尚未完成，未升级 CLI；原事务保留")
-	}
-	// CLI preparation must not hold the shared Runtime installation lock.
+// InstallCLI installs the shared CLI for external integrations.
+func (m *Manager) InstallCLI(ctx context.Context) error {
 	m.cliInstallMu.Lock()
-	if m.HasActiveOperations() {
-		err = errors.New("业务操作尚未完成，未升级 CLI；原事务保留")
-	} else {
-		err = m.installOnlineCLI(ctx)
-	}
-	m.cliInstallMu.Unlock()
-	if err != nil {
-		return fmt.Errorf("CLI 核心配置能力准备失败，未启动业务: %w", err)
-	}
-	if err = m.RequireCoreConfigHost(ctx); err != nil {
-		return fmt.Errorf("当前渠道的 CLI 不满足核心配置协议，未启动业务: %w", err)
-	}
-	return nil
+	defer m.cliInstallMu.Unlock()
+	return m.installOnlineCLI(ctx)
 }
 
 func (m *Manager) InstallRuntime(automatic bool, restart bool) error {

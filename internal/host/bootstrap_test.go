@@ -1181,7 +1181,7 @@ func TestInstallRuntimeIndependently(t *testing.T) {
 			fresh.HTTPClient = m.HTTPClient
 			t.Setenv("RESPIRE_TEST_RECOVERY_CLI", "1")
 			t.Setenv("RESPIRE_TEST_RECOVERY_CALLS", filepath.Join(t.TempDir(), "calls"))
-			if err := fresh.EnsureCoreConfigHost(context.Background()); err != nil {
+			if err := fresh.InstallCLI(context.Background()); err != nil {
 				t.Fatal("first CLI preparation failed", err)
 			}
 			if _, err := os.Stat(fresh.runtimeManifest()); !errors.Is(err, os.ErrNotExist) {
@@ -1191,24 +1191,17 @@ func TestInstallRuntimeIndependently(t *testing.T) {
 				t.Fatal("CLI preparation installed a Runtime", err)
 			}
 		})
-		for _, scenario := range []struct{ unsupported, runtimeVersion, wantError string }{
-			{"0", meta.RuntimeVersion, ""},
-			{"once", meta.RuntimeVersion, ""},
-			{"1", meta.RuntimeVersion, "协议"},
-			{"once", retainedMeta.RuntimeVersion, ""},
-		} {
-			unsupported := scenario.unsupported
-			t.Run("startup CLI-only capabilities "+unsupported+" runtime "+scenario.runtimeVersion, func(t *testing.T) {
+		for _, runtimeVersion := range []string{meta.RuntimeVersion, retainedMeta.RuntimeVersion} {
+			t.Run("CLI preparation is independent of Runtime "+runtimeVersion, func(t *testing.T) {
 				t.Setenv("RESPIRE_TEST_RECOVERY_CLI", "1")
-				t.Setenv("RESPIRE_TEST_CORE_UNSUPPORTED", unsupported)
-				t.Setenv("RESPIRE_TEST_RECOVERY_CALLS", filepath.Join(t.TempDir(), "calls"))
+				t.Setenv("RESPIRE_TEST_CORE_UNSUPPORTED", "1")
+				calls := filepath.Join(t.TempDir(), "calls")
+				t.Setenv("RESPIRE_TEST_RECOVERY_CALLS", calls)
 				stubCLIProbe(t, cliProbeFixture{tmpVersion: "2.0.0-dev.1", destVer: "1.0.18"})
-				// The Runtime belongs to a CLI supervisor. Preparing CLI capabilities
-				// must neither replace its bytes nor select or restart any Runtime.
 				health := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 					t.Errorf("CLI-only preparation accessed Runtime: %s %s", r.Method, r.URL.Path)
 					_ = json.NewEncoder(w).Encode(HealthInfo{Server: "respire", Protocol: 1, PID: 4242,
-						Version: scenario.runtimeVersion, Exe: filepath.Join(tree, "rsrs-runtime-"+target), ManagedID: "fixture-supervisor"})
+						Version: runtimeVersion, Exe: filepath.Join(tree, "rsrs-runtime-"+target), ManagedID: "fixture-supervisor"})
 				}))
 				defer health.Close()
 				before, err := os.ReadFile(m.runtimeManifest())
@@ -1218,13 +1211,11 @@ func TestInstallRuntimeIndependently(t *testing.T) {
 				previousEndpoint := m.Endpoint
 				m.Endpoint = health.URL
 				defer func() { m.Endpoint = previousEndpoint }()
-				err = m.EnsureCoreConfigHost(context.Background())
-				if scenario.wantError != "" {
-					if err == nil || !strings.Contains(err.Error(), scenario.wantError) {
-						t.Fatal("incompatible CLI must fail explicitly", err)
-					}
-				} else if err != nil {
-					t.Fatal("compatible CLI could not be prepared", err)
+				if err := m.InstallCLI(context.Background()); err != nil {
+					t.Fatal("standalone CLI could not be prepared", err)
+				}
+				if _, err := os.Stat(calls); !errors.Is(err, os.ErrNotExist) {
+					t.Fatal("CLI preparation invoked a business command", err)
 				}
 				after, err := os.ReadFile(m.runtimeManifest())
 				if err != nil || string(before) != string(after) {

@@ -254,7 +254,7 @@ func TestResetMaterialRecoveryPreservesFailuresAndIdentity(t *testing.T) {
 		t.Run("capability_probe_"+outcome, func(t *testing.T) {
 			m, id, _, calls := recoveryMaterialFixture(t)
 			t.Setenv("RESPIRE_TEST_CORE_UNSUPPORTED", outcome)
-			if err := m.EnsureCoreConfigHost(context.Background()); err == nil || errors.Is(err, errHostMethodUnsupported) {
+			if err := m.RequireCoreConfigHost(context.Background()); err == nil || errors.Is(err, errHostMethodUnsupported) {
 				t.Fatal("failed probe was treated as a missing method", err)
 			}
 			if _, err := os.Stat(filepath.Join(m.DataRoot, "bin", "runtime", ".install.lock")); !errors.Is(err, os.ErrNotExist) {

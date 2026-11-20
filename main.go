@@ -59,9 +59,7 @@ func headless(m *host.Manager) {
 			return m.InstallRuntime(false, false)
 		})
 	case "prepare-cli":
-		err = m.RunTask("准备 CLI", func() error {
-			return m.EnsureCoreConfigHost(context.Background())
-		})
+		err = m.InstallCLI(context.Background())
 	case "runtime-release":
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
