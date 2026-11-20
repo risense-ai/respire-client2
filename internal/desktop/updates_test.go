@@ -33,8 +33,6 @@ type startupRuntimeFixture struct {
 	startErr       error
 	allowAutomatic bool
 	installs       int
-	tasks          int
-	taskErr        error
 	healthCalls    int
 }
 
@@ -73,13 +71,6 @@ func (m *startupRuntimeFixture) Start() error {
 	}
 	m.running = m.selected
 	return nil
-}
-
-func (m *startupRuntimeFixture) RunTask(_ string, action func() error) error {
-	m.tasks++
-	m.taskErr = nil
-	m.taskErr = action()
-	return m.taskErr
 }
 
 func TestInstallRuntimeForStartup(t *testing.T) {
@@ -156,15 +147,15 @@ func TestInstallRuntimeForStartup(t *testing.T) {
 			err := updateRuntimeForBackground(context.Background(), m, preparationErr, true)
 			switch stage {
 			case "success":
-				if err != nil || m.taskErr != nil || m.installs != 1 || m.healthCalls != 1 || m.running != "new" {
+				if err != nil || m.installs != 1 || m.healthCalls != 1 || m.running != "new" {
 					t.Fatalf("background Runtime update did not activate successfully: %v, %+v", err, m)
 				}
 			case "preparation", "health":
-				if !errors.Is(err, want) || m.tasks != 0 || m.installs != 0 || m.running != "old" {
+				if !errors.Is(err, want) || m.installs != 0 || m.running != "old" {
 					t.Fatalf("failed preparation or health check entered Runtime update: %v, %+v", err, m)
 				}
 			case "install":
-				if !errors.Is(err, want) || !errors.Is(m.taskErr, want) || m.running != "old" {
+				if !errors.Is(err, want) || m.running != "old" {
 					t.Fatalf("background update hid install error: %v, %+v", err, m)
 				}
 				m.installErr = nil
