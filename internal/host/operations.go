@@ -30,19 +30,21 @@ type Operation struct {
 	MaterialPending bool              `json:"materialPending,omitempty"`
 	write, host     bool
 	inputBlocked    bool
+	coreChange      *coreConfigChange
 }
 
 type operationRecord struct {
-	ID            string           `json:"id"`
-	Name          string           `json:"name"`
-	Started       time.Time        `json:"started"`
-	State         string           `json:"state"`
-	Host          bool             `json:"host"`
-	Scope         *runtimeScope    `json:"scope,omitempty"`
-	RuntimeID     string           `json:"runtimeOperationId,omitempty"`
-	Transaction   *hostTransaction `json:"transaction,omitempty"`
-	TransportID   string           `json:"transportId,omitempty"`
-	MaterialSaved bool             `json:"materialSaved,omitempty"`
+	ID            string            `json:"id"`
+	Name          string            `json:"name"`
+	Started       time.Time         `json:"started"`
+	State         string            `json:"state"`
+	Host          bool              `json:"host"`
+	Scope         *runtimeScope     `json:"scope,omitempty"`
+	RuntimeID     string            `json:"runtimeOperationId,omitempty"`
+	Transaction   *hostTransaction  `json:"transaction,omitempty"`
+	TransportID   string            `json:"transportId,omitempty"`
+	MaterialSaved bool              `json:"materialSaved,omitempty"`
+	CoreChange    *coreConfigChange `json:"coreConfig,omitempty"`
 }
 
 type rpcResponse struct {
@@ -80,7 +82,7 @@ func (m *Manager) loadOperations() error {
 		if state == "running" {
 			state = "unconfirmed"
 		}
-		m.jobs[r.ID] = &Operation{ID: r.ID, Name: r.Name, Started: r.Started, State: state, host: r.Host, write: true, Scope: r.Scope, RuntimeID: r.RuntimeID, Transaction: r.Transaction, TransportID: r.TransportID, MaterialSaved: r.MaterialSaved}
+		m.jobs[r.ID] = &Operation{ID: r.ID, Name: r.Name, Started: r.Started, State: state, host: r.Host, write: true, Scope: r.Scope, RuntimeID: r.RuntimeID, Transaction: r.Transaction, TransportID: r.TransportID, MaterialSaved: r.MaterialSaved, coreChange: r.CoreChange}
 	}
 	return nil
 }
@@ -89,7 +91,7 @@ func (m *Manager) persistOperationsLocked() error {
 	var records []operationRecord
 	for _, j := range m.jobs {
 		if j.write {
-			records = append(records, operationRecord{ID: j.ID, Name: j.Name, Started: j.Started, State: j.State, Host: j.host, Scope: j.Scope, RuntimeID: j.RuntimeID, Transaction: j.Transaction, TransportID: j.TransportID, MaterialSaved: j.MaterialSaved})
+			records = append(records, operationRecord{ID: j.ID, Name: j.Name, Started: j.Started, State: j.State, Host: j.host, Scope: j.Scope, RuntimeID: j.RuntimeID, Transaction: j.Transaction, TransportID: j.TransportID, MaterialSaved: j.MaterialSaved, CoreChange: j.coreChange})
 		}
 	}
 	sort.Slice(records, func(i, j int) bool { return records[i].Started.After(records[j].Started) })
@@ -213,7 +215,7 @@ func (m *Manager) Submit(name, id string, raw json.RawMessage, confirmed bool, s
 			if !hostOperationID.MatchString(strings.TrimPrefix(id, "desktop-")) {
 				return Operation{}, errors.New("核心配置需要有效 UUID")
 			}
-			spec.method = "core_config.set"
+			spec.method, spec.host = "desktop.core-config", false
 		}
 	}
 	if name == "model_progress" {
@@ -261,10 +263,6 @@ func (m *Manager) Submit(name, id string, raw json.RawMessage, confirmed bool, s
 		delete(m.jobs, oldest.ID)
 	}
 	job := &Operation{ID: id, Name: name, State: "running", Started: time.Now().UTC(), host: spec.host, write: spec.write}
-	if spec.method == "core_config.set" {
-		operation := strings.TrimPrefix(id, "desktop-")
-		job.Transaction = &hostTransaction{OperationID: operation, Kind: "core_config", RequestBound: true}
-	}
 	m.jobs[id] = job
 	if job.write {
 		if err = m.persistOperationsLocked(); err != nil {
@@ -295,6 +293,8 @@ func (m *Manager) runOperation(spec commandSpec, args []string, secret, id strin
 		envelope, err = applyEngine(ctx, m, args, id)
 	case spec.method == "desktop.agent-config":
 		envelope, err = m.desktopAgentSettings()
+	case spec.method == "desktop.core-config":
+		envelope, err = m.setDesktopCoreConfig(ctx, id, strings.TrimPrefix(args[1], "--set="))
 	case spec.method == "desktop.keys-export":
 		envelope, err = m.desktopKeysExport(ctx, args)
 	case spec.method == "desktop.account-list", spec.method == "desktop.space-list":
@@ -528,7 +528,9 @@ func (m *Manager) Recover(id string) (Operation, error) {
 		ctx = timedCtx
 	}
 	var envelope json.RawMessage
-	if job.host {
+	if job.Name == "agent_set" && !job.host {
+		envelope, err = m.recoverDesktopCoreConfig(ctx, job)
+	} else if job.host {
 		envelope, err = m.recoverHost(ctx, job)
 	} else {
 		runtimeID := job.RuntimeID

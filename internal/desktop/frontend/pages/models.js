@@ -1171,7 +1171,7 @@ export function models(root, ctx) {
     if (button.disabled) return;
     await action(button, async () => {
       if (!fusion.runtime?.effective)
-        throw new Error("请先升级支持五轴融合设置的 CLI");
+        throw new Error("五轴融合配置尚未读取，请刷新页面。");
       if (fusion.requestId)
         throw new Error("核心配置结果未确认；请查询原请求，不要重新保存。");
       const draft = fusionDraft();
