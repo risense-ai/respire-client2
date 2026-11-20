@@ -358,21 +358,22 @@ func (m *Manager) finishDesktopCoreConfig(ctx context.Context, id string, change
 			return nil, &unconfirmedError{id, err}
 		}
 	}
-	if !reflect.DeepEqual(saved, change.value()) {
-		if digest != change.Before {
-			return nil, &unconfirmedError{id, errors.New("原核心配置文件已变化，未覆盖")}
-		}
-		current, err := m.requestCoreConfig(ctx, "core-readback-"+rand.Text(), "core_config.read", scope, map[string]any{})
-		if err != nil {
-			return nil, &unconfirmedError{id, err}
-		}
-		state, err := configResult(current, "current")
-		if err != nil {
-			return nil, &unconfirmedError{id, err}
-		}
-		if *state.Revision != *result.Revision || !reflect.DeepEqual(state.Candidate, result.Candidate) {
-			return nil, &unconfirmedError{id, errors.New("Runtime 已应用其他核心配置，未覆盖配置文件")}
-		}
+	needsWrite := !reflect.DeepEqual(saved, change.value())
+	if needsWrite && digest != change.Before {
+		return nil, &unconfirmedError{id, errors.New("原核心配置文件已变化，未覆盖")}
+	}
+	current, err := m.requestCoreConfig(ctx, "core-readback-"+rand.Text(), "core_config.read", scope, map[string]any{})
+	if err != nil {
+		return nil, &unconfirmedError{id, err}
+	}
+	state, err := configResult(current, "current")
+	if err != nil {
+		return nil, &unconfirmedError{id, err}
+	}
+	if *state.Revision != *result.Revision || !reflect.DeepEqual(state.Candidate, result.Candidate) {
+		return nil, &unconfirmedError{id, errors.New("Runtime 已应用其他核心配置，未覆盖配置文件")}
+	}
+	if needsWrite {
 		settings[change.Key] = value
 		if err := writeJSON(filepath.Join(profile, "agent.json"), settings); err != nil {
 			return nil, &unconfirmedError{id, err}
