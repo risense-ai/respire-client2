@@ -206,6 +206,7 @@ type Manager struct {
 	modelHTTPClient *http.Client
 	localClient     *http.Client
 	mu              sync.Mutex
+	directRuntime   HealthInfo
 	cliInstallMu    sync.RWMutex
 	prefs           Preferences
 	task            TaskState

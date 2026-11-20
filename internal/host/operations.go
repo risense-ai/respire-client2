@@ -324,6 +324,8 @@ func (m *Manager) runOperation(spec commandSpec, args []string, secret, id strin
 		envelope, err = m.desktopRuntimeKeyRecovery(ctx, args, secret, id, spec.method)
 	case spec.method == "desktop.agent-text-setting":
 		envelope, err = m.setDesktopAgentTextSetting(ctx, id, strings.TrimPrefix(args[1], "--set="))
+	case spec.method == "desktop.model-uninstall":
+		envelope, err = m.uninstallM3(ctx)
 	case spec.host:
 		envelope, err = m.hostOperation(ctx, args, secret, spec.method, id)
 	default:
@@ -552,6 +554,8 @@ func (m *Manager) Recover(id string) (Operation, error) {
 	switch {
 	case job.Name == "server_set", job.Name == "autosync_set", job.Name == "cure_auto_set", job.Name == "data_dir_set":
 		err = &unconfirmedError{id, errors.New("请核对本机设备配置、Runtime 状态和维护记录")}
+	case job.Name == "model_uninstall":
+		err = &unconfirmedError{id, errors.New("请核对 BGE-M3 模型目录及 .bge-m3-uninstall 暂存目录")}
 	case job.Name == "agent_set" && !job.host:
 		envelope, err = m.recoverDesktopCoreConfig(ctx, job)
 	case job.host:
