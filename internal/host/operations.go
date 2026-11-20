@@ -148,6 +148,9 @@ func (m *Manager) Acknowledge(id string) error {
 	if job.State == "running" || job.State == "unconfirmed" {
 		return errors.New("操作尚未确认，保留其请求记录")
 	}
+	if job.Name == "space_invite" {
+		job.Envelope = nil
+	}
 	if !job.write {
 		delete(m.jobs, id)
 	}
@@ -330,7 +333,9 @@ func (m *Manager) runOperation(spec commandSpec, args []string, secret, id strin
 	case spec.method == "desktop.model-uninstall":
 		envelope, err = m.uninstallM3(ctx)
 	case spec.method == "desktop.space-kick":
-		envelope, err = m.desktopSpaceKick(ctx, id, args, "")
+		envelope, err = m.desktopSpaceMembership(ctx, id, args, false, "", hostCredentialStore{})
+	case spec.method == "desktop.space-invite":
+		envelope, err = m.desktopSpaceMembership(ctx, id, args, true, "", nativeRuntimeCredentialStore(ctx))
 	case spec.host:
 		envelope, err = m.hostOperation(ctx, args, secret, spec.method, id)
 	default:
@@ -569,7 +574,9 @@ func (m *Manager) Recover(id string) (Operation, error) {
 	case job.Name == "model_uninstall":
 		err = &unconfirmedError{id, errors.New("请核对 BGE-M3 模型目录及 .bge-m3-uninstall 暂存目录")}
 	case job.Name == "space_kick", job.Name == "space_kick_all":
-		envelope, err = m.desktopSpaceKick(ctx, id, nil, job.Name)
+		envelope, err = m.desktopSpaceMembership(ctx, id, nil, false, job.Name, hostCredentialStore{})
+	case job.Name == "space_invite":
+		envelope, err = m.desktopSpaceMembership(ctx, id, nil, true, job.Name, nativeRuntimeCredentialStore(ctx))
 	case job.host:
 		envelope, err = m.recoverHost(ctx, job)
 	default:
