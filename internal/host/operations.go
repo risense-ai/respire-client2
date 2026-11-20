@@ -293,6 +293,8 @@ func (m *Manager) runOperation(spec commandSpec, args []string, secret, id strin
 	switch {
 	case spec.method == "model.apply-engine":
 		envelope, err = applyEngine(ctx, m, args, id)
+	case spec.method == "desktop.agent-config":
+		envelope, err = m.desktopAgentSettings()
 	case spec.method == "auth.login", spec.method == "auth.login.browser":
 		envelope, err = m.desktopRuntimeAccountLogin(ctx, args, secret, id, spec.method == "auth.login.browser")
 	case spec.host:

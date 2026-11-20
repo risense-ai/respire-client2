@@ -213,7 +213,7 @@ export function settings(root, ctx) {
       $("[data-autostart]", root).checked = state.autostart;
       initialized = true;
     }
-    if (!agentAttempted && state.connected) {
+    if (!agentAttempted) {
       agentAttempted = true;
       execute("agent_config")
         .then((envelope) => {

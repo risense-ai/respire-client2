@@ -588,7 +588,7 @@ export function models(root, ctx) {
       $("[data-fusion-effective]", root).textContent = fusion.loadFailed
         ? "融合配置读取失败，请刷新页面。"
         : fusion.checked
-          ? "当前 CLI 不支持五轴融合设置，请升级 CLI 后再使用。"
+          ? "当前五轴融合配置未就绪。"
           : "正在读取配置…";
       return;
     }
