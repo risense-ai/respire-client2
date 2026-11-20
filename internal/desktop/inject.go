@@ -678,67 +678,6 @@ func applyBlockWith(path string, remove bool, content string) (bool, error) {
 	return true, os.WriteFile(path, []byte(preview.after), 0o644)
 }
 
-// ── workspace mode (client.json service_mode, same store as the CLI) ──
-
-func clientConfigPath(dataRoot string) string {
-	return joinPath(dataRoot, "client.json")
-}
-
-// resolveDataDir mirrors the CLI: client.json data_dir when set, else the root
-// (RSRS_DATA_DIR or ~/.rsrs, resolved by the manager).
-func resolveDataDir(dataRoot string, config map[string]any) string {
-	if raw, _ := config["data_dir"].(string); raw != "" {
-		if home, err := os.UserHomeDir(); err == nil {
-			return expandHome(home, raw)
-		}
-	}
-	return dataRoot
-}
-
-// workspaceMode resolves the effective three-state mode the same way the
-// CLI's workspace_mode() does: client.json service_mode first, then the
-// agent.json flags in the data dir.
-func workspaceMode(dataRoot string) string {
-	config := readJSONObject(clientConfigPath(dataRoot))
-	if mode, _ := config["service_mode"].(string); mode == "normal" || mode == "readonly" || mode == "off" {
-		return mode
-	}
-	agent := readJSONObject(joinPath(resolveDataDir(dataRoot, config), "agent.json"))
-	if agent["memory_off"] == true {
-		return "off"
-	}
-	if agent["readonly"] == true || agent["readonly_team"] == true {
-		return "readonly"
-	}
-	return "normal"
-}
-
-func setWorkspaceMode(dataRoot, mode string) error {
-	if mode != "normal" && mode != "readonly" && mode != "off" {
-		return fmt.Errorf("未知模式 %s — 可选 normal | readonly | off", mode)
-	}
-	path := clientConfigPath(dataRoot)
-	config := map[string]any{}
-	if text, err := os.ReadFile(path); err == nil {
-		parsed, parseErr := parseJSONObject(text)
-		if parseErr != nil {
-			return fmt.Errorf("%s 解析失败，请先在 CLI 侧修复后再切换模式: %w", path, parseErr)
-		}
-		config = parsed
-	} else if !os.IsNotExist(err) {
-		return err
-	}
-	config["service_mode"] = mode
-	data, err := jsonPretty(config)
-	if err != nil {
-		return err
-	}
-	if err := os.MkdirAll(dataRoot, 0o700); err != nil {
-		return err
-	}
-	return os.WriteFile(path, data, 0o600)
-}
-
 // ── page-level operations behind the /api routes ──
 
 // hostPluginRepo maps a prompt-injection host to its Respire plugin repo (both
@@ -865,7 +804,7 @@ func (d *desktop) InjectSet(ctx context.Context, id string, enable, mirror bool,
 // InjectSetMode saves the workspace mode and rewrites the prompts of every
 // currently injected target so the injected edition follows the mode.
 func (d *desktop) InjectSetMode(ctx context.Context, mode string) (map[string]any, error) {
-	if err := setWorkspaceMode(d.m.DataRoot, mode); err != nil {
+	if err := d.m.SetWorkspaceMode(ctx, mode); err != nil {
 		return nil, err
 	}
 	e, err := d.injectHome()
@@ -884,7 +823,7 @@ func (d *desktop) InjectSetMode(ctx context.Context, mode string) (map[string]an
 			results = append(results, item)
 		}
 	}
-	return map[string]any{"mode": mode, "updated": len(results), "results": results}, nil
+	return map[string]any{"mode": e.mode, "updated": len(results), "results": results}, nil
 }
 
 func (d *desktop) injectHome() (injectHome, error) {
@@ -892,7 +831,11 @@ func (d *desktop) injectHome() (injectHome, error) {
 	if err != nil {
 		return injectHome{}, err
 	}
-	return injectHome{home: home, localData: localDataDir(), mode: workspaceMode(d.m.DataRoot)}, nil
+	mode, err := d.m.WorkspaceMode()
+	if err != nil {
+		return injectHome{}, err
+	}
+	return injectHome{home: home, localData: localDataDir(), mode: mode}, nil
 }
 
 func localDataDir() string {
@@ -935,18 +878,6 @@ func parseJSONObject(data []byte) (map[string]any, error) {
 		return nil, errors.New("JSON 顶层值不是对象")
 	}
 	return value, nil
-}
-
-func readJSONObject(path string) map[string]any {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return map[string]any{}
-	}
-	value, err := parseJSONObject(data)
-	if err != nil {
-		return map[string]any{}
-	}
-	return value
 }
 
 // jsonPretty renders compact-stable pretty JSON (2-space indent, no HTML

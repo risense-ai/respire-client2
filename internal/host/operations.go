@@ -221,6 +221,8 @@ func (m *Manager) Submit(name, id string, raw json.RawMessage, confirmed bool, s
 			spec.method, spec.host = "desktop.agent-text-setting", false
 		} else if isWorkspaceModeSetting(key) {
 			spec.method = "desktop.workspace-setting"
+		} else {
+			return Operation{}, errors.New("未知的桌面代理设置")
 		}
 	}
 	if name == "model_progress" {
@@ -228,15 +230,6 @@ func (m *Manager) Submit(name, id string, raw json.RawMessage, confirmed bool, s
 	}
 	if name == "model_cancel" {
 		argv = append(argv, "true")
-	}
-	if name == "inject_apply" {
-		var input map[string]any
-		if err = json.Unmarshal(raw, &input); err != nil {
-			return Operation{}, err
-		}
-		if value, _ := input["revision"].(string); input["id"] == "codex" && value == "" {
-			return Operation{}, errors.New("请先预览并取得有效修订版本")
-		}
 	}
 	m.mu.Lock()
 	if previous, exists := m.jobs[id]; exists {
