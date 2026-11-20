@@ -30,26 +30,26 @@ func TestNativeDesktopSelfUpdate(t *testing.T) {
 	const oldVersion, newVersion = "0.0.1-dev.1", "0.0.1-dev.2"
 	runtimePort := reserveRefusedRuntimePort(t)
 	buildDir := t.TempDir()
-	source, err := os.ReadFile("main.go")
+	source, err := os.ReadFile("internal/desktop/app.go")
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, edit := range [][2]string{
 		{`"respire-client2/internal/host"`, "\"respire-client2/internal/host\"\n\"respire-client2/testdata/selfupdate\""},
-		{"desktop.Run(m, version)", "selfupdate.Attach(m, version)\ndesktop.Run(m, version)"},
+		{"if err = d.app.Run(); err != nil {", "selfupdate.Attach(m, version, d.window, d.panel)\nif err = d.app.Run(); err != nil {"},
 	} {
 		if bytes.Count(source, []byte(edit[0])) != 1 {
 			t.Fatalf("expected one overlay anchor %q", edit[0])
 		}
 		source = bytes.Replace(source, []byte(edit[0]), []byte(edit[1]), 1)
 	}
-	replacement := filepath.Join(buildDir, "main.go")
+	replacement := filepath.Join(buildDir, "app.go")
 	writeSelfUpdateFixture(t, replacement, source)
-	mainPath, err := filepath.Abs("main.go")
+	appPath, err := filepath.Abs("internal/desktop/app.go")
 	if err != nil {
 		t.Fatal(err)
 	}
-	overlay, err := json.Marshal(map[string]any{"Replace": map[string]string{mainPath: replacement}})
+	overlay, err := json.Marshal(map[string]any{"Replace": map[string]string{appPath: replacement}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -140,7 +140,7 @@ func TestNativeDesktopSelfUpdate(t *testing.T) {
 			wait := startSelfUpdateFixture(t, cmd)
 
 			deadline := time.After(75 * time.Second)
-			for _, want := range []string{oldVersion + " " + manifestPath, oldVersion + " " + assetPath, newVersion + " " + manifestPath} {
+			expectRequest := func(want string) {
 				select {
 				case got := <-requests:
 					if got != want {
@@ -150,9 +150,17 @@ func TestNativeDesktopSelfUpdate(t *testing.T) {
 					t.Fatalf("waiting for %q", want)
 				}
 			}
-			if err := <-wait; err != nil {
-				t.Fatalf("original Client2 exit: %v", err)
+			expectRequest(oldVersion + " " + manifestPath)
+			expectRequest(oldVersion + " " + assetPath)
+			select {
+			case err := <-wait:
+				if err != nil {
+					t.Fatalf("original Client2 exit: %v", err)
+				}
+			case <-deadline:
+				t.Fatal("waiting for the original Client2 to exit successfully")
 			}
+			expectRequest(newVersion + " " + manifestPath)
 			installed, err := os.ReadFile(exe)
 			if err != nil || sha256.Sum256(installed) != digest {
 				t.Fatalf("replacement image does not match the verified download: %v", err)
