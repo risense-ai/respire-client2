@@ -98,6 +98,21 @@ jobs:
         run: go test -c -o "$RUNNER_TEMP/client2-host.test" -tags production ./internal/host
       - name: Verify optional macOS bootstrap assets with local fixtures
         run: bash scripts/test-fetch-macos-components.sh
+  windows-self-update:
+    if: github.event_name == 'pull_request'
+    runs-on: windows-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Verify native Client2 self-update and Runtime/CLI isolation
+        shell: pwsh
+        run: go test -count=1 -v -timeout 4m -tags production,native_selfupdate_test -run '^TestNativeDesktopSelfUpdate$' .
   native:
     name: ${{ matrix.os }}-${{ matrix.arch }}
     needs: [prepare]

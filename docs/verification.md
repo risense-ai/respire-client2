@@ -68,7 +68,9 @@ Verified locally on Windows amd64, 2026-10-29. This describes the foundation rel
 | Input rejection | Invalid channel and API requests without the required header were rejected |
 | Existing updater tests | Wails updater and GitHub-provider tests passed |
 
-Client self-update verification used a local loopback release fixture and Go build overlays. The overlays and debugger port are under ignored `.verification/`; production code uses the official GitHub repositories and does not ship a fixture URL, debug port or bypass for checksum verification.
+The Windows native self-update regression runs with `go test -count=1 -v -timeout 4m -tags production,native_selfupdate_test -run '^TestNativeDesktopSelfUpdate$' .` and in the Windows PR lane. It builds two versioned Client2 executables from the current source with a test-only Go overlay. Only the outbound transport is redirected to a loopback release fixture. The production manifest resolver, checksum verification, Wails replacement and native relaunch run end to end.
+
+The fixture checks both a retained dev.28 Runtime selection and an absent selection. It uses synthetic component state, including a dev.28 selection without an installation receipt, and reserves a loopback port that refuses Runtime connections. The regression checks that the relaunched executable keeps preference and component files byte-for-byte and makes no startup CLI or Runtime release request. It exercises two builds from the same source, with no published old-to-new replay, running Runtime, or system credentials.
 
 Real Windows sign-out/sign-in, Windows SmartScreen reputation, publisher signatures and a fault-injected Runtime rollback were not verified. The application does not force-kill an unresponsive Runtime. Binary recovery is not a database-schema rollback guarantee. Public CI/release results must be checked independently after publishing.
 
