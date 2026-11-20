@@ -96,6 +96,8 @@ jobs:
         env:
           CGO_ENABLED: '1'
         run: go test -c -o "$RUNNER_TEMP/client2-host.test" -tags production ./internal/host
+      - name: Verify optional macOS bootstrap assets with local fixtures
+        run: bash scripts/test-fetch-macos-components.sh
   native:
     name: ${{ matrix.os }}-${{ matrix.arch }}
     needs: [prepare]
