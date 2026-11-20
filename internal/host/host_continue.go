@@ -195,8 +195,14 @@ func (m *Manager) runHostContinuation(job Operation, transportID string, input j
 	if len(raw) > 0 && (err == nil || errors.As(err, &unknown)) {
 		current := job
 		current.Envelope = raw
-		if pendingHostInput(current) != nil && job.Transaction.RuntimeLogin {
-			reply, continueErr := m.continueDesktopRuntimeLogin(ctx, current, input)
+		if pendingHostInput(current) != nil && (job.Transaction.RuntimeLogin || job.Transaction.RuntimeKey) {
+			var reply json.RawMessage
+			var continueErr error
+			if job.Transaction.RuntimeKey {
+				reply, continueErr = m.resumeDesktopRuntimeRecovery(ctx, current, input)
+			} else {
+				reply, continueErr = m.continueDesktopRuntimeLogin(ctx, current, input)
+			}
 			err = continueErr
 			if len(reply) != 0 {
 				returned := transactionFromEnvelope(job.Name, reply)

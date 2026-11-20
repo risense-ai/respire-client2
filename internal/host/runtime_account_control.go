@@ -236,8 +236,9 @@ func runtimeAuthIdentityOf(original []byte) (runtimeAuthIdentity, error) {
 	keygen := len(fields) == 7 && user == nil && version == 4
 	offline := user != nil && *user == "" && address != nil && *address == "" && len(fields) == 9 && (version == 2 || version == 4)
 	if version == 1 {
-		secret := text("secret")
-		offline = user != nil && *user == "" && address != nil && *address == "" && len(fields) == 10 && secret != nil && *secret != ""
+		backend := text("legacy_secret_backend")
+		offline = user != nil && *user == "" && address != nil && *address == "" && len(fields) == 10 &&
+			backend != nil && *backend != "" && *backend != "kernel"
 	}
 	if !keygen && !offline || *text("keyring_backend") == "kernel" {
 		return runtimeAuthIdentity{}, errors.New("Unbound Runtime session is not a keygen or offline recovery candidate")

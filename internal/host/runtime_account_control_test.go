@@ -152,7 +152,7 @@ func TestRuntimeAuthSessionIdentity(t *testing.T) {
 		{name: "missing", kind: "absent"},
 		{name: "named account", session: `{"user":"original user"}`, kind: "bound"},
 		{name: "keygen", session: `{"vault_version":4,` + factors + `}`, kind: "unbound"},
-		{name: "offline v1", session: `{"vault_version":1,"user":"","addr":"","secret":"legacy",` + factors + `}`, kind: "unbound"},
+		{name: "offline v1", session: `{"vault_version":1,"user":"","addr":"","legacy_secret_backend":"native",` + factors + `}`, kind: "unbound"},
 		{name: "offline v4", session: `{"vault_version":4,"user":"","addr":"",` + factors + `}`, kind: "unbound"},
 		{name: "unexpected field", session: `{"vault_version":4,"token":"extra",` + factors + `}`, invalid: true},
 		{name: "no user or keygen", session: `{}`, invalid: true},

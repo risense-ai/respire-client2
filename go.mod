@@ -7,6 +7,7 @@ require (
 	github.com/godbus/dbus/v5 v5.2.2
 	github.com/ncruces/go-sqlite3 v0.37.0
 	github.com/wailsapp/wails/v3 v3.0.0
+	golang.org/x/crypto v0.58.0
 	golang.org/x/mod v0.41.0
 	golang.org/x/net v0.60.0
 	golang.org/x/sys v0.49.0

@@ -301,6 +301,8 @@ func (m *Manager) runOperation(spec commandSpec, args []string, secret, id strin
 		envelope, err = m.desktopProfileList(spec.method == "desktop.space-list")
 	case spec.method == "auth.login", spec.method == "auth.login.browser", spec.method == "auth.register":
 		envelope, err = m.desktopRuntimeAccountLogin(ctx, args, secret, id, spec.method)
+	case spec.method == "auth.recover":
+		envelope, err = m.desktopRuntimeKeyRecovery(ctx, args, secret, id)
 	case spec.host:
 		envelope, err = m.hostOperation(ctx, args, secret, spec.method, id)
 	default:
@@ -335,7 +337,7 @@ func (m *Manager) runOperation(spec commandSpec, args []string, secret, id strin
 					job.Transaction = returned
 				}
 			}
-		} else if job.Transaction != nil && job.Transaction.RuntimeLogin {
+		} else if job.Transaction != nil && (job.Transaction.RuntimeLogin || job.Transaction.RuntimeKey) {
 			if returned != nil && *returned != *job.Transaction {
 				err = &unconfirmedError{id, errors.New("登录回执与预绑定的原事务身份不匹配")}
 			}

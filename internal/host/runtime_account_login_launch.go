@@ -56,6 +56,13 @@ func (m *Manager) prepareRuntimeLoginLaunch(ctx context.Context, imagePath, imag
 	if err != nil {
 		return control, err
 	}
+	return m.prepareRuntimeProfileLaunch(ctx, imagePath, imageDigest, record, admission, target, receipt.AccountID)
+}
+
+// A caller must first validate the transaction receipt and the selected account.
+func (m *Manager) prepareRuntimeProfileLaunch(ctx context.Context, imagePath, imageDigest string,
+	record runtimeAccountRecord, admission *runtimeAccountAdmission, target string, accountID *string) (runtimeAccountControl, error) {
+	var control runtimeAccountControl
 	address, _, err := m.runtimeAccountEndpoint()
 	if err != nil {
 		return control, err
@@ -98,7 +105,7 @@ func (m *Manager) prepareRuntimeLoginLaunch(ctx context.Context, imagePath, imag
 		return control, err
 	}
 	admission.Marker = next
-	control, err = m.prepareRuntimeControlGrant(ctx, imagePath, imageDigest, target, receipt.AccountID, next, "Starting")
+	control, err = m.prepareRuntimeControlGrant(ctx, imagePath, imageDigest, target, accountID, next, "Starting")
 	if err != nil {
 		return runtimeAccountControl{}, err
 	}
@@ -125,10 +132,18 @@ func (m *Manager) unlockRuntimeLoginTarget(ctx context.Context, control runtimeA
 	if err != nil {
 		return HealthInfo{}, err
 	}
+	if control.binding.ExpectedAccountID == nil {
+		return HealthInfo{}, errors.New("Runtime target unlock is missing its original account identity")
+	}
+	return m.unlockRuntimeProfileTarget(ctx, control, admission, record, target, *receipt.AccountID, *receipt.SessionDigest, startedPID)
+}
+
+func (m *Manager) unlockRuntimeProfileTarget(ctx context.Context, control runtimeAccountControl,
+	admission runtimeAccountAdmission, record runtimeAccountRecord, target, accountID, sessionDigest string, startedPID uint32) (HealthInfo, error) {
 	expectedDigest, ok := control.grant["image_sha256"].(string)
 	if !ok || !validHash(expectedDigest) || control.binding.InstallationRoot != record.Root ||
-		control.binding.Profile != target || control.binding.ExpectedAccountID == nil ||
-		*control.binding.ExpectedAccountID != *receipt.AccountID || startedPID == 0 {
+		control.binding.Profile != target || control.binding.ExpectedAccountID != nil &&
+		*control.binding.ExpectedAccountID != accountID || startedPID == 0 {
 		return HealthInfo{}, errors.New("Runtime target unlock is missing its original launch identity")
 	}
 	markerPath := filepath.Join(record.Root, "runtime", "autostart", "maintenance.json")
@@ -146,7 +161,7 @@ func (m *Manager) unlockRuntimeLoginTarget(ctx context.Context, control runtimeA
 		return HealthInfo{}, err
 	}
 	if !health.StartupComplete || health.PID != startedPID || health.InstanceID != control.binding.LaunchID ||
-		health.AccountID != *receipt.AccountID || health.Generation == 0 ||
+		health.AccountID != accountID || health.Generation == 0 ||
 		!samePath(health.InstallationRoot, record.Root) || !samePath(health.DataDir, target) ||
 		!samePath(health.ImagePath, control.image) || health.ImageSHA256 != expectedDigest {
 		return HealthInfo{}, errors.New("Running Runtime does not match the authorized target launch")
@@ -154,7 +169,7 @@ func (m *Manager) unlockRuntimeLoginTarget(ctx context.Context, control runtimeA
 	if err := verifyHostProcess(health); err != nil {
 		return HealthInfo{}, err
 	}
-	if err := m.unlockVerifiedRuntime(ctx, health, nativeRuntimeCredentialStore(ctx), *receipt.SessionDigest); err != nil {
+	if err := m.unlockVerifiedRuntime(ctx, health, nativeRuntimeCredentialStore(ctx), sessionDigest); err != nil {
 		return HealthInfo{}, err
 	}
 	ready, _, err := m.Health(ctx)
