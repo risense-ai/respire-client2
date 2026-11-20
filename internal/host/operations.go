@@ -297,8 +297,8 @@ func (m *Manager) runOperation(spec commandSpec, args []string, secret, id strin
 		envelope, err = m.desktopAgentSettings()
 	case spec.method == "desktop.account-list", spec.method == "desktop.space-list":
 		envelope, err = m.desktopProfileList(spec.method == "desktop.space-list")
-	case spec.method == "auth.login", spec.method == "auth.login.browser":
-		envelope, err = m.desktopRuntimeAccountLogin(ctx, args, secret, id, spec.method == "auth.login.browser")
+	case spec.method == "auth.login", spec.method == "auth.login.browser", spec.method == "auth.register":
+		envelope, err = m.desktopRuntimeAccountLogin(ctx, args, secret, id, spec.method)
 	case spec.host:
 		envelope, err = m.hostOperation(ctx, args, secret, spec.method, id)
 	default:

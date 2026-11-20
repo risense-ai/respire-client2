@@ -42,7 +42,7 @@ func (m *Manager) withPendingRuntimeLogin(ctx context.Context, transaction *host
 	var record runtimeAccountRecord
 	if json.Unmarshal(recordBytes, &record) != nil || record.Schema != 1 || !record.Sent ||
 		record.OperationID != transaction.OperationID || record.Root != root ||
-		record.Source != transaction.SourceProfile || record.Register {
+		record.Source != transaction.SourceProfile || record.Register != transaction.Register || record.Register && !recoverLogin {
 		return nil, errors.New("原 Runtime 登录操作记录已改变")
 	}
 	active, err := readCredentialConfig(filepath.Join(directory, "account-active.json"), runtimeMaintenanceLimit)
@@ -71,7 +71,7 @@ func (m *Manager) withPendingRuntimeLogin(ctx context.Context, transaction *host
 		return nil, err
 	}
 	defer clear(candidate)
-	if owner.Phase != "Paused" && (len(candidate) == 0 || owner.ExpectedProfile != profile) {
+	if owner.Phase != "Paused" && (identity.Kind != "bound" || !record.Register && len(candidate) == 0 || owner.ExpectedProfile != profile) {
 		return nil, errors.New("原 Runtime 启动记录与已选账户的密钥不匹配")
 	}
 	image := filepath.Join(m.runtimeDir(info.Version), runtimeBinary())
@@ -248,6 +248,12 @@ func runtimeLoginQueryScope(ctx context.Context, record runtimeAccountRecord) (s
 	private, err := nativeRuntimeCredentialStore(ctx).readSlot(backend, "rsrs", "login-control:"+account, false)
 	if err != nil {
 		return "", runtimeAuthIdentity{}, nil, err
+	}
+	if record.Register {
+		if _, err := registeredRuntimePassword(ctx, record, profile, identity.SessionDigest, private); err != nil {
+			return "", runtimeAuthIdentity{}, nil, err
+		}
+		return profile, identity, nil, nil
 	}
 	var custody runtimeLoginCustody
 	var request runtimeLoginParams

@@ -40,7 +40,7 @@ func (m *Manager) prepareRuntimeLoginLaunch(ctx context.Context, imagePath, imag
 	admission *runtimeAccountAdmission, receipt runtimeLoginReceipt) (runtimeAccountControl, error) {
 	var control runtimeAccountControl
 	var record runtimeAccountRecord
-	if json.Unmarshal(admission.Record, &record) != nil || !record.Sent || record.Register ||
+	if json.Unmarshal(admission.Record, &record) != nil || !record.Sent ||
 		receipt.OperationID != record.OperationID || receipt.SourceProfile != record.Source ||
 		receipt.Outcome != "awaiting_verification" {
 		return control, errors.New("Runtime target startup requires its original applied login receipt")
@@ -116,7 +116,7 @@ func (m *Manager) prepareRuntimeLoginLaunch(ctx context.Context, imagePath, imag
 func (m *Manager) unlockRuntimeLoginTarget(ctx context.Context, control runtimeAccountControl,
 	admission runtimeAccountAdmission, receipt runtimeLoginReceipt, startedPID uint32) (HealthInfo, error) {
 	var record runtimeAccountRecord
-	if json.Unmarshal(admission.Record, &record) != nil || !record.Sent || record.Register ||
+	if json.Unmarshal(admission.Record, &record) != nil || !record.Sent ||
 		receipt.OperationID != record.OperationID || receipt.SourceProfile != record.Source ||
 		receipt.Outcome != "awaiting_verification" {
 		return HealthInfo{}, errors.New("Runtime target unlock requires its original applied login receipt")

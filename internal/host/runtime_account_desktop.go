@@ -11,7 +11,8 @@ import (
 	"strings"
 )
 
-func (m *Manager) desktopRuntimeAccountLogin(ctx context.Context, args []string, secret, id string, browser bool) (envelope json.RawMessage, err error) {
+func (m *Manager) desktopRuntimeAccountLogin(ctx context.Context, args []string, secret, id, method string) (envelope json.RawMessage, err error) {
+	browser, register := method == "auth.login.browser", method == "auth.register"
 	input, err := authParams(args, secret)
 	if err != nil {
 		return nil, err
@@ -68,19 +69,24 @@ func (m *Manager) desktopRuntimeAccountLogin(ctx context.Context, args []string,
 		return nil, err
 	}
 	// Record the native transaction before Runtime can act on it.
-	if err := m.bindDesktopRuntimeLogin(id, operation, profile); err != nil {
-		return nil, err
-	}
-	source, err := readRuntimeLoginMaterial(ctx, profile)
-	if err != nil {
-		return nil, err
+	var source, target json.RawMessage
+	var registration runtimeRegisterMaterial
+	if register {
+		registration, err = prepareDesktopRegistration(ctx, operation, profile, input["super"])
+	} else {
+		source, err = readRuntimeLoginMaterial(ctx, profile)
+		if err == nil {
+			target, err = readRuntimeLoginTargetMaterial(ctx, root, profile, user, server)
+		}
 	}
 	defer clear(source)
-	target, err := readRuntimeLoginTargetMaterial(ctx, root, profile, user, server)
+	defer clear(target)
 	if err != nil {
 		return nil, err
 	}
-	defer clear(target)
+	if err := m.bindDesktopRuntimeLogin(id, operation, profile, register); err != nil {
+		return nil, err
+	}
 	var previous *HealthInfo
 	health, _, err := m.Health(ctx)
 	if err == nil {
@@ -100,7 +106,7 @@ func (m *Manager) desktopRuntimeAccountLogin(ctx context.Context, args []string,
 	} else if !IsUnavailable(err) {
 		return nil, err
 	}
-	intent := runtimeLoginIntent{OperationID: operation, User: user, Server: server}
+	intent := runtimeLoginIntent{OperationID: operation, User: user, Server: server, Register: register}
 	admission, err := m.publishPausedRuntimeMaintenance(ctx, profile, m.ClientVersion, intent, previous)
 	if err != nil {
 		return nil, err
@@ -115,13 +121,22 @@ func (m *Manager) desktopRuntimeAccountLogin(ctx context.Context, args []string,
 		super = &value
 	}
 	image := filepath.Join(m.runtimeDir(info.Version), runtimeBinary())
-	control, params, err := m.prepareInitialRuntimeLogin(ctx, image, info.SHA256, admission, authorization,
-		runtimeLoginContinuation{OfferLocalMerge: true}, super, source, target)
-	if err != nil {
-		return unknown(err)
+	var result runtimeLoginResult
+	if register {
+		result, err = m.sendDesktopRegistration(ctx, image, info.SHA256, &admission, registration, password)
+	} else {
+		var control runtimeAccountControl
+		var params runtimeLoginParams
+		control, params, err = m.prepareInitialRuntimeLogin(ctx, image, info.SHA256, admission, authorization,
+			runtimeLoginContinuation{OfferLocalMerge: true}, super, source, target)
+		if err == nil {
+			result, err = m.sendInitialRuntimeLogin(ctx, control, params, &admission)
+		}
 	}
-	result, err := m.sendInitialRuntimeLogin(ctx, control, params, &admission)
 	if err != nil {
+		if register && admission.Path == "" {
+			return nil, err
+		}
 		return unknown(err)
 	}
 	raw, err := m.finishDesktopRuntimeLogin(ctx, image, info.SHA256, &admission, result.Receipt)
@@ -131,7 +146,7 @@ func (m *Manager) desktopRuntimeAccountLogin(ctx context.Context, args []string,
 	return raw, err
 }
 
-func (m *Manager) bindDesktopRuntimeLogin(id, operation, profile string) error {
+func (m *Manager) bindDesktopRuntimeLogin(id, operation, profile string, register bool) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	job := m.jobs[id]
@@ -139,7 +154,7 @@ func (m *Manager) bindDesktopRuntimeLogin(id, operation, profile string) error {
 		return errors.New("Client2 登录操作无法绑定原账户身份")
 	}
 	job.Transaction = &hostTransaction{
-		OperationID: operation, SourceProfile: profile, Kind: "account", RuntimeLogin: true,
+		OperationID: operation, SourceProfile: profile, Kind: "account", RuntimeLogin: true, Register: register,
 	}
 	if err := m.persistOperationsLocked(); err != nil {
 		job.Transaction = nil
