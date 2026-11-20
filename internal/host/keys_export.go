@@ -140,14 +140,11 @@ func (vault exportVault) verifyExportSuper(super string) error {
 	}
 	defer clear(entropy)
 	salt, saltErr := hex.DecodeString(vault.Salt)
-	nonce, nonceErr := hex.DecodeString(vault.Nonce)
-	wrapped, current := strings.CutPrefix(vault.Wrapped, "rsrs:v1:")
-	ciphertext, wrapErr := hex.DecodeString(wrapped)
-	if saltErr != nil || nonceErr != nil || wrapErr != nil || len(nonce) != 12 {
+	if saltErr != nil {
 		return errors.New("账户恢复材料格式无效")
 	}
 	domain := "onememory:kek:v4"
-	if current {
+	if strings.HasPrefix(vault.Wrapped, "rsrs:v1:") {
 		domain = "rsrs:kek:v4"
 	}
 	key, err := hkdf.Key(sha256.New, entropy, salt, domain, 32)
@@ -155,6 +152,15 @@ func (vault exportVault) verifyExportSuper(super string) error {
 		return err
 	}
 	defer clear(key)
+	return vault.verifyWrapKey(key)
+}
+
+func (vault exportVault) verifyWrapKey(key []byte) error {
+	nonce, nonceErr := hex.DecodeString(vault.Nonce)
+	ciphertext, wrapErr := hex.DecodeString(strings.TrimPrefix(vault.Wrapped, "rsrs:v1:"))
+	if nonceErr != nil || wrapErr != nil || len(nonce) != 12 {
+		return errors.New("账户恢复材料格式无效")
+	}
 	block, err := aes.NewCipher(key)
 	if err != nil {
 		return err

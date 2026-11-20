@@ -19,6 +19,7 @@ type hostTransaction struct {
 	Scope         runtimeScope `json:"scope,omitzero"`
 	RequestBound  bool         `json:"request_bound,omitempty"`
 	RuntimeLogin  bool         `json:"runtime_login,omitempty"`
+	RuntimeKey    bool         `json:"runtime_key,omitempty"`
 }
 
 func (transaction *hostTransaction) acceptsCoreResult(reply *hostTransaction) bool {
@@ -130,6 +131,9 @@ func hostEnvelopeError(raw json.RawMessage) error {
 
 func (m *Manager) recoverHost(ctx context.Context, job Operation) (json.RawMessage, error) {
 	transaction := job.Transaction
+	if transaction != nil && transaction.RuntimeKey {
+		return m.resumeDesktopRuntimeRecovery(ctx, job, nil)
+	}
 	if transaction != nil && transaction.RuntimeLogin {
 		return m.recoverDesktopRuntimeLogin(ctx, job)
 	}
