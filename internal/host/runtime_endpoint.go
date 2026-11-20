@@ -48,7 +48,7 @@ func (m *Manager) archiveStoppedEndpoint(ctx context.Context, address string) er
 			if err != nil {
 				return err
 			}
-			relative, err := filepath.Rel(m.DataRoot, profile)
+			relative, err := filepath.Rel(windowsDOSPath(m.DataRoot), windowsDOSPath(profile))
 			if (err != nil || !filepath.IsLocal(relative)) && !deviceConfigDefaultProfileLayout(m.DataRoot) {
 				return errors.New("Runtime 账户目录不属于当前安装")
 			}

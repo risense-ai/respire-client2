@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -21,6 +22,52 @@ import (
 	"sync/atomic"
 	"testing"
 )
+
+func TestArchiveStoppedEndpointWithExtendedWindowsProfile(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("Windows extended paths")
+	}
+	t.Setenv("RSRS_DEFAULT_DATA_DIR", "")
+	root := t.TempDir()
+	endpoint := filepath.Join(root, "runtime", "endpoint.json")
+	if err := os.MkdirAll(filepath.Dir(endpoint), 0700); err != nil {
+		t.Fatal(err)
+	}
+	const original = "stopped endpoint"
+	if err := os.WriteFile(endpoint, []byte(original), 0600); err != nil {
+		t.Fatal(err)
+	}
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	address := listener.Addr().String()
+	if err := listener.Close(); err != nil {
+		t.Fatal(err)
+	}
+	m := &Manager{DataRoot: root}
+	config := filepath.Join(root, "client.json")
+	if err := writeJSON(config, map[string]string{"data_dir": `\\?\` + t.TempDir()}); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.archiveStoppedEndpoint(context.Background(), address); err == nil || !strings.Contains(err.Error(), "不属于当前安装") {
+		t.Fatalf("archive accepted an unrelated account directory: %v", err)
+	}
+	if err := writeJSON(config, map[string]string{"data_dir": `\\?\` + root}); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.archiveStoppedEndpoint(context.Background(), address); err != nil {
+		t.Fatalf("archive rejected the same installation in extended form: %v", err)
+	}
+	archives, err := filepath.Glob(filepath.Join(root, "runtime", "endpoint.stopped-*.json"))
+	if err != nil || len(archives) != 1 {
+		t.Fatalf("expected one archived endpoint, got %v: %v", archives, err)
+	}
+	archived, err := os.ReadFile(archives[0])
+	if err != nil || string(archived) != original {
+		t.Fatalf("archive did not preserve the original endpoint: %v", err)
+	}
+}
 
 // buildRuntimeTree materializes a minimal but genuinely verifiable managed
 // Runtime tree (binary + notices + core-runtime.json listing both) under dir.
