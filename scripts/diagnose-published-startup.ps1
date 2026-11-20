@@ -6,10 +6,14 @@ param(
     [Parameter(Mandatory,ParameterSetName='ExistingKeys')][string]$ModelDirectory,
     [Parameter(Mandatory,ParameterSetName='DefaultOnline')][switch]$DefaultOnline,
     [Parameter(Mandatory,ParameterSetName='DefaultOnline')][string]$PublicInputs,
+    [Parameter(Mandatory,ParameterSetName='CandidateOnline')][switch]$CandidateOnline,
+    [Parameter(Mandatory,ParameterSetName='CandidateOnline')][string]$CandidateInputs,
     [Parameter(Mandatory)][ValidatePattern('^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?(\+[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$')][string]$RuntimeVersion,
     [Parameter(Mandatory)][string]$OutputDirectory
 )
 $ErrorActionPreference = 'Stop'
+$online = $PSCmdlet.ParameterSetName -cne 'ExistingKeys'
+$candidateMode = $PSCmdlet.ParameterSetName -ceq 'CandidateOnline'
 if ($env:GITHUB_ACTIONS -cne 'true' -or $env:RUNNER_ENVIRONMENT -cne 'github-hosted' -or -not $IsWindows) {
     throw 'This diagnostic requires a fresh hosted Windows runner'
 }
@@ -28,7 +32,7 @@ foreach ($dir in @($binaryDirectory, (Join-Path $dataDirectory 'client2'), (Join
 $cliPath = Join-Path $binaryDirectory 'rsrs.exe'
 $clientPath = (Resolve-Path -LiteralPath $Client).Path
 $siblingCli = Join-Path (Split-Path -Parent $clientPath) 'rsrs.exe'
-if (-not $DefaultOnline) {
+if (-not $online) {
     $seedCli = (Resolve-Path -LiteralPath $Cli).Path
     if ((Split-Path -Parent $seedCli) -ieq (Split-Path -Parent $clientPath) -or
         $seedCli.StartsWith(($root.TrimEnd('\') + '\'), [StringComparison]::OrdinalIgnoreCase)) {
@@ -55,7 +59,7 @@ $childEnvironment['RSRS_DATA_DIR'] = $dataDirectory
 $childEnvironment['RSRS_BIN_DIR'] = $binaryDirectory
 $childEnvironment['RSRS_RPC_PORT'] = "$port"
 $childEnvironment['RSRS_INSTANCE_ID'] = 'published-startup-' + [Guid]::NewGuid().ToString('N')
-if (-not $DefaultOnline) { $childEnvironment['RSRS_M3_DIR'] = (Resolve-Path -LiteralPath $ModelDirectory).Path }
+if (-not $online) { $childEnvironment['RSRS_M3_DIR'] = (Resolve-Path -LiteralPath $ModelDirectory).Path }
 $childEnvironment['RSRS_ENGINE'] = 'cpu'
 $childEnvironment['RSRS_CLIENT2_HOST'] = '1'
 $childEnvironment['RSRS_NO_AUTOSYNC'] = '1'
@@ -66,8 +70,8 @@ $report = [ordered]@{schema=1; scope='sealed Client2 real-SDK existing-key start
     client_sha256=(Get-FileHash $clientPath -Algorithm SHA256).Hash.ToLowerInvariant();
     child_path_empty=($childEnvironment['PATH'] -ceq '');
     initial_start=$false; normal_stop=$false; automatic_start=$false; automatic_key_handoff=$false; cleanup=$false}
-if ($DefaultOnline) {
-    $report.scope = 'latest public default online installation diagnostic only'
+if ($online) {
+    $report.scope = if ($candidateMode) { 'sealed candidate default online installation diagnostic only' } else { 'latest public default online installation diagnostic only' }
     $report.diagnostic_only = $true
     $report.full_passed = $false
 } else {
@@ -160,18 +164,35 @@ function Assert-NoManagedCLI([string]$Stage) {
 $desktop = $null
 $runtimeActor = $null
 try {
-    if ($DefaultOnline) {
-        $report.phase = 'public_input_binding'
-        $public = Get-Content -LiteralPath $PublicInputs -Raw | ConvertFrom-Json
-        if ($public.schema -ne 1 -or $public.scope -cne 'latest-default-online-install-diagnostic' -or
-            $public.diagnostic_only -ne $true -or $public.full_passed -ne $false -or
-            $public.harness_sha -cne $env:GITHUB_SHA -or $public.client2.source_sha -cne $env:CANDIDATE_SOURCE -or
-            $public.client2.version -cne $env:CANDIDATE_VERSION -or
-            $public.runtime.version -cne $RuntimeVersion -or $public.client2.sha256 -cne $report.client_sha256 -or
-            $public.runtime.archive_sha256 -cne (Get-FileHash $RuntimeArchive -Algorithm SHA256).Hash.ToLowerInvariant()) {
-            throw 'Verified public inputs differ from the installation references'
+    if ($online) {
+        $report.phase = if ($candidateMode) { 'candidate_input_binding' } else { 'public_input_binding' }
+        $inputsPath = if ($candidateMode) { $CandidateInputs } else { $PublicInputs }
+        $expectedScope = if ($candidateMode) { 'sealed-candidate-online-install-diagnostic' } else { 'latest-default-online-install-diagnostic' }
+        $inputs = Get-Content -LiteralPath $inputsPath -Raw | ConvertFrom-Json
+        if ($inputs.schema -ne 1 -or $inputs.scope -cne $expectedScope -or
+            $inputs.diagnostic_only -ne $true -or $inputs.full_passed -ne $false -or
+            $inputs.harness_sha -cne $env:GITHUB_SHA -or $inputs.client2.source_sha -cne $env:CANDIDATE_SOURCE -or
+            $inputs.client2.version -cne $env:CANDIDATE_VERSION -or
+            $inputs.runtime.version -cne $RuntimeVersion -or $inputs.client2.sha256 -cne $report.client_sha256 -or
+            $inputs.runtime.archive_sha256 -cne (Get-FileHash $RuntimeArchive -Algorithm SHA256).Hash.ToLowerInvariant()) {
+            throw 'Verified online inputs differ from the installation references'
         }
-        $report.public_inputs = $public
+        if ($candidateMode) {
+            $producer = $inputs.client2.producer
+            if ($producer.repository -cne 'risense-ai/respire-client2' -or
+                $producer.run_id -cnotmatch '^[1-9][0-9]*$' -or $producer.run_id -ne $env:INPUT_RUN_ID -or
+                $producer.attempt -cnotmatch '^[1-9][0-9]*$' -or $producer.attempt -ne $env:INPUT_ATTEMPT -or
+                $inputs.client2.artifact_id -cnotmatch '^[1-9][0-9]*$' -or
+                $inputs.client2.artifact_zip_digest -cnotmatch '^sha256:[0-9a-f]{64}$' -or
+                $inputs.client2.manifest_sha256 -cnotmatch '^[0-9a-f]{64}$' -or
+                $inputs.client2.six_package_receipts_verified -ne $true -or
+                $inputs.runtime.run_id -cnotmatch '^[1-9][0-9]*$' -or $inputs.runtime.run_id -ne $env:RUNTIME_RUN_ID) {
+                throw 'Sealed candidate or Runtime producer proof differs'
+            }
+            $report.candidate_inputs = $inputs
+        } else {
+            $report.public_inputs = $inputs
+        }
         $fresh = Invoke-Child 'fresh_profile' $clientPath @('--headless','bootstrap-status')
         if (-not $fresh.ok -or $fresh.result.payload_found -or $fresh.result.payload_error -or $fresh.result.cli_path -or
             $fresh.result.cli_error -or $fresh.result.installed_runtime -or $fresh.result.installed_runtime_error -or
@@ -189,14 +210,14 @@ try {
         $selection = Get-Content -LiteralPath (Join-Path $binaryDirectory 'runtime.json') -Raw | ConvertFrom-Json
         $managed = Join-Path $binaryDirectory "runtime/$RuntimeVersion"
         $installedRuntimeHash = (Get-FileHash (Join-Path $managed 'rsrs-runtime.exe') -Algorithm SHA256).Hash.ToLowerInvariant()
-        if ($selection.version -cne $RuntimeVersion -or $selection.sha256 -cne $public.runtime.binary_sha256 -or
+        if ($selection.version -cne $RuntimeVersion -or $selection.sha256 -cne $inputs.runtime.binary_sha256 -or
             $installedRuntimeHash -cne $selection.sha256) {
             throw 'Installed Runtime differs from the verified public bytes'
         }
-        if ((Get-FileHash $public.runtime_metadata_path -Algorithm SHA256).Hash.ToLowerInvariant() -cne $public.runtime_metadata_sha256) {
+        if ((Get-FileHash $inputs.runtime_metadata_path -Algorithm SHA256).Hash.ToLowerInvariant() -cne $inputs.runtime_metadata_sha256) {
             throw 'Verified public Runtime metadata changed before installed payload checks'
         }
-        $metadata = Get-Content -LiteralPath $public.runtime_metadata_path -Raw | ConvertFrom-Json
+        $metadata = Get-Content -LiteralPath $inputs.runtime_metadata_path -Raw | ConvertFrom-Json
         foreach ($file in @($metadata.files | Where-Object { -not $_.path.StartsWith('core-notices/', [StringComparison]::Ordinal) })) {
             # The installed tree uses the host binary name instead of the release asset name.
             $installedName = if ($file.path -ceq $metadata.binary_file) { 'rsrs-runtime.exe' } else { $file.path }
@@ -221,7 +242,7 @@ try {
         $report.installed_runtime_sha256 = $installedRuntimeHash
         $report.installed_runtime_payload_verified = $true
         $report.factory_channel_retained = $true
-        $report.default_online_install = $true
+        if ($candidateMode) { $report.candidate_online_install = $true } else { $report.default_online_install = $true }
         $report.status = 'diagnostic-passed'
     } else {
     $installed = Invoke-Child 'install' $seedCli @('--json','runtime','install','--file',$RuntimeArchive,'--version',$RuntimeVersion)
