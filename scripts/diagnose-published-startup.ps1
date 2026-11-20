@@ -1,6 +1,6 @@
 [CmdletBinding(DefaultParameterSetName='ExistingKeys')]
 param(
-    [Parameter(Mandatory)][string]$Cli,
+    [Parameter(Mandatory,ParameterSetName='ExistingKeys')][string]$Cli,
     [Parameter(Mandatory)][string]$Client,
     [Parameter(Mandatory)][string]$RuntimeArchive,
     [Parameter(Mandatory,ParameterSetName='ExistingKeys')][string]$ModelDirectory,
@@ -37,7 +37,7 @@ foreach ($name in @('SystemRoot','WINDIR','COMSPEC','PATHEXT','ProgramFiles','Pr
     $value = [Environment]::GetEnvironmentVariable($name)
     if ($value) { $childEnvironment[$name] = $value }
 }
-$childEnvironment['PATH'] = "$env:SystemRoot\System32;$env:SystemRoot"
+$childEnvironment['PATH'] = if ($DefaultOnline) { '' } else { "$env:SystemRoot\System32;$env:SystemRoot" }
 $childEnvironment['HOME'] = $homeDirectory
 $childEnvironment['USERPROFILE'] = $homeDirectory
 $childEnvironment['APPDATA'] = Join-Path $root 'appdata'
@@ -55,13 +55,16 @@ $childEnvironment['RSRS_NO_AUTOSYNC'] = '1'
 $childEnvironment['RSRS_UPDATE_CHECK'] = '0'
 $report = [ordered]@{schema=1; scope='sealed Client2 real-SDK existing-key startup diagnostic; not full GUI acceptance'; status='failed'; phase='prepare';
     core_test_mode=$false;
-    runtime_version=$RuntimeVersion; cli_sha256=(Get-FileHash $Cli -Algorithm SHA256).Hash.ToLowerInvariant();
+    runtime_version=$RuntimeVersion;
     client_sha256=(Get-FileHash $clientPath -Algorithm SHA256).Hash.ToLowerInvariant();
     initial_start=$false; normal_stop=$false; automatic_start=$false; automatic_key_handoff=$false; cleanup=$false}
 if ($DefaultOnline) {
     $report.scope = 'latest public default online installation diagnostic only'
     $report.diagnostic_only = $true
     $report.full_passed = $false
+    $report.child_path_empty = $childEnvironment['PATH'] -ceq ''
+} else {
+    $report.cli_sha256 = (Get-FileHash $Cli -Algorithm SHA256).Hash.ToLowerInvariant()
 }
 $categories = [ordered]@{
     connection_refused='积极拒绝|actively refused|connection refused'
@@ -92,6 +95,7 @@ function Start-Child([string]$Executable, [string[]]$Arguments) {
     $start.CreateNoWindow = $true
     $start.RedirectStandardOutput = $true
     $start.RedirectStandardError = $true
+    if ($DefaultOnline) { $start.WorkingDirectory = $root }
     $start.Environment.Clear()
     foreach ($key in $childEnvironment.Keys) { $start.Environment[$key] = $childEnvironment[$key] }
     foreach ($argument in $Arguments) { $start.ArgumentList.Add($argument) }
@@ -145,18 +149,19 @@ try {
         $public = Get-Content -LiteralPath $PublicInputs -Raw | ConvertFrom-Json
         if ($public.schema -ne 1 -or $public.scope -cne 'latest-default-online-install-diagnostic' -or
             $public.diagnostic_only -ne $true -or $public.full_passed -ne $false -or
-            $public.harness_sha -cne $env:GITHUB_SHA -or $public.reader_sha -cne $env:CLI_READER_REF -or
-            $public.cli.version -cne $env:CLI_VERSION -or $public.client2.version -cne $env:CANDIDATE_VERSION -or
+            $public.harness_sha -cne $env:GITHUB_SHA -or $public.client2.source_sha -cne $env:CANDIDATE_SOURCE -or
+            $public.client2.version -cne $env:CANDIDATE_VERSION -or
             $public.runtime.version -cne $RuntimeVersion -or $public.client2.sha256 -cne $report.client_sha256 -or
-            $public.payload_identity.cli_binary_sha256 -cne $report.cli_sha256 -or
-            $public.payload_identity.runtime_bundle_sha256 -cne (Get-FileHash $RuntimeArchive -Algorithm SHA256).Hash.ToLowerInvariant()) {
+            $public.runtime.archive_sha256 -cne (Get-FileHash $RuntimeArchive -Algorithm SHA256).Hash.ToLowerInvariant()) {
             throw 'Verified public inputs differ from the installation references'
         }
         $report.public_inputs = $public
+        $siblingCli = Join-Path (Split-Path -Parent $clientPath) 'rsrs.exe'
         $fresh = Invoke-Child 'fresh_profile' $clientPath @('--headless','bootstrap-status')
         if (-not $fresh.ok -or $fresh.result.payload_found -or $fresh.result.payload_error -or $fresh.result.cli_path -or
             $fresh.result.cli_error -or $fresh.result.installed_runtime -or $fresh.result.installed_runtime_error -or
-            (Test-Path -LiteralPath $cliPath) -or (Test-Path -LiteralPath (Join-Path $binaryDirectory 'runtime.json'))) {
+            (Test-Path -LiteralPath $cliPath) -or (Test-Path -LiteralPath $siblingCli) -or
+            (Test-Path -LiteralPath (Join-Path $binaryDirectory 'runtime.json'))) {
             throw 'Default online install requires absent CLI, Runtime and bootstrap payload'
         }
         $report.cli_absent_before = $true
@@ -168,11 +173,10 @@ try {
         if (-not $installed.ok) { throw 'Default online installation failed' }
         $selection = Get-Content -LiteralPath (Join-Path $binaryDirectory 'runtime.json') -Raw | ConvertFrom-Json
         $managed = Join-Path $binaryDirectory "runtime/$RuntimeVersion"
-        $installedCliHash = (Get-FileHash $cliPath -Algorithm SHA256).Hash.ToLowerInvariant()
         $installedRuntimeHash = (Get-FileHash (Join-Path $managed 'rsrs-runtime.exe') -Algorithm SHA256).Hash.ToLowerInvariant()
-        if ($selection.version -cne $RuntimeVersion -or $selection.sha256 -cne $public.payload_identity.runtime_binary_sha256 -or
-            $installedRuntimeHash -cne $selection.sha256 -or $installedCliHash -cne $report.cli_sha256) {
-            throw 'Installed CLI or Runtime differs from the verified public bytes'
+        if ($selection.version -cne $RuntimeVersion -or $selection.sha256 -cne $public.runtime.binary_sha256 -or
+            $installedRuntimeHash -cne $selection.sha256) {
+            throw 'Installed Runtime differs from the verified public bytes'
         }
         if ((Get-FileHash $public.runtime_metadata_path -Algorithm SHA256).Hash.ToLowerInvariant() -cne $public.runtime_metadata_sha256) {
             throw 'Verified public Runtime metadata changed before installed payload checks'
@@ -187,20 +191,19 @@ try {
                 throw 'Installed Runtime payload differs from the verified public inventory'
             }
         }
-        $capabilities = Invoke-Child 'installed_cli_capabilities' $cliPath @('--json','capabilities')
-        $rpc = $capabilities.summary.capabilities.host_rpc
-        if ($capabilities.status -cne 'ok' -or $capabilities.summary.cli_version -cne $public.cli.version -or
-            $rpc.version -ne 1 -or $rpc.transport -cne 'stdio' -or
-            $rpc.methods -cnotcontains 'core_config.set' -or $rpc.methods -cnotcontains 'core_config.result') {
-            throw 'Installed CLI version or core-config capability receipt differs'
+        $after = Invoke-Child 'runtime_only_profile' $clientPath @('--headless','bootstrap-status')
+        if (-not $after.ok -or $after.result.cli_path -or $after.result.cli_error -or
+            $after.result.payload_found -or $after.result.payload_error -or (Test-Path -LiteralPath $cliPath) -or
+            (Test-Path -LiteralPath $siblingCli) -or
+            $after.result.installed_runtime_error -or $after.result.installed_runtime.version -cne $selection.version -or
+            $after.result.installed_runtime.sha256 -cne $installedRuntimeHash) {
+            throw 'Online installation did not leave a verified Runtime-only profile'
         }
         $preferences = Get-Content -LiteralPath (Join-Path $dataDirectory 'client2/preferences.json') -Raw | ConvertFrom-Json
         if ($preferences.PSObject.Properties.Name -contains 'runtimeChannel') { throw 'Default channel was overridden' }
-        $report.installed_cli_version = $capabilities.summary.cli_version
-        $report.installed_cli_sha256 = $installedCliHash
+        $report.cli_absent_after = $true
         $report.installed_runtime_version = $selection.version
         $report.installed_runtime_sha256 = $installedRuntimeHash
-        $report.installed_cli_capabilities_verified = $true
         $report.installed_runtime_payload_verified = $true
         $report.factory_channel_retained = $true
         $report.default_online_install = $true
