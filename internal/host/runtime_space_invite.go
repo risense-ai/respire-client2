@@ -159,8 +159,14 @@ func (m *Manager) exchangeSpaceInvite(ctx context.Context, image, digest string,
 }
 
 func spaceInviteFingerprint(r spaceKickRecord) (string, error) {
+	return spaceOperationFingerprint(r, map[string]any{"kind": "invite", "note": r.Invite.Note, "readonly": r.Invite.Readonly})
+}
+
+func spaceOperationFingerprint(r spaceKickRecord, intent map[string]any) (string, error) {
 	identity := map[string]any{"kind": r.Identity.Kind, "account_id": r.Identity.AccountID, "session_sha256": r.Identity.SessionDigest}
-	intent := map[string]any{"kind": "invite", "note": r.Invite.Note, "readonly": r.Invite.Readonly}
+	if r.Identity.Kind == "absent" {
+		identity = map[string]any{"kind": "absent"}
+	}
 	var data bytes.Buffer
 	encoder := json.NewEncoder(&data)
 	encoder.SetEscapeHTML(false)
