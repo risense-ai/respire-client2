@@ -30,7 +30,7 @@ var settingsCommands = map[string]commandSpec{
 	"space_create":          {method: "desktop.space-create", host: true, write: true, args: []argument{pos("name")}},
 	"space_use":             {method: "desktop.space-use", host: true, write: true, args: []argument{pos("name")}},
 	"space_join":            {words: []string{"space", "join"}, host: true, write: true, args: []argument{pos("code")}},
-	"space_invite":          {words: []string{"space", "invite"}, host: true, write: true, args: []argument{opt("note", "--note"), flag("readonly", "--readonly")}},
+	"space_invite":          {method: "desktop.space-invite", write: true, args: []argument{opt("note", "--note"), flag("readonly", "--readonly")}},
 	"space_members":         {method: "desktop.space-members", args: []argument{{key: "name", kind: "string"}}},
 	"space_remove":          {words: []string{"space", "remove", "--yes"}, host: true, write: true, args: []argument{pos("name")}},
 	"classification_config": {method: "desktop.classification", args: []argument{choice("backend", "--backend", "ds", "jev")}},

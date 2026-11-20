@@ -21,11 +21,12 @@ type spaceKickRecord struct {
 	ID, Root, Profile, Token string
 	Identity                 runtimeAuthIdentity
 	Intent                   spaceKickIntent
+	Invite                   *spaceInviteIntent `json:",omitempty"`
 	Runtime                  InstalledRuntime
 	WasServing, StoreReady   bool
 }
 
-func (m *Manager) desktopSpaceKick(ctx context.Context, id string, args []string, recoveryName string) (raw json.RawMessage, err error) {
+func (m *Manager) desktopSpaceMembership(ctx context.Context, id string, args []string, invite bool, recoveryName string, store hostCredentialStore) (raw json.RawMessage, err error) {
 	query := recoveryName != ""
 	if query {
 		defer func() {
@@ -40,7 +41,14 @@ func (m *Manager) desktopSpaceKick(ctx context.Context, id string, args []string
 		return nil, errors.New("成员撤销需要有效请求 ID")
 	}
 	intent := spaceKickIntent{Kind: "kick", All: len(args) == 0}
-	if len(args) > 0 {
+	var invitation *spaceInviteIntent
+	if invite {
+		var err error
+		invitation, err = parseSpaceInviteArgs(args)
+		if err != nil {
+			return nil, err
+		}
+	} else if len(args) > 0 {
 		session := strings.TrimSpace(strings.TrimPrefix(args[0], "--session="))
 		if !runtimeInstanceID.MatchString(session) {
 			return nil, errors.New("成员会话 ID 无效")
@@ -81,7 +89,16 @@ func (m *Manager) desktopSpaceKick(ctx context.Context, id string, args []string
 	}
 	recordPath := filepath.Join(directory, "space-client2.json")
 	markerPath := filepath.Join(directory, "maintenance.json")
-	record := spaceKickRecord{ID: op, Root: root, Profile: profile, Identity: identity, Intent: intent, Runtime: info}
+	record := spaceKickRecord{ID: op, Root: root, Profile: profile, Identity: identity, Intent: intent, Invite: invitation, Runtime: info}
+	var material *spaceInviteMaterial
+	readMaterial := func() error {
+		if !invite {
+			return nil
+		}
+		var err error
+		material, err = readSpaceInviteMaterial(profile, op, identity, store)
+		return err
+	}
 	var recordBytes, marker []byte
 	unknown := func(cause error) (json.RawMessage, error) {
 		return nil, &unconfirmedError{id: id, cause: cause}
@@ -90,10 +107,14 @@ func (m *Manager) desktopSpaceKick(ctx context.Context, id string, args []string
 		recordBytes, err = readCredentialConfig(recordPath, runtimeMaintenanceLimit)
 		if err != nil || json.Unmarshal(recordBytes, &record) != nil || record.ID != op || record.Root != root ||
 			record.Profile != profile || record.Runtime != info || !sameSpaceKickIdentity(record.Identity, identity) ||
-			record.Intent.Kind != "kick" || record.Intent.All != (recoveryName == "space_kick_all") ||
-			record.Intent.All != (record.Intent.Session == nil) ||
-			(record.Intent.Session != nil && !runtimeInstanceID.MatchString(*record.Intent.Session)) {
+			(record.Invite != nil) != invite ||
+			(!invite && (record.Intent.Kind != "kick" || record.Intent.All != (recoveryName == "space_kick_all") ||
+				record.Intent.All != (record.Intent.Session == nil) ||
+				(record.Intent.Session != nil && !runtimeInstanceID.MatchString(*record.Intent.Session)))) {
 			return unknown(errors.New("无法确认原成员撤销事务，未重发请求"))
+		}
+		if err := readMaterial(); err != nil {
+			return unknown(err)
 		}
 		marker, err = m.claimSpaceKickMarker(ctx, record, markerPath)
 		if err != nil {
@@ -109,6 +130,9 @@ func (m *Manager) desktopSpaceKick(ctx context.Context, id string, args []string
 		}
 		if m.ClientVersion == "" {
 			return nil, errors.New("缺少 Client2 维护协调器版本")
+		}
+		if err := readMaterial(); err != nil {
+			return nil, err
 		}
 		h, _, err := m.Health(ctx)
 		if err == nil {
@@ -140,46 +164,24 @@ func (m *Manager) desktopSpaceKick(ctx context.Context, id string, args []string
 		}
 	}
 	image := filepath.Join(m.runtimeDir(info.Version), runtimeBinary())
-	control, err := m.prepareRuntimeAccountControl(ctx, image, info.SHA256, profile, identity.AccountID, marker)
-	if err != nil {
-		return unknown(err)
+	if invite {
+		raw, err = m.exchangeSpaceInvite(ctx, image, info.SHA256, marker, record, material, query)
+	} else {
+		raw, err = m.exchangeSpaceKick(ctx, image, info.SHA256, marker, record, query)
 	}
-	params, err := json.Marshal(map[string]any{
-		"schema_version": 1, "binding": control.binding, "identity": identity, "source_identity": identity,
-		"operation": record.Intent, "invite_code": nil,
-	})
-	if err != nil {
-		return unknown(err)
-	}
-	requestID, err := controlUUID()
-	if err != nil {
-		return unknown(err)
-	}
-	method := "control.space.kick"
-	if query {
-		method = "control.space.result"
-	}
-	reply, exchangeErr := m.exchangeRuntimeControl(ctx, control.image, control.port, control.grant, runtimeControlRequest{
-		V: 1, ID: requestID, Method: method, Args: []string{string(params)}, OperationID: op, IdempotencyKey: op,
-	})
-	// The transport returns the bound packet for a typed rejection as well.
-	if exchangeErr != nil && (reply.Code != "space_rejected" || reply.Error != "") {
-		return unknown(errors.New("成员撤销结果未确认，请查询原请求"))
-	}
-	raw, err = verifiedSpaceKickReply(reply, record)
 	if err != nil {
 		return unknown(err)
 	}
 	current, err := spaceKickIdentity(profile)
 	selected, selectionErr := selectedRuntimeLoginProfile(root)
 	if err != nil || selectionErr != nil || selected != profile || !sameSpaceKickIdentity(identity, current) {
-		return unknown(errors.New("成员撤销后原账户选择已改变"))
+		return unknown(errors.New("成员变更后原账户选择已改变"))
 	}
 	if err := removeOwnedRuntimeAccountRecord(markerPath, marker); err != nil {
-		return unknown(err)
+		return spaceMembershipPostcondition(raw, invite, err)
 	}
 	if err := removeOwnedRuntimeAccountRecord(recordPath, recordBytes); err != nil {
-		return raw, fmt.Errorf("成员撤销已有回执，清理事务失败: %w", err)
+		return spaceMembershipPostcondition(raw, invite, fmt.Errorf("成员事务已有回执，清理事务失败: %w", err))
 	}
 	if record.WasServing {
 		h, err := m.startDetachedLocked(ctx, info)
@@ -191,10 +193,41 @@ func (m *Manager) desktopSpaceKick(ctx context.Context, id string, args []string
 			err = m.unlockVerifiedRuntime(ctx, h, nativeRuntimeCredentialStore(ctx), identity.SessionDigest, false)
 		}
 		if err != nil {
-			return raw, fmt.Errorf("成员撤销已有回执，Runtime 恢复失败: %w", err)
+			return spaceMembershipPostcondition(raw, invite, fmt.Errorf("成员事务已有回执，Runtime 恢复失败: %w", err))
 		}
 	}
 	return raw, envelopeError(raw)
+}
+
+func (m *Manager) exchangeSpaceKick(ctx context.Context, image, digest string, marker []byte, record spaceKickRecord, query bool) (json.RawMessage, error) {
+	identity, op := record.Identity, record.ID
+	control, err := m.prepareRuntimeAccountControl(ctx, image, digest, record.Profile, identity.AccountID, marker)
+	if err != nil {
+		return nil, err
+	}
+	params, err := json.Marshal(map[string]any{
+		"schema_version": 1, "binding": control.binding, "identity": identity, "source_identity": identity,
+		"operation": record.Intent, "invite_code": nil,
+	})
+	if err != nil {
+		return nil, err
+	}
+	requestID, err := controlUUID()
+	if err != nil {
+		return nil, err
+	}
+	method := "control.space.kick"
+	if query {
+		method = "control.space.result"
+	}
+	reply, exchangeErr := m.exchangeRuntimeControl(ctx, control.image, control.port, control.grant, runtimeControlRequest{
+		V: 1, ID: requestID, Method: method, Args: []string{string(params)}, OperationID: op, IdempotencyKey: op,
+	})
+	// The transport returns the bound packet for a typed rejection as well.
+	if exchangeErr != nil && (reply.Code != "space_rejected" || reply.Error != "") {
+		return nil, errors.New("成员撤销结果未确认，请查询原请求")
+	}
+	return verifiedSpaceKickReply(reply, record)
 }
 
 func spaceKickIdentity(profile string) (runtimeAuthIdentity, error) {
