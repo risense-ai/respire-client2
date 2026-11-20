@@ -21,6 +21,7 @@ type Preferences struct {
 	Layout         string `json:"layout"`
 	Theme          string `json:"theme"`
 	Language       string `json:"language"`
+	ModelMirror    string `json:"modelMirror"`
 	// ProxyMode is "system" (environment variables, then the OS proxy) or
 	// "direct" (never proxy). Empty in older files and migrated to system.
 	ProxyMode string `json:"proxyMode"`
@@ -71,6 +72,7 @@ func defaultPreferences() Preferences {
 	return Preferences{
 		AutoRuntime: true, AutoUpdate: true, RuntimeChannel: "dev", ClientChannel: "stable", Layout: "sidebar", Theme: "system", Language: "",
 		ProxyMode:            ProxyModeSystem,
+		ModelMirror:          "auto",
 		ClientUpdateInterval: "6h", RuntimeUpdateInterval: "6h", ClientAutoUpdate: true, RuntimeAutoUpdate: true,
 		ClientAutoRestart: true, RuntimeAutoRestart: true,
 		OnboardingVersion:   1,

@@ -163,6 +163,19 @@ func TestDownloadModelSucceedsAfterOriginError(t *testing.T) {
 	if firstRequests.Load() == 0 || secondRequests.Load() != 1 || !modelFileValid(filepath.Join(manager.ModelDir(), spec.rel), spec) {
 		t.Fatalf("unexpected requests: first=%d second=%d", firstRequests.Load(), secondRequests.Load())
 	}
+	manager.DataRoot = t.TempDir()
+	if err := os.WriteFile(filepath.Join(manager.DataRoot, "agent.json"), []byte(`{"model_mirror":"`+first.URL+`"}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	manager.prefs = defaultPreferences()
+	manager.prefs.ModelMirror = second.URL
+	firstRequests.Store(0)
+	if err := manager.DownloadModel(context.Background(), "m3", "quantized", ""); err != nil {
+		t.Fatalf("download using Client2 preference: %v", err)
+	}
+	if firstRequests.Load() != 0 || secondRequests.Load() != 2 || !modelFileValid(filepath.Join(manager.ModelDir(), spec.rel), spec) {
+		t.Fatalf("unexpected requests using Client2 preference: first=%d second=%d", firstRequests.Load(), secondRequests.Load())
+	}
 }
 
 func TestEngineEnvelope(t *testing.T) {
