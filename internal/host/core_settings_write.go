@@ -219,9 +219,14 @@ func (m *Manager) recordCoreConfigChange(id string, change *coreConfigChange) er
 	defer m.mu.Unlock()
 	job := m.jobs[id]
 	job.coreChange = change
+	previous := job.Transaction
+	if isDesktopAgentTextSetting(change.Key) {
+		job.Transaction = &hostTransaction{OperationID: strings.TrimPrefix(id, "desktop-"), SourceProfile: change.Profile, Kind: "agent_setting"}
+	}
 	err := m.persistOperationsLocked()
 	if err != nil {
 		job.coreChange = nil
+		job.Transaction = previous
 	}
 	return err
 }
@@ -229,10 +234,11 @@ func (m *Manager) recordCoreConfigChange(id string, change *coreConfigChange) er
 func (m *Manager) recoverDesktopCoreConfig(ctx context.Context, job Operation) (json.RawMessage, error) {
 	change := job.coreChange
 	if change == nil {
-		return nil, errors.New("原核心配置操作在提交给 Runtime 之前中断")
+		return nil, errors.New("原配置操作在持久化请求前中断")
 	}
-	if change.Key != "read_heat" && change.Key != "recall_fusion" {
-		return nil, &unconfirmedError{job.ID, errors.New("原核心配置操作的键无效")}
+	hostSetting := isDesktopAgentTextSetting(change.Key)
+	if (!hostSetting && change.Key != "read_heat" && change.Key != "recall_fusion") || hostSetting && change.OfflineFile == "" {
+		return nil, &unconfirmedError{job.ID, errors.New("原配置操作的键或文件回执无效")}
 	}
 	lock, err := m.lockRuntimeTakeover(ctx)
 	if err != nil {
@@ -242,11 +248,14 @@ func (m *Manager) recoverDesktopCoreConfig(ctx context.Context, job Operation) (
 	if change.OfflineFile != "" {
 		profile, err := m.coreConfigProfile()
 		if err != nil || !samePath(profile, change.Profile) {
-			return nil, &unconfirmedError{job.ID, errors.Join(errors.New("无法确认原核心配置账户目录"), err)}
+			return nil, &unconfirmedError{job.ID, errors.Join(errors.New("无法确认原配置的账户目录"), err)}
 		}
-		_, actual, err := readCoreConfigFile(profile)
+		settings, actual, err := readCoreConfigFile(profile)
 		if err != nil || actual != change.OfflineFile {
-			return nil, &unconfirmedError{job.ID, errors.Join(errors.New("未找到原离线核心配置的写入结果"), err)}
+			return nil, &unconfirmedError{job.ID, errors.Join(errors.New("未找到原配置文件的写入结果"), err)}
+		}
+		if hostSetting {
+			return desktopAgentSettingResult(change.Key, settings[change.Key])
 		}
 		return offlineCoreConfigResult(change)
 	}
@@ -300,18 +309,29 @@ func (m *Manager) saveOfflineCoreConfig(ctx context.Context, id string, change *
 	if actual != change.Before {
 		return nil, errors.New("原核心配置文件已变化，未覆盖")
 	}
+	if err := m.publishDesktopAgentSettings(id, change, settings); err != nil {
+		return nil, err
+	}
+	return offlineCoreConfigResult(change)
+}
+
+func (m *Manager) publishDesktopAgentSettings(id string, change *coreConfigChange, settings map[string]json.RawMessage) error {
 	encoded, err := json.MarshalIndent(settings, "", "  ")
 	if err != nil {
-		return nil, err
+		return err
 	}
 	change.OfflineFile = fmt.Sprintf("%x", sha256.Sum256(append(encoded, '\n')))
 	if err := m.recordCoreConfigChange(id, change); err != nil {
-		return nil, err
+		return err
 	}
 	if err := writeJSON(filepath.Join(change.Profile, "agent.json"), settings); err != nil {
-		return nil, &unconfirmedError{id, err}
+		return &unconfirmedError{id, err}
 	}
-	return offlineCoreConfigResult(change)
+	_, actual, err := readCoreConfigFile(change.Profile)
+	if err != nil || actual != change.OfflineFile {
+		return &unconfirmedError{id, errors.Join(errors.New("配置文件读回与原写入不一致"), err)}
+	}
+	return nil
 }
 
 func offlineCoreConfigResult(change *coreConfigChange) (json.RawMessage, error) {

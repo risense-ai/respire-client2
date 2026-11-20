@@ -216,6 +216,8 @@ func (m *Manager) Submit(name, id string, raw json.RawMessage, confirmed bool, s
 				return Operation{}, errors.New("核心配置需要有效 UUID")
 			}
 			spec.method, spec.host = "desktop.core-config", false
+		} else if isDesktopAgentTextSetting(key) {
+			spec.method, spec.host = "desktop.agent-text-setting", false
 		}
 	}
 	if name == "model_progress" {
@@ -305,6 +307,8 @@ func (m *Manager) runOperation(spec commandSpec, args []string, secret, id strin
 		envelope, err = m.desktopRuntimeAccountLogin(ctx, args, secret, id, spec.method)
 	case spec.method == "auth.recover", spec.method == "auth.reset":
 		envelope, err = m.desktopRuntimeKeyRecovery(ctx, args, secret, id, spec.method)
+	case spec.method == "desktop.agent-text-setting":
+		envelope, err = m.setDesktopAgentTextSetting(ctx, id, strings.TrimPrefix(args[1], "--set="))
 	case spec.host:
 		envelope, err = m.hostOperation(ctx, args, secret, spec.method, id)
 	default:
