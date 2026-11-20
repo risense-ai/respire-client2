@@ -295,6 +295,8 @@ func (m *Manager) runOperation(spec commandSpec, args []string, secret, id strin
 		envelope, err = applyEngine(ctx, m, args, id)
 	case spec.method == "desktop.agent-config":
 		envelope, err = m.desktopAgentSettings()
+	case spec.method == "desktop.account-list", spec.method == "desktop.space-list":
+		envelope, err = m.desktopProfileList(spec.method == "desktop.space-list")
 	case spec.method == "auth.login", spec.method == "auth.login.browser":
 		envelope, err = m.desktopRuntimeAccountLogin(ctx, args, secret, id, spec.method == "auth.login.browser")
 	case spec.host:
