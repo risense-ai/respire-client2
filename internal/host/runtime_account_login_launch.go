@@ -169,7 +169,7 @@ func (m *Manager) unlockRuntimeProfileTarget(ctx context.Context, control runtim
 	if err := verifyHostProcess(health); err != nil {
 		return HealthInfo{}, err
 	}
-	if err := m.unlockVerifiedRuntime(ctx, health, nativeRuntimeCredentialStore(ctx), sessionDigest); err != nil {
+	if err := m.unlockVerifiedRuntime(ctx, health, nativeRuntimeCredentialStore(ctx), sessionDigest, false); err != nil {
 		return HealthInfo{}, err
 	}
 	ready, _, err := m.Health(ctx)

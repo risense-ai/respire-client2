@@ -293,6 +293,8 @@ func (m *Manager) runOperation(spec commandSpec, args []string, secret, id strin
 		envelope, err = applyEngine(ctx, m, args, id)
 	case spec.method == "desktop.agent-config":
 		envelope, err = m.desktopAgentSettings()
+	case spec.method == "desktop.classification", spec.method == "desktop.classification-save":
+		envelope, err = m.desktopClassificationConfig(ctx, args, secret, spec.method == "desktop.classification-save")
 	case spec.method == "desktop.core-config":
 		envelope, err = m.setDesktopCoreConfig(ctx, id, strings.TrimPrefix(args[1], "--set="))
 	case spec.method == "desktop.keys-export":

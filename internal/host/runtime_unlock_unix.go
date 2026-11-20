@@ -23,3 +23,7 @@ func (m *Manager) recoverDesktopRuntimeLogin(context.Context, Operation) (json.R
 func (m *Manager) continueDesktopRuntimeLogin(context.Context, Operation, json.RawMessage) (json.RawMessage, error) {
 	return nil, errors.New("macOS Keychain support requires a native Client2 build")
 }
+
+func (m *Manager) desktopClassificationConfig(context.Context, []string, string, bool) (json.RawMessage, error) {
+	return nil, errors.New("macOS Keychain support requires a native Client2 build")
+}

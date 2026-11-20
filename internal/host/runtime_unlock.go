@@ -97,11 +97,11 @@ func (m *Manager) unlockNativeRuntime(ctx context.Context, health HealthInfo, st
 	if health.ImageSHA256 != info.SHA256 {
 		return errors.New("Running Runtime image differs from the verified installation")
 	}
-	return m.unlockVerifiedRuntime(ctx, health, store, "")
+	return m.unlockVerifiedRuntime(ctx, health, store, "", false)
 }
 
 // The caller holds takeover and has verified the Runtime image and process.
-func (m *Manager) unlockVerifiedRuntime(ctx context.Context, health HealthInfo, store hostCredentialStore, sessionDigest string) error {
+func (m *Manager) unlockVerifiedRuntime(ctx context.Context, health HealthInfo, store hostCredentialStore, sessionDigest string, refreshProviders bool) error {
 	address, _, err := m.runtimeAccountEndpoint()
 	if err != nil {
 		return err
@@ -118,7 +118,7 @@ func (m *Manager) unlockVerifiedRuntime(ctx context.Context, health HealthInfo, 
 	if observed != health {
 		return errors.New("Runtime identity changed while waiting for the takeover lock")
 	}
-	if current.StoreReady && current.CredentialState == "available" {
+	if current.StoreReady && current.CredentialState == "available" && !refreshProviders {
 		return nil
 	}
 	if current != health {
@@ -141,6 +141,9 @@ func (m *Manager) unlockVerifiedRuntime(ctx context.Context, health HealthInfo, 
 		return err
 	}
 	if off {
+		if refreshProviders {
+			return errors.New("Runtime 已停用，未刷新服务凭据")
+		}
 		return nil
 	}
 	sessionPath := filepath.Join(profile, "session.json")
@@ -238,6 +241,9 @@ func (m *Manager) unlockVerifiedRuntime(ctx context.Context, health HealthInfo, 
 		return errors.New("Runtime did not confirm library unlock and the provider credential status")
 	}
 	if providerCode != "" {
+		if refreshProviders {
+			return providerCredentialError(providerCode)
+		}
 		fmt.Fprintf(os.Stderr, "Runtime library unlocked; provider credentials unavailable (%s)\n", providerCode)
 	}
 	return nil
