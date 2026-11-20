@@ -21,7 +21,7 @@ var settingsCommands = map[string]commandSpec{
 	"account_list":          {method: "desktop.account-list"},
 	"account_use":           {method: "desktop.account-use", host: true, write: true, args: []argument{pos("name")}},
 	"migration_list":        {method: "desktop.migration-list"},
-	"migration_apply":       {words: []string{"migrate"}, host: true, write: true, args: []argument{requiredOpt("source", "--source"), requiredOpt("account", "--account")}},
+	"migration_apply":       {method: "desktop.migration-apply", host: true, write: true, args: []argument{pos("source"), pos("account")}},
 	"login":                 {method: "auth.login.browser", host: true, write: true, args: []argument{opt("addr", "--addr")}},
 	"logout":                {method: "desktop.logout", host: true, write: true},
 	"keygen":                {method: "desktop.offline-keygen", host: true, write: true},

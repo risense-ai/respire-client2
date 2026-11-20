@@ -337,6 +337,8 @@ func (m *Manager) runOperation(spec commandSpec, args []string, secret, id strin
 		envelope, err = m.desktopSpaceMembers(args)
 	case spec.method == "desktop.migration-list":
 		envelope, err = m.desktopLegacyProfiles()
+	case spec.method == "desktop.migration-apply":
+		envelope, err = m.desktopLegacyMigration(ctx, id, args, false)
 	case spec.method == "desktop.account-use", spec.method == "desktop.space-use":
 		envelope, err = m.desktopProfileSwitch(ctx, args[0], spec.method == "desktop.space-use")
 	case spec.method == "desktop.space-create":
@@ -604,6 +606,8 @@ func (m *Manager) Recover(id string) (Operation, error) {
 		envelope, err = m.recoverDesktopCoreConfig(ctx, job)
 	case job.Name == "model_uninstall":
 		err = &unconfirmedError{id, errors.New("请核对 BGE-M3 模型目录及 .bge-m3-uninstall 暂存目录")}
+	case job.Name == "migration_apply":
+		envelope, err = m.desktopLegacyMigration(ctx, id, nil, true)
 	case job.Name == "space_kick", job.Name == "space_kick_all":
 		envelope, err = m.desktopSpaceMembership(ctx, id, nil, false, job.Name, hostCredentialStore{})
 	case job.Name == "space_invite":
