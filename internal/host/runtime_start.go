@@ -18,6 +18,10 @@ func (m *Manager) startDetached(ctx context.Context, info InstalledRuntime) (Hea
 		return HealthInfo{}, err
 	}
 	defer lock.Close()
+	return m.startDetachedLocked(ctx, info)
+}
+
+func (m *Manager) startDetachedLocked(ctx context.Context, info InstalledRuntime) (HealthInfo, error) {
 	selected, err := m.Installed()
 	if err != nil {
 		return HealthInfo{}, err
@@ -82,6 +86,9 @@ func (m *Manager) launchRuntimeServing(ctx context.Context, cmd *exec.Cmd) (Heal
 				return HealthInfo{}, errors.New("Runtime 端口报告了其他进程")
 			}
 			if h.StartupComplete {
+				m.mu.Lock()
+				m.directRuntime = h
+				m.mu.Unlock()
 				return h, nil
 			}
 		} else if !IsUnavailable(err) && ctx.Err() == nil {
