@@ -81,15 +81,15 @@ func (m *Manager) stopProcess(ctx context.Context, h HealthInfo, request func() 
 		case <-timeout.C:
 			return errors.New("Runtime 尚未退出，未强制结束进程")
 		case <-ticker.C:
-			current, err := unix.SysctlKinfoProc("kern.proc.pid", int(h.PID))
+			current, err := unix.SysctlKinfoProcSlice("kern.proc.pid", int(h.PID))
 			if errors.Is(err, unix.ESRCH) {
 				return nil
 			}
 			if err != nil {
 				return err
 			}
-			// SZOMB (5) has already exited even if the parent has not reaped it.
-			if current.Proc.P_starttime != identity.Proc.P_starttime || current.Proc.P_stat == 5 {
+			// A missing PID yields no records. SZOMB (5) has exited but is not yet reaped.
+			if len(current) == 0 || current[0].Proc.P_starttime != identity.Proc.P_starttime || current[0].Proc.P_stat == 5 {
 				return nil
 			}
 		}
