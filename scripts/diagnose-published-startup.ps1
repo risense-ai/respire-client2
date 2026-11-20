@@ -6,7 +6,7 @@ param(
     [Parameter(Mandatory,ParameterSetName='ExistingKeys')][string]$ModelDirectory,
     [Parameter(Mandatory,ParameterSetName='DefaultOnline')][switch]$DefaultOnline,
     [Parameter(Mandatory,ParameterSetName='DefaultOnline')][string]$PublicInputs,
-    [ValidateSet('2.0.0-dev.25')][string]$RuntimeVersion = '2.0.0-dev.25',
+    [Parameter(Mandatory)][ValidatePattern('^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?(\+[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$')][string]$RuntimeVersion,
     [Parameter(Mandatory)][string]$OutputDirectory
 )
 $ErrorActionPreference = 'Stop'
