@@ -15,8 +15,6 @@ import (
 	"github.com/ncruces/go-sqlite3"
 )
 
-const runtimeMaintenanceLimit = 16 * 1024
-
 type runtimeLoginIntent struct {
 	OperationID string
 	User        string

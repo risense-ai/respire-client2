@@ -78,7 +78,8 @@ func (m *Manager) resumeDesktopRuntimeRecovery(ctx context.Context, job Operatio
 	}
 	account := "login-" + strings.ReplaceAll(record.OperationID, "-", "")
 	backend := runtimeLoginBackend()
-	private, err := nativeRuntimeCredentialStore(ctx).readSlot(backend, "rsrs", "login-control:"+account, false)
+	store := nativeRuntimeCredentialStore(ctx)
+	private, err := store.readSlot(backend, "rsrs", "login-control:"+account, false)
 	if err != nil {
 		return nil, err
 	}
@@ -146,7 +147,7 @@ func (m *Manager) resumeDesktopRuntimeRecovery(ctx context.Context, job Operatio
 			if err != nil {
 				return nil, err
 			}
-			if err := retireRuntimeLogin(ctx, record, admission.Marker, *private); err != nil {
+			if err := retireRuntimeLogin(store, record, admission.Marker, *private); err != nil {
 				return nil, err
 			}
 			return desktopRecoveryEnvelope(receipt)
