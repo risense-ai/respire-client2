@@ -25,7 +25,7 @@ var settingsCommands = map[string]commandSpec{
 	"login":                 {method: "auth.login.browser", host: true, write: true, args: []argument{opt("addr", "--addr")}},
 	"logout":                {words: []string{"logout"}, host: true, write: true},
 	"keygen":                {words: []string{"keygen"}, host: true, write: true},
-	"keys_export":           {words: []string{"keys-export"}, host: true, write: true, args: []argument{requiredOpt("out", "--out")}},
+	"keys_export":           {method: "desktop.keys-export", write: true, args: []argument{requiredOpt("out", "--out")}},
 	"space_list":            {method: "desktop.space-list"},
 	"space_create":          {words: []string{"space", "create"}, host: true, write: true, args: []argument{pos("name")}},
 	"space_use":             {words: []string{"space", "use"}, host: true, write: true, args: []argument{pos("name")}},
