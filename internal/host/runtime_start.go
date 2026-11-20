@@ -46,6 +46,9 @@ func (m *Manager) startDetachedLocked(ctx context.Context, info InstalledRuntime
 	if endpoint.Scheme != "http" || endpoint.Hostname() != "127.0.0.1" || endpoint.Port() == "" {
 		return HealthInfo{}, errors.New("Runtime 启动要求本机环回端口")
 	}
+	if err := archiveTerminalRuntimeMaintenance(m.DataRoot); err != nil {
+		return HealthInfo{}, err
+	}
 	if err := m.archiveStoppedEndpoint(ctx, endpoint.Host); err != nil {
 		return HealthInfo{}, err
 	}

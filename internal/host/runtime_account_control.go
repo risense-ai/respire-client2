@@ -6,7 +6,6 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
-	"crypto/sha256"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
@@ -41,8 +40,6 @@ func controlUUID() (string, error) {
 	id[8] = (id[8] & 0x3f) | 0x80
 	return fmt.Sprintf("%x-%x-%x-%x-%x", id[:4], id[4:6], id[6:8], id[8:10], id[10:]), nil
 }
-
-func controlDigest(data []byte) string { return fmt.Sprintf("%x", sha256.Sum256(data)) }
 
 type runtimeControlBinding struct {
 	InstallationRoot  string  `json:"installation_root"`

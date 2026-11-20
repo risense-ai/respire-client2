@@ -311,7 +311,7 @@ func (m *Manager) finishDesktopRuntimeRecovery(ctx context.Context, image, diges
 	}
 	admission.Marker = verified
 	if custody.Operation.Kind == "super_reset" {
-		if err := retireRuntimeLogin(ctx, record, admission.Marker, private); err != nil {
+		if err := retireRuntimeLogin(nativeRuntimeCredentialStore(ctx), record, admission.Marker, private); err != nil {
 			return nil, err
 		}
 		return desktopRecoveryEnvelope(receipt)
@@ -333,7 +333,7 @@ func (m *Manager) completeDesktopRuntimeRecovery(ctx context.Context, image, dig
 	if err != nil || completed.Outcome != "committed" || !samePath(confirmed, target) || completed.Identity.SessionDigest != identity.SessionDigest {
 		return nil, errors.Join(err, errors.New("Runtime 未提交原恢复事务"))
 	}
-	if err := retireRuntimeLogin(ctx, record, admission.Marker, private); err != nil {
+	if err := retireRuntimeLogin(nativeRuntimeCredentialStore(ctx), record, admission.Marker, private); err != nil {
 		return nil, err
 	}
 	return desktopRecoveryEnvelope(completed)
