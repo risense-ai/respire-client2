@@ -22,12 +22,14 @@ type spaceKickRecord struct {
 	Identity                 runtimeAuthIdentity
 	Intent                   spaceKickIntent
 	Invite                   *spaceInviteIntent `json:",omitempty"`
+	Join                     *spaceJoinIntent   `json:",omitempty"`
 	Runtime                  InstalledRuntime
 	WasServing, StoreReady   bool
 }
 
-func (m *Manager) desktopSpaceMembership(ctx context.Context, id string, args []string, invite bool, recoveryName string, store hostCredentialStore) (raw json.RawMessage, err error) {
+func (m *Manager) desktopSpaceMembership(ctx context.Context, id string, args []string, kind, recoveryName string, store hostCredentialStore) (raw json.RawMessage, err error) {
 	query := recoveryName != ""
+	invite, join := kind == "invite", kind == "join"
 	if query {
 		defer func() {
 			var unknown *unconfirmedError
@@ -42,11 +44,21 @@ func (m *Manager) desktopSpaceMembership(ctx context.Context, id string, args []
 	}
 	intent := spaceKickIntent{Kind: "kick", All: len(args) == 0}
 	var invitation *spaceInviteIntent
+	var joinIntent *spaceJoinIntent
+	var joinInput *spaceJoinInput
 	if invite {
 		var err error
 		invitation, err = parseSpaceInviteArgs(args)
 		if err != nil {
 			return nil, err
+		}
+	} else if join {
+		if !query {
+			var err error
+			joinIntent, joinInput, err = parseSpaceJoinArgs(args, op)
+			if err != nil {
+				return nil, err
+			}
 		}
 	} else if len(args) > 0 {
 		session := strings.TrimSpace(strings.TrimPrefix(args[0], "--session="))
@@ -71,9 +83,13 @@ func (m *Manager) desktopSpaceMembership(ctx context.Context, id string, args []
 	if err := requireWritableSpace(root, profile); err != nil {
 		return nil, err
 	}
-	identity, err := spaceKickIdentity(profile)
+	identity, err := spaceMembershipIdentity(profile, join)
 	if err != nil {
 		return nil, err
+	}
+	account := controlDigest([]byte(profile))
+	if identity.AccountID != nil {
+		account = *identity.AccountID
 	}
 	info, err := m.Installed()
 	if err != nil {
@@ -89,7 +105,7 @@ func (m *Manager) desktopSpaceMembership(ctx context.Context, id string, args []
 	}
 	recordPath := filepath.Join(directory, "space-client2.json")
 	markerPath := filepath.Join(directory, "maintenance.json")
-	record := spaceKickRecord{ID: op, Root: root, Profile: profile, Identity: identity, Intent: intent, Invite: invitation, Runtime: info}
+	record := spaceKickRecord{ID: op, Root: root, Profile: profile, Identity: identity, Intent: intent, Invite: invitation, Join: joinIntent, Runtime: info}
 	var material *spaceInviteMaterial
 	readMaterial := func() error {
 		if !invite {
@@ -107,8 +123,9 @@ func (m *Manager) desktopSpaceMembership(ctx context.Context, id string, args []
 		recordBytes, err = readCredentialConfig(recordPath, runtimeMaintenanceLimit)
 		if err != nil || json.Unmarshal(recordBytes, &record) != nil || record.ID != op || record.Root != root ||
 			record.Profile != profile || record.Runtime != info || !sameSpaceKickIdentity(record.Identity, identity) ||
-			(record.Invite != nil) != invite ||
-			(!invite && (record.Intent.Kind != "kick" || record.Intent.All != (recoveryName == "space_kick_all") ||
+			(record.Invite != nil) != invite || (record.Join != nil) != join ||
+			(join && !record.Join.valid()) ||
+			(!invite && !join && (record.Intent.Kind != "kick" || record.Intent.All != (recoveryName == "space_kick_all") ||
 				record.Intent.All != (record.Intent.Session == nil) ||
 				(record.Intent.Session != nil && !runtimeInstanceID.MatchString(*record.Intent.Session)))) {
 			return unknown(errors.New("无法确认原成员撤销事务，未重发请求"))
@@ -134,9 +151,14 @@ func (m *Manager) desktopSpaceMembership(ctx context.Context, id string, args []
 		if err := readMaterial(); err != nil {
 			return nil, err
 		}
+		if join {
+			if err := record.Join.requireAbsentTarget(root); err != nil {
+				return nil, err
+			}
+		}
 		h, _, err := m.Health(ctx)
 		if err == nil {
-			if h.ManagedID != "" || !samePath(h.DataDir, profile) || h.AccountID != *identity.AccountID ||
+			if h.ManagedID != "" || !samePath(h.DataDir, profile) || h.AccountID != account ||
 				h.ImageSHA256 != info.SHA256 || h.RuntimeVersion != info.Version {
 				return nil, errors.New("请先用原宿主停止当前 Runtime")
 			}
@@ -164,7 +186,9 @@ func (m *Manager) desktopSpaceMembership(ctx context.Context, id string, args []
 		}
 	}
 	image := filepath.Join(m.runtimeDir(info.Version), runtimeBinary())
-	if invite {
+	if join {
+		raw, err = m.exchangeSpaceJoin(ctx, image, info.SHA256, marker, record, joinInput, store, query)
+	} else if invite {
 		raw, err = m.exchangeSpaceInvite(ctx, image, info.SHA256, marker, record, material, query)
 	} else {
 		raw, err = m.exchangeSpaceKick(ctx, image, info.SHA256, marker, record, query)
@@ -172,7 +196,7 @@ func (m *Manager) desktopSpaceMembership(ctx context.Context, id string, args []
 	if err != nil {
 		return unknown(err)
 	}
-	current, err := spaceKickIdentity(profile)
+	current, err := spaceMembershipIdentity(profile, join)
 	selected, selectionErr := selectedRuntimeLoginProfile(root)
 	if err != nil || selectionErr != nil || selected != profile || !sameSpaceKickIdentity(identity, current) {
 		return unknown(errors.New("成员变更后原账户选择已改变"))
@@ -185,7 +209,7 @@ func (m *Manager) desktopSpaceMembership(ctx context.Context, id string, args []
 	}
 	if record.WasServing {
 		h, err := m.startDetachedLocked(ctx, info)
-		if err == nil && (!samePath(h.DataDir, profile) || h.AccountID != *identity.AccountID ||
+		if err == nil && (!samePath(h.DataDir, profile) || h.AccountID != account ||
 			!m.isDirectM3Runtime(h)) {
 			err = errors.New("恢复的 Runtime 与原账户不匹配")
 		}
@@ -230,8 +254,11 @@ func (m *Manager) exchangeSpaceKick(ctx context.Context, image, digest string, m
 	return verifiedSpaceKickReply(reply, record)
 }
 
-func spaceKickIdentity(profile string) (runtimeAuthIdentity, error) {
+func spaceMembershipIdentity(profile string, allowAbsent bool) (runtimeAuthIdentity, error) {
 	raw, err := readCredentialConfig(filepath.Join(profile, "session.json"), controlFrameLimit)
+	if allowAbsent && errors.Is(err, os.ErrNotExist) {
+		return runtimeAuthIdentity{Kind: "absent"}, nil
+	}
 	if err != nil {
 		return runtimeAuthIdentity{}, err
 	}
@@ -244,6 +271,10 @@ func spaceKickIdentity(profile string) (runtimeAuthIdentity, error) {
 }
 
 func sameSpaceKickIdentity(a, b runtimeAuthIdentity) bool {
+	if a.Kind == "absent" && b.Kind == "absent" {
+		return a.AccountID == nil && b.AccountID == nil && a.SessionDigest == "" && b.SessionDigest == "" &&
+			a.OperationID == "" && b.OperationID == ""
+	}
 	return a.Kind == "bound" && b.Kind == "bound" && a.AccountID != nil && b.AccountID != nil &&
 		*a.AccountID == *b.AccountID && a.SessionDigest == b.SessionDigest
 }
@@ -287,7 +318,7 @@ func (m *Manager) stoppedSpaceKick(ctx context.Context, r spaceKickRecord, actio
 	if err != nil || selected != r.Profile {
 		return nil, errors.New("成员事务的账户选择已改变")
 	}
-	identity, err := spaceKickIdentity(r.Profile)
+	identity, err := spaceMembershipIdentity(r.Profile, r.Join != nil)
 	if err != nil || !sameSpaceKickIdentity(r.Identity, identity) {
 		return nil, errors.New("成员事务的账户会话已改变")
 	}
