@@ -15,13 +15,17 @@ on:
       runtime_run_id:
         description: 'Default-online only: successful public Runtime producer run ID'
         type: string
+      runtime_version:
+        description: 'Exact published Runtime version, without v'
+        required: true
+        type: string
       cli_run_id:
         description: 'Existing Windows CLI artifact run ID (no build is triggered)'
         required: true
         type: string
       cli_version:
-        description: 'Exact CLI DEV version, without v'
-        default: '2.0.0-dev.20'
+        description: 'Exact CLI artifact version, without v'
+        required: true
         type: string
       cli_run_attempt:
         description: 'Attempt that produced the CLI artifact'
@@ -37,8 +41,8 @@ on:
         required: true
         type: string
       client2_version:
-        description: 'Exact Client2 DEV version, without v'
-        default: '2.0.0-dev.17'
+        description: 'Exact Client2 artifact version, without v'
+        required: true
         type: string
       client2_run_attempt:
         description: 'Attempt that sealed the Desktop candidate'
@@ -57,7 +61,7 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 25
     env:
-      RUNTIME_VERSION: '2.0.0-dev.27'
+      RUNTIME_VERSION: ${{ inputs.runtime_version }}
       RUNTIME_RUN_ID: ${{ inputs.runtime_run_id }}
       INPUT_RUN_ID: ${{ inputs.client2_run_id }}
       INPUT_ATTEMPT: ${{ inputs.client2_run_attempt }}
@@ -96,7 +100,7 @@ jobs:
           if ($LASTEXITCODE -or $reader -cne $env:CLI_READER_REF) { throw 'Reader checkout differs' }
           git -C .cli merge-base --is-ancestor $env:CLI_READER_REF origin/main
           if ($LASTEXITCODE) { throw 'Reader is not a trusted main ancestor' }
-      - name: Reuse and verify CLI producer, sealed Client2 and pinned public Runtime
+      - name: Verify the selected CLI, Client2 and public Runtime artifacts
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
@@ -105,11 +109,13 @@ jobs:
           CLI_SOURCE_SHA: ${{ inputs.cli_source_sha }}
         run: |
           $ErrorActionPreference = 'Stop'
+          $versionPattern = '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?(\+[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$'
           if ($env:CLI_RUN_ID -cnotmatch '^[1-9][0-9]*$' -or $env:CLI_RUN_ATTEMPT -cnotmatch '^[1-9][0-9]*$' -or
               $env:CLI_SOURCE_SHA -cnotmatch '^[0-9a-f]{40}$' -or $env:CLIENT2_SOURCE_SHA -cnotmatch '^[0-9a-f]{40}$' -or
               $env:INPUT_RUN_ID -cnotmatch '^[1-9][0-9]*$' -or $env:INPUT_ATTEMPT -cnotmatch '^[1-9][0-9]*$' -or
-              $env:CLI_VERSION -cnotmatch '^2\.0\.0-dev\.[1-9][0-9]*$' -or $env:CANDIDATE_VERSION -cnotmatch '^2\.0\.0-dev\.[1-9][0-9]*$') {
-            throw 'Require exact producer runs, attempts and source SHAs'
+              $env:CLI_VERSION -cnotmatch $versionPattern -or $env:CANDIDATE_VERSION -cnotmatch $versionPattern -or
+              $env:RUNTIME_VERSION -cnotmatch $versionPattern) {
+            throw 'Require exact producer runs, attempts, source SHAs and input versions'
           }
           if (Test-Path Env:RSRS_CORE_TEST_MODE) { throw 'Core test mode is forbidden for real startup acceptance' }
           $assets = Join-Path $env:RUNNER_TEMP 'startup-assets'
