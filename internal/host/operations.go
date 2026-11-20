@@ -338,6 +338,8 @@ func (m *Manager) runOperation(spec commandSpec, args []string, secret, id strin
 		envelope, err = m.desktopSpaceMembership(ctx, id, args, false, "", hostCredentialStore{})
 	case spec.method == "desktop.space-invite":
 		envelope, err = m.desktopSpaceMembership(ctx, id, args, true, "", nativeRuntimeCredentialStore(ctx))
+	case spec.method == "desktop.space-remove":
+		envelope, err = m.removeDesktopSpace(ctx, id, args[0], false)
 	case spec.host:
 		envelope, err = m.hostOperation(ctx, args, secret, spec.method, id)
 	default:
@@ -581,6 +583,8 @@ func (m *Manager) Recover(id string) (Operation, error) {
 		envelope, err = m.desktopSpaceMembership(ctx, id, nil, false, job.Name, hostCredentialStore{})
 	case job.Name == "space_invite":
 		envelope, err = m.desktopSpaceMembership(ctx, id, nil, true, job.Name, nativeRuntimeCredentialStore(ctx))
+	case job.Name == "space_remove":
+		envelope, err = m.removeDesktopSpace(ctx, id, "", true)
 	case job.host:
 		envelope, err = m.recoverHost(ctx, job)
 	default:
