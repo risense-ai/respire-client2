@@ -18,7 +18,7 @@ import (
 func (m *Manager) completeRuntimeLogin(ctx context.Context, launched runtimeAccountControl, admission *runtimeAccountAdmission,
 	applied runtimeLoginReceipt, ready HealthInfo) (runtimeLoginReceipt, error) {
 	var record runtimeAccountRecord
-	if json.Unmarshal(admission.Record, &record) != nil || !record.Sent || record.Register ||
+	if json.Unmarshal(admission.Record, &record) != nil || !record.Sent ||
 		!hostOperationID.MatchString(record.OperationID) || applied.OperationID != record.OperationID ||
 		applied.SourceProfile != record.Source || applied.Outcome != "awaiting_verification" {
 		return runtimeLoginReceipt{}, errors.New("Runtime login completion requires its original applied receipt")
@@ -73,20 +73,32 @@ func (m *Manager) finalizeRuntimeLogin(ctx context.Context, image, imageDigest s
 		return unknown(err)
 	}
 	var custody runtimeLoginCustody
-	var request runtimeLoginParams
-	var candidate struct {
-		Digest  string          `json:"session_sha256"`
-		Factors json.RawMessage `json:"factors"`
-	}
-	if private == nil || json.Unmarshal([]byte(*private), &custody) != nil ||
-		json.Unmarshal(custody.Request, &request) != nil || request.CustodyAck == nil ||
-		request.Material.Account != account || request.Material.Backend != backend ||
-		request.User != record.User || request.Server != record.Server ||
-		request.Binding.InstallationRoot != record.Root || request.Binding.Profile != record.Source ||
-		!reflect.DeepEqual(request.Identity, record.Original.Identity) ||
-		json.Unmarshal(custody.Candidate, &candidate) != nil || len(candidate.Factors) == 0 ||
-		candidate.Digest != identity.SessionDigest || request.CustodyAck.CandidateDigest != candidate.Digest {
-		return unknown(errors.New("Original Runtime login credential custody does not match the applied session"))
+	var password *string
+	if record.Register {
+		password, err = registeredRuntimePassword(ctx, record, target, identity.SessionDigest, private)
+		if err != nil {
+			return unknown(err)
+		}
+	} else {
+		var request runtimeLoginParams
+		var candidate struct {
+			Digest  string          `json:"session_sha256"`
+			Factors json.RawMessage `json:"factors"`
+		}
+		if private == nil || json.Unmarshal([]byte(*private), &custody) != nil ||
+			json.Unmarshal(custody.Request, &request) != nil || request.CustodyAck == nil ||
+			request.Material.Account != account || request.Material.Backend != backend ||
+			request.User != record.User || request.Server != record.Server ||
+			request.Binding.InstallationRoot != record.Root || request.Binding.Profile != record.Source ||
+			!reflect.DeepEqual(request.Identity, record.Original.Identity) ||
+			json.Unmarshal(custody.Candidate, &candidate) != nil || len(candidate.Factors) == 0 ||
+			candidate.Digest != identity.SessionDigest || request.CustodyAck.CandidateDigest != candidate.Digest {
+			return unknown(errors.New("Original Runtime login credential custody does not match the applied session"))
+		}
+		password = request.Continuation.LegacyPassword
+		if password == nil && request.Authorization.Kind == "password" {
+			password = request.Authorization.Password
+		}
 	}
 	defer clear(custody.Request)
 	defer clear(custody.Candidate)
@@ -118,10 +130,6 @@ func (m *Manager) finalizeRuntimeLogin(ctx context.Context, image, imageDigest s
 	control, err := m.prepareRuntimeControlGrant(ctx, image, imageDigest, target, identity.AccountID, admission.Marker, "Verified")
 	if err != nil {
 		return unknown(err)
-	}
-	password := request.Continuation.LegacyPassword
-	if password == nil && request.Authorization.Kind == "password" {
-		password = request.Authorization.Password
 	}
 	params, err := json.Marshal(map[string]any{
 		"schema_version": 1, "binding": control.binding, "identity": identity,

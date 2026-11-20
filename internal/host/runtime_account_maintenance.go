@@ -21,6 +21,7 @@ type runtimeLoginIntent struct {
 	OperationID string
 	User        string
 	Server      string
+	Register    bool
 }
 
 type runtimeAccountRecord struct {
@@ -164,7 +165,7 @@ func (m *Manager) publishPausedRuntimeMaintenance(ctx context.Context, profilePa
 	}
 	binding := runtimeAccountRecord{
 		Schema: 1, Root: root, Source: profile, Token: token,
-		OperationID: intent.OperationID, User: intent.User, Server: intent.Server,
+		OperationID: intent.OperationID, User: intent.User, Server: intent.Server, Register: intent.Register,
 	}
 	binding.Original.Identity = identity
 	if observed != nil {
