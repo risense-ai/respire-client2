@@ -320,6 +320,8 @@ func (m *Manager) runOperation(spec commandSpec, args []string, secret, id strin
 		envelope, err = m.desktopProfileList(spec.method == "desktop.space-list")
 	case spec.method == "desktop.space-members":
 		envelope, err = m.desktopSpaceMembers(args)
+	case spec.method == "desktop.account-use", spec.method == "desktop.space-use":
+		envelope, err = m.desktopProfileSwitch(ctx, args[0], spec.method == "desktop.space-use")
 	case spec.method == "auth.login", spec.method == "auth.login.browser", spec.method == "auth.register":
 		envelope, err = m.desktopRuntimeAccountLogin(ctx, args, secret, id, spec.method)
 	case spec.method == "auth.recover", spec.method == "auth.reset":
@@ -556,7 +558,8 @@ func (m *Manager) Recover(id string) (Operation, error) {
 	}
 	var envelope json.RawMessage
 	switch {
-	case job.Name == "server_set", job.Name == "autosync_set", job.Name == "cure_auto_set", job.Name == "data_dir_set":
+	case job.Name == "server_set", job.Name == "autosync_set", job.Name == "cure_auto_set", job.Name == "data_dir_set",
+		job.Name == "account_use", job.Name == "space_use":
 		err = &unconfirmedError{id, errors.New("请核对本机设备配置、Runtime 状态和维护记录")}
 	case job.Name == "agent_set" && job.host && job.Transaction == nil:
 		err = &unconfirmedError{id, errors.New("请核对工作区设置和 Runtime 维护记录")}

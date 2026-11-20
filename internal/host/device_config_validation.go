@@ -90,10 +90,11 @@ func (m *Manager) verifyDeviceConfigOwner(ctx context.Context, health HealthInfo
 }
 
 func (m *Manager) validateDeviceConfig(ctx context.Context, intent deviceConfigIntent) (json.RawMessage, error) {
-	return m.changeDeviceConfig(ctx, intent, nil)
+	return m.changeDeviceConfig(ctx, intent, nil, false)
 }
 
-func (m *Manager) changeDeviceConfig(ctx context.Context, intent deviceConfigIntent, workspace *workspaceModeChange) (result json.RawMessage, err error) {
+func (m *Manager) changeDeviceConfig(ctx context.Context, intent deviceConfigIntent, workspace *workspaceModeChange,
+	requireExistingTarget bool) (result json.RawMessage, err error) {
 	takeover, err := m.lockRuntimeTakeover(ctx)
 	if err != nil {
 		return nil, err
@@ -145,10 +146,15 @@ func (m *Manager) changeDeviceConfig(ctx context.Context, intent deviceConfigInt
 	if err != nil {
 		return nil, err
 	}
-	for _, profile := range []string{edit.before.profile, edit.after.profile} {
-		if err := os.MkdirAll(profile, 0700); err != nil {
-			return nil, err
+	if err := os.MkdirAll(edit.before.profile, 0700); err != nil {
+		return nil, err
+	}
+	if requireExistingTarget {
+		if err := profileDirectory(edit.after.profile); err != nil {
+			return nil, fmt.Errorf("无法使用目标空间: %w", err)
 		}
+	} else if err := os.MkdirAll(edit.after.profile, 0700); err != nil {
+		return nil, err
 	}
 	source, err := canonicalSessionDirectory(edit.before.profile)
 	if err != nil || !samePath(source, edit.before.profile) {

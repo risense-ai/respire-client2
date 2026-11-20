@@ -80,6 +80,20 @@ func (m *Manager) requireNoDeviceMaintenance() error {
 	return nil
 }
 
+func (m *Manager) desktopProfileSwitch(ctx context.Context, name string, space bool) (json.RawMessage, error) {
+	name = strings.TrimSpace(name)
+	if name == "" || strings.ContainsFunc(name, func(ch rune) bool {
+		return !((ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9') || ch == '-' || ch == '_')
+	}) || (space && !desktopSpaceName.MatchString(name)) {
+		return nil, errors.New("账户或空间名称无效")
+	}
+	profile := m.DataRoot
+	if name != "main" {
+		profile = filepath.Join(profile, "accounts", name)
+	}
+	return m.changeDeviceConfig(ctx, deviceConfigIntent{DataDir: &profile}, nil, space)
+}
+
 func (m *Manager) readDeviceConfig() ([]byte, deviceConfigSnapshot, error) {
 	var snapshot deviceConfigSnapshot
 	if _, err := deviceProfilePath(m.DataRoot); err != nil {
