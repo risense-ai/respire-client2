@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
+	"strings"
 )
 
 func desktopProfilePath(root string, config map[string]any) (string, error) {
@@ -87,14 +89,8 @@ func (m *Manager) desktopProfileList(spaces bool) (json.RawMessage, error) {
 			if err != nil {
 				return nil, err
 			}
-			issuedPath := filepath.Join(path, "space_sessions.json")
-			var issued []json.RawMessage
-			raw, err := readCredentialConfig(issuedPath, 1<<20)
-			if err == nil {
-				if err = json.Unmarshal(raw, &issued); err != nil {
-					return nil, fmt.Errorf("%s: %w", issuedPath, err)
-				}
-			} else if !errors.Is(err, os.ErrNotExist) {
+			issued, err := readSpaceMembers(path)
+			if err != nil {
 				return nil, err
 			}
 			item["owner"], item["members"], item["is_main"] = owner, len(issued), name == "main"
@@ -150,4 +146,77 @@ func (m *Manager) desktopProfileList(spaces bool) (json.RawMessage, error) {
 		name = "spaces"
 	}
 	return json.Marshal(map[string]any{"command": name, "status": "ok", "summary": map[string]any{name: rows, "current_dir": current}})
+}
+
+type issuedSpaceMember struct {
+	SessionID  string `json:"session_id"`
+	DeviceName string `json:"device_name"`
+	ReadOnly   bool   `json:"readonly"`
+	IssuedAt   string `json:"issued_at"`
+}
+
+func readSpaceMembers(profile string) ([]issuedSpaceMember, error) {
+	path := filepath.Join(profile, "space_sessions.json")
+	raw, err := readCredentialConfig(path, 1<<20)
+	if errors.Is(err, os.ErrNotExist) {
+		return []issuedSpaceMember{}, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var members []issuedSpaceMember
+	if err := json.Unmarshal(raw, &members); err != nil {
+		return nil, fmt.Errorf("%s: %w", path, err)
+	}
+	if members == nil {
+		return nil, fmt.Errorf("%s 必须是 JSON 数组", path)
+	}
+	return members, nil
+}
+
+var desktopSpaceName = regexp.MustCompile(`^[A-Za-z0-9_-]{1,40}$`)
+
+func (m *Manager) desktopSpaceMembers(args []string) (json.RawMessage, error) {
+	name := ""
+	if len(args) > 0 {
+		name = strings.TrimSpace(args[0])
+	}
+	if err := profileDirectory(m.DataRoot); err != nil {
+		return nil, err
+	}
+	profile := m.DataRoot
+	if name == "" {
+		device, err := readAgentSettingsObject(filepath.Join(m.DataRoot, "client.json"))
+		if err != nil {
+			return nil, err
+		}
+		profile, err = desktopProfilePath(m.DataRoot, device)
+		if err != nil {
+			return nil, err
+		}
+	} else if name != "main" {
+		if !desktopSpaceName.MatchString(name) {
+			return nil, errors.New("空间名称须为 1 到 40 个英文字母、数字、连字符或下划线")
+		}
+		profile = filepath.Join(m.DataRoot, "accounts", name)
+	}
+	if err := profileDirectory(profile); err != nil {
+		return nil, err
+	}
+	members, err := readSpaceMembers(profile)
+	if err != nil {
+		return nil, err
+	}
+	if name == "" {
+		name = "main"
+		if relative, err := filepath.Rel(filepath.Join(m.DataRoot, "accounts"), profile); err == nil && desktopSpaceName.MatchString(relative) {
+			name = relative
+		}
+	}
+	status := "ok"
+	if len(members) == 0 {
+		status = "skip"
+	}
+	return json.Marshal(map[string]any{"command": "space", "status": status, "details": members,
+		"summary": map[string]any{"action": "members", "space": name, "count": len(members)}})
 }

@@ -31,7 +31,7 @@ var settingsCommands = map[string]commandSpec{
 	"space_use":             {words: []string{"space", "use"}, host: true, write: true, args: []argument{pos("name")}},
 	"space_join":            {words: []string{"space", "join"}, host: true, write: true, args: []argument{pos("code")}},
 	"space_invite":          {words: []string{"space", "invite"}, host: true, write: true, args: []argument{opt("note", "--note"), flag("readonly", "--readonly")}},
-	"space_members":         {words: []string{"space", "members"}, host: true, args: []argument{{key: "name", kind: "string"}}},
+	"space_members":         {method: "desktop.space-members", args: []argument{{key: "name", kind: "string"}}},
 	"space_remove":          {words: []string{"space", "remove", "--yes"}, host: true, write: true, args: []argument{pos("name")}},
 	"inject_targets":        {words: []string{"inject", "--targets"}, host: true},
 	"inject_preview":        {words: []string{"inject", "--preview"}, host: true, args: []argument{requiredOpt("id", "--id"), flag("remove", "--remove")}},
