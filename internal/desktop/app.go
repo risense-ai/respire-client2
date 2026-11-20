@@ -45,6 +45,7 @@ type desktop struct {
 	clientError   string
 	updateCancel  context.CancelFunc
 	closing       chan struct{}
+	restartMu     sync.RWMutex // Excludes self-restart while desktop tasks or Runtime updates are active.
 	restarting    bool
 	tray          *application.SystemTray
 	notifier      *notifications.NotificationService
@@ -224,7 +225,14 @@ func hasArg(arg string) bool {
 }
 
 func (d *desktop) task(stage string, action func() error) error {
-	err := d.m.RunTask(stage, action)
+	err := d.m.RunTask(stage, func() error {
+		d.restartMu.RLock()
+		defer d.restartMu.RUnlock()
+		if d.restarting {
+			return updater.ErrRestartPending
+		}
+		return action()
+	})
 	if err != nil {
 		log.Printf("%s: %v", stage, err)
 	}
@@ -232,19 +240,21 @@ func (d *desktop) task(stage string, action func() error) error {
 }
 
 func (d *desktop) restartClient() error {
+	if !d.restartMu.TryLock() {
+		return errors.New("仍有操作在执行，请等待完成后应用客户端更新")
+	}
+	defer d.restartMu.Unlock()
+	if d.restarting {
+		return updater.ErrRestartPending
+	}
 	if blocked := d.clientRestartBlocked(); blocked != nil {
 		return blocked
 	}
-	d.mu.Lock()
-	d.restarting = true
-	d.mu.Unlock()
-	err := d.app.Updater.Restart(context.Background())
-	if err != nil {
-		d.mu.Lock()
-		d.restarting = false
-		d.mu.Unlock()
+	if err := d.app.Updater.Restart(context.Background()); err != nil {
+		return err
 	}
-	return err
+	d.restarting = true
+	return nil
 }
 
 // updateInterval resolves the configured check cadence; unknown values fall
@@ -264,20 +274,17 @@ func updateInterval(value string) time.Duration {
 	}
 }
 
-func startRuntimeForStartup(ctx context.Context, m interface {
-	InstallRuntime(bool, bool) error
-	PrepareRuntimeForStartup(context.Context) error
-}) error {
-	if err := m.PrepareRuntimeForStartup(ctx); !errors.Is(err, host.ErrRuntimeNotInstalled) {
-		return err
+func startRuntimeForStartup(ctx context.Context, prepare func(context.Context) error) error {
+	err := prepare(ctx)
+	if errors.Is(err, host.ErrRuntimeNotInstalled) {
+		// First installation is an explicit action on the Updates page.
+		return nil
 	}
-	if err := m.InstallRuntime(false, false); err != nil {
-		return err
-	}
-	return m.PrepareRuntimeForStartup(ctx)
+	return err
 }
 
 func (d *desktop) background() {
+	lastRuntime := time.Now()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go func() {
@@ -288,22 +295,17 @@ func (d *desktop) background() {
 		}
 	}()
 	go func() {
-		if err := d.m.UpdateInstalledCLI(ctx); err != nil {
-			log.Printf("CLI 自动更新失败: %v", err)
-		}
-	}()
-	go func() {
 		d.task("连接 Runtime", func() error {
 			prefs := d.m.Preferences()
 			if !prefs.AutoRuntime {
 				return nil
 			}
-			return startRuntimeForStartup(ctx, d.m)
+			return startRuntimeForStartup(ctx, d.m.PrepareRuntimeForStartup)
 		})
 	}()
 	// Client and Runtime update on their own cadences (update page); a staged
 	// client update re-checks every minute so it applies once operations end.
-	var lastClient, lastRuntime time.Time
+	var lastClient time.Time
 	timer := time.NewTimer(10 * time.Second)
 	defer timer.Stop()
 	for {
@@ -331,12 +333,19 @@ func (d *desktop) background() {
 				}
 			}
 		}
-		if prefs.RuntimeAutoUpdate &&
-			(lastRuntime.IsZero() || now.Sub(lastRuntime) >= updateInterval(prefs.RuntimeUpdateInterval)) {
+		if prefs.RuntimeAutoUpdate && now.Sub(lastRuntime) >= updateInterval(prefs.RuntimeUpdateInterval) {
 			lastRuntime = now
-			if err := d.m.InstallRuntime(true, prefs.RuntimeAutoRestart); err != nil {
-				log.Printf("Runtime 自动更新失败: %v", err)
+			d.restartMu.RLock()
+			if d.restarting {
+				d.restartMu.RUnlock()
+				return
 			}
+			if _, err := d.m.Installed(); !errors.Is(err, os.ErrNotExist) {
+				if err := d.m.InstallRuntime(true, prefs.RuntimeAutoRestart); err != nil {
+					log.Printf("Runtime 自动更新失败: %v", err)
+				}
+			}
+			d.restartMu.RUnlock()
 		}
 		delay := 30 * time.Second
 		if d.app.Updater.State() == updater.StateReady {

@@ -362,7 +362,7 @@ func (m *Manager) LatestRuntime(ctx context.Context) (ReleaseInfo, RuntimeMetada
 // risense-ai/respire-cli. CLI release metadata keeps its original repository
 // source; only managed Runtime assets moved to risense-ai/respire-runtime.
 func (m *Manager) LatestCLIBuild(ctx context.Context) (ReleaseInfo, CLIMetadata, error) {
-	channel := m.Preferences().RuntimeChannel
+	channel := m.Preferences().CLIChannel
 	cliTarget, err := runtimeTarget()
 	if err != nil {
 		return ReleaseInfo{}, CLIMetadata{}, err

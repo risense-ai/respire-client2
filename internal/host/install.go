@@ -256,20 +256,7 @@ func (m *Manager) installOnlineCLI(ctx context.Context) error {
 	return m.installFrontendCLI(ctx, source, meta.Version, meta.BinaryHash)
 }
 
-// UpdateInstalledCLI independently refreshes the shared CLI used by external integrations.
-func (m *Manager) UpdateInstalledCLI(ctx context.Context) error {
-	m.cliInstallMu.Lock()
-	defer m.cliInstallMu.Unlock()
-	if _, err := os.Stat(filepath.Join(m.DataRoot, "bin", cliBinary())); err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return nil
-		}
-		return err
-	}
-	return m.installOnlineCLI(ctx)
-}
-
-// InstallCLI installs the shared CLI for external integrations.
+// InstallCLI installs or updates the optional CLI for external integrations.
 func (m *Manager) InstallCLI(ctx context.Context) error {
 	m.cliInstallMu.Lock()
 	defer m.cliInstallMu.Unlock()

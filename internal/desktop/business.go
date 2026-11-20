@@ -222,10 +222,12 @@ func (d *desktop) businessRoute(w http.ResponseWriter, r *http.Request) bool {
 			result = height
 		case "/api/open-releases":
 			url := map[string]string{
-				"client":        "https://github.com/risense-ai/respire-client2/releases/latest",
-				"client-mirror": "https://gh-proxy.com/https://github.com/risense-ai/respire-client2/releases/latest",
-				"cli":           "https://github.com/risense-ai/respire-cli/releases/latest",
-				"cli-mirror":    "https://gh-proxy.com/https://github.com/risense-ai/respire-cli/releases/latest",
+				"client":         "https://github.com/risense-ai/respire-client2/releases/latest",
+				"client-mirror":  "https://gh-proxy.com/https://github.com/risense-ai/respire-client2/releases/latest",
+				"runtime":        "https://github.com/risense-ai/respire-runtime/releases",
+				"runtime-mirror": "https://gh-proxy.com/https://github.com/risense-ai/respire-runtime/releases",
+				"cli":            "https://github.com/risense-ai/respire-cli/releases",
+				"cli-mirror":     "https://gh-proxy.com/https://github.com/risense-ai/respire-cli/releases",
 			}[input.Target]
 			if url == "" && strings.HasPrefix(input.Target, "plugin-") {
 				repo := strings.TrimPrefix(input.Target, "plugin-")
@@ -346,7 +348,7 @@ func (d *desktop) businessRoute(w http.ResponseWriter, r *http.Request) bool {
 // keys. patchPreferences applies them and api.go's actionInput shape check
 // carries a matching JSON field for each, so the two lists cannot drift.
 var preferencePatchKeys = []string{
-	"autoRuntime", "autoUpdate", "runtimeChannel", "clientChannel",
+	"autoRuntime", "autoUpdate", "runtimeChannel", "clientChannel", "cliChannel",
 	"layout", "theme", "language", "proxyMode", "clientUpdateInterval", "runtimeUpdateInterval",
 	"clientAutoUpdate", "clientAutoRestart", "runtimeAutoUpdate", "runtimeAutoRestart",
 	"sidebarWidth", "memoryIndexWidth",
@@ -361,6 +363,7 @@ func preferencePatchTargets(p *host.Preferences) map[string]any {
 		"autoUpdate":            &p.AutoUpdate,
 		"runtimeChannel":        &p.RuntimeChannel,
 		"clientChannel":         &p.ClientChannel,
+		"cliChannel":            &p.CLIChannel,
 		"layout":                &p.Layout,
 		"theme":                 &p.Theme,
 		"language":              &p.Language,

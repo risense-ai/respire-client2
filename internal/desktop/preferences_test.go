@@ -11,7 +11,7 @@ func TestPatchPreferencesKeepsUnsentFields(t *testing.T) {
 	base := host.Preferences{}
 	if err := json.Unmarshal([]byte(`{
 		"autoRuntime": true, "autoUpdate": true,
-		"runtimeChannel": "stable", "clientChannel": "stable",
+		"runtimeChannel": "stable", "clientChannel": "stable", "cliChannel": "dev",
 		"layout": "sidebar", "theme": "dark", "language": "zh",
 		"clientUpdateInterval": "6h", "runtimeUpdateInterval": "6h",
 		"clientAutoUpdate": true, "clientAutoRestart": true,
@@ -23,12 +23,15 @@ func TestPatchPreferencesKeepsUnsentFields(t *testing.T) {
 		t.Fatal(err)
 	}
 	// A legacy settings form posts only the fields it renders.
-	patched, err := patchPreferences(base, []byte(`{"theme":"light","layout":"compact"}`))
+	patched, err := patchPreferences(base, []byte(`{"theme":"light","layout":"compact","runtimeChannel":"dev"}`))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if patched.Theme != "light" || patched.Layout != "compact" {
 		t.Fatalf("patched fields must apply, got %+v", patched)
+	}
+	if patched.RuntimeChannel != "dev" || patched.CLIChannel != "dev" || patched.ClientChannel != "stable" {
+		t.Fatalf("channel patch must only change the requested component, got %+v", patched)
 	}
 	if !patched.RuntimeAutoRestart || !patched.RuntimeAutoUpdate {
 		t.Fatalf("runtimeAutoRestart/runtimeAutoUpdate must survive the patch, got %+v", patched)

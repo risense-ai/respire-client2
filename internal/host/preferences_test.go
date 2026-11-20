@@ -33,14 +33,14 @@ func TestLoadPreferencesLegacyFileMigratesToCompleted(t *testing.T) {
 	if !prefs.OnboardingCompleted || prefs.OnboardingStep != "done" {
 		t.Fatalf("upgraded user must not re-enter the wizard, got %+v", prefs)
 	}
-	if prefs.Language != "zh" || prefs.ClientAutoRestart != true || prefs.RuntimeAutoRestart != true {
+	if prefs.Language != "zh" || prefs.ClientAutoRestart != true || prefs.RuntimeAutoRestart != true || prefs.CLIChannel != "stable" {
 		t.Fatalf("existing settings must survive migration, got %+v", prefs)
 	}
 }
 
 func TestLoadPreferencesKeepsInFlightWizardState(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "preferences.json")
-	stored := `{"onboardingVersion":1,"onboardingCompleted":false,"onboardingStep":"model","onboardingSyncChoice":"cloud","theme":"light"}`
+	stored := `{"onboardingVersion":1,"onboardingCompleted":false,"onboardingStep":"model","onboardingSyncChoice":"cloud","theme":"light","runtimeChannel":"dev","cliChannel":"stable"}`
 	if err := os.WriteFile(path, []byte(stored), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -48,7 +48,7 @@ func TestLoadPreferencesKeepsInFlightWizardState(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if prefs.OnboardingCompleted || prefs.OnboardingStep != "model" || prefs.OnboardingSyncChoice != "cloud" {
+	if prefs.OnboardingCompleted || prefs.OnboardingStep != "model" || prefs.OnboardingSyncChoice != "cloud" || prefs.CLIChannel != "stable" {
 		t.Fatalf("wizard state must be preserved verbatim, got %+v", prefs)
 	}
 }

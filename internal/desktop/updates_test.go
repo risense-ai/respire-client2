@@ -21,53 +21,24 @@ func TestDirWritableRejectsMissingDirectory(t *testing.T) {
 	}
 }
 
-type startupRuntimeFixture struct {
-	selected   string
-	installs   int
-	installErr error
-	startErr   error
-}
-
-func (m *startupRuntimeFixture) InstallRuntime(automatic, restart bool) error {
-	if automatic || restart {
-		return errors.New("first installation must only select the Runtime")
-	}
-	m.installs++
-	if m.installErr != nil {
-		return m.installErr
-	}
-	m.selected = "new"
-	return nil
-}
-
-func (m *startupRuntimeFixture) PrepareRuntimeForStartup(context.Context) error {
-	if m.selected == "" {
-		return host.ErrRuntimeNotInstalled
-	}
-	return m.startErr
-}
-
-func TestInstallRuntimeForStartup(t *testing.T) {
+func TestStartRuntimeForStartup(t *testing.T) {
 	badSelection := errors.New("installed Runtime failed validation")
-	installFailure := errors.New("release query failed")
 	for _, tc := range []struct {
-		name, selected, wantSelection string
-		startErr, installErr, wantErr error
-		wantInstalls                  int
+		name                string
+		prepareErr, wantErr error
 	}{
-		{name: "first start installs the missing Runtime", wantSelection: "new", wantInstalls: 1},
-		{name: "cold startup uses the selected local Runtime", selected: "local", wantSelection: "local"},
-		{name: "bad selection does not trigger an installation", selected: "bad", startErr: badSelection, wantErr: badSelection, wantSelection: "bad"},
-		{name: "failed first installation is reported", installErr: installFailure, wantErr: installFailure, wantInstalls: 1},
-		{name: "failed start after first installation is reported", startErr: badSelection, wantErr: badSelection, wantSelection: "new", wantInstalls: 1},
+		{name: "uses the selected local Runtime"},
+		{name: "missing selection is left for explicit installation", prepareErr: host.ErrRuntimeNotInstalled},
+		{name: "bad local selection is reported", prepareErr: badSelection, wantErr: badSelection},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			m := &startupRuntimeFixture{selected: tc.selected, startErr: tc.startErr, installErr: tc.installErr}
-			if err := startRuntimeForStartup(context.Background(), m); !errors.Is(err, tc.wantErr) {
-				t.Fatalf("got %v, want %v", err, tc.wantErr)
-			}
-			if m.selected != tc.wantSelection || m.installs != tc.wantInstalls {
-				t.Fatalf("selected=%q installs=%d", m.selected, m.installs)
+			preparations := 0
+			err := startRuntimeForStartup(context.Background(), func(context.Context) error {
+				preparations++
+				return tc.prepareErr
+			})
+			if !errors.Is(err, tc.wantErr) || preparations != 1 {
+				t.Fatalf("got error %v and %d preparations, want %v and one preparation", err, preparations, tc.wantErr)
 			}
 		})
 	}

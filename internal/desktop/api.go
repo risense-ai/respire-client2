@@ -27,6 +27,7 @@ type actionInput struct {
 	Command        string `json:"command"`
 	RuntimeChannel string `json:"runtimeChannel"`
 	ClientChannel  string `json:"clientChannel"`
+	CLIChannel     string `json:"cliChannel"`
 	Layout         string `json:"layout"`
 	Theme          string `json:"theme"`
 	Language       string `json:"language"`
@@ -88,15 +89,6 @@ func (d *desktop) handler(static http.Handler) http.Handler {
 			if readErr != nil && !errors.Is(readErr, os.ErrNotExist) {
 				err = readErr
 			}
-			var external *host.ExternalRuntime
-			if errors.Is(readErr, os.ErrNotExist) {
-				ctx, cancel = context.WithTimeout(r.Context(), 3*time.Second)
-				externalItem, externalErr := d.m.External(ctx)
-				cancel()
-				if externalErr == nil {
-					external = &externalItem
-				}
-			}
 			d.mu.Lock()
 			latest, notes, source, clientErr, theme, updateCancel := d.clientVersion, d.clientNotes, d.clientSource, d.clientError, d.resolvedTheme, d.updateCancel
 			d.mu.Unlock()
@@ -107,7 +99,7 @@ func (d *desktop) handler(static http.Handler) http.Handler {
 				"proxy": d.m.ProxyInfo(),
 				"task":  d.m.TaskSnapshot(), "connected": healthErr == nil,
 				"managed":   healthErr == nil && d.m.Owns(h.Exe),
-				"installed": info, "externalRuntime": external, "health": body,
+				"installed": info, "health": body,
 				"clientUpdate": map[string]any{
 					"state": d.app.Updater.State(), "latest": latest, "notes": notes,
 					"source": source, "error": clientErr, "cancellable": updateCancel != nil,
@@ -156,6 +148,13 @@ func (d *desktop) handler(static http.Handler) http.Handler {
 				case "/api/stop":
 					go d.task("停止 Runtime", func() error { return d.m.Stop(false) })
 					result = "已请求停止"
+				case "/api/cli-install":
+					go d.task("安装 / 更新 CLI", func() error {
+						ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+						defer cancel()
+						return d.m.InstallCLI(ctx)
+					})
+					result = "已请求安装 / 更新"
 				case "/api/runtime-update":
 					go d.task("安装 / 更新 Runtime", func() error { return d.m.InstallRuntime(false, false) })
 					result = "已请求安装 / 更新"

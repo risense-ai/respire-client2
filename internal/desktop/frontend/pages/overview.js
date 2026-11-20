@@ -203,7 +203,7 @@ export function overview(root, ctx) {
           ? nowTask.stage
           : state.connected
             ? "本机 Runtime 已就绪"
-            : "客户端会自动下载并启动本机 Runtime",
+            : "在更新页下载并安装 Runtime，然后启动",
         action: nowTask.busy
           ? null
           : { go: "updates", label: "安装与更新" },
