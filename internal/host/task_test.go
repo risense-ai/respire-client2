@@ -142,17 +142,20 @@ func resetMaterialEnvelope(t *testing.T, m *Manager, outcome string) []byte {
 	return raw
 }
 
-func TestResetMaterialSurvivesRestartUntilExplicitSave(t *testing.T) {
+func TestHistoricalResetMaterialSurvivesRestartUntilExplicitSave(t *testing.T) {
 	m, id, reply, calls := recoveryMaterialFixture(t)
 	if err := os.WriteFile(reply, resetMaterialEnvelope(t, m, "committed"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	m.jobs[id] = &Operation{ID: id, Name: "auth_reset", State: "running", Started: time.Now(), host: true, write: true}
-	spec, ok := operationSpec("auth_reset")
-	if !ok {
-		t.Fatal("reset command missing")
+	legacy, err := m.hostOperation(context.Background(), nil, "{}", "auth.reset", id)
+	if err != nil {
+		t.Fatal(err)
 	}
-	m.runOperation(spec, nil, "{}", id)
+	m.jobs[id] = &Operation{ID: id, Name: "auth_reset", State: "done", Started: time.Now(), host: true, write: true,
+		Envelope: legacy, Transaction: transactionFromEnvelope("auth_reset", legacy)}
+	if err := m.persistOperationsLocked(); err != nil {
+		t.Fatal(err)
+	}
 	job, err := m.Operation(id)
 	if err != nil || job.State != "done" || !job.MaterialPending || job.MaterialSaved {
 		t.Fatal("committed reset must await material save", err)

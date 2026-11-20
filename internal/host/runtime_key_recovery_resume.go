@@ -50,6 +50,13 @@ func (m *Manager) resumeDesktopRuntimeRecovery(ctx context.Context, job Operatio
 		return nil, errors.New("原始恢复记录不匹配")
 	}
 	active, err := readCredentialConfig(filepath.Join(directory, "account-active.json"), runtimeMaintenanceLimit)
+	if errors.Is(err, os.ErrNotExist) && job.Name == "auth_reset" && len(supplement) == 0 {
+		receipt, err := readDesktopKeyResetReceipt(ctx, record)
+		if err != nil {
+			return nil, err
+		}
+		return desktopRecoveryEnvelope(receipt)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -76,9 +83,15 @@ func (m *Manager) resumeDesktopRuntimeRecovery(ctx context.Context, job Operatio
 		return nil, err
 	}
 	var custody recoveryCustody
-	if private == nil || json.Unmarshal([]byte(*private), &custody) != nil || custody.Operation.Kind != "fivekeys" ||
+	expectedKind := "fivekeys"
+	if job.Name == "auth_reset" {
+		expectedKind = "super_reset"
+	}
+	if private == nil || json.Unmarshal([]byte(*private), &custody) != nil || custody.Operation.Kind != expectedKind ||
 		custody.Input.Material.Account != account || custody.Input.Material.Backend != backend ||
-		custody.Operation.User != record.User || custody.Operation.Server != record.Server {
+		custody.Operation.Server != record.Server || expectedKind == "fivekeys" && custody.Operation.User != record.User ||
+		expectedKind == "super_reset" && (custody.Input.Material.Reset == nil ||
+			custody.Input.Material.Reset.Account != account || custody.Input.Material.Reset.Backend != backend) {
 		return nil, errors.New("原始恢复凭据托管与事务不匹配")
 	}
 	profile, err := selectedRuntimeLoginProfile(root)
@@ -128,6 +141,16 @@ func (m *Manager) resumeDesktopRuntimeRecovery(ctx context.Context, job Operatio
 		if err := verifyHostProcess(health); err != nil {
 			return nil, err
 		}
+		if expectedKind == "super_reset" {
+			receipt, err := readDesktopKeyResetReceipt(ctx, record)
+			if err != nil {
+				return nil, err
+			}
+			if err := retireRuntimeLogin(ctx, record, admission.Marker, *private); err != nil {
+				return nil, err
+			}
+			return desktopRecoveryEnvelope(receipt)
+		}
 		return m.completeDesktopRuntimeRecovery(ctx, image, info.SHA256, record, admission, profile, identity, custody, *private)
 	}
 	control, err := m.prepareRuntimeAccountControl(ctx, image, info.SHA256, profile, identity.AccountID, marker)
@@ -139,6 +162,9 @@ func (m *Manager) resumeDesktopRuntimeRecovery(ctx context.Context, job Operatio
 		return nil, err
 	}
 	if len(supplement) != 0 {
+		if expectedKind != "fivekeys" {
+			return nil, errors.New("Super Key 更换只能查询已提交的原事务")
+		}
 		_, values, err := continuationParams(job, supplement)
 		if err != nil {
 			return nil, err

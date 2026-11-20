@@ -128,6 +128,12 @@ func (vault exportVault) exportFactors(store hostCredentialStore, version uint64
 }
 
 func (vault exportVault) verifyExportSuper(super string) error {
+	urk, err := vault.unwrapSuperKey(super)
+	clear(urk)
+	return err
+}
+
+func (vault exportVault) unwrapSuperKey(super string) ([]byte, error) {
 	encoded := strings.Map(func(r rune) rune {
 		if r >= '0' && r <= '9' || r >= 'a' && r <= 'f' || r >= 'A' && r <= 'F' {
 			return r
@@ -136,12 +142,12 @@ func (vault exportVault) verifyExportSuper(super string) error {
 	}, strings.TrimPrefix(strings.TrimSpace(super), "A3-"))
 	entropy, err := hex.DecodeString(encoded)
 	if err != nil || len(entropy) != 18 {
-		return errors.New("Super Key 格式无效")
+		return nil, errors.New("Super Key 格式无效")
 	}
 	defer clear(entropy)
 	salt, saltErr := hex.DecodeString(vault.Salt)
 	if saltErr != nil {
-		return errors.New("账户恢复材料格式无效")
+		return nil, errors.New("账户恢复材料格式无效")
 	}
 	domain := "onememory:kek:v4"
 	if strings.HasPrefix(vault.Wrapped, "rsrs:v1:") {
@@ -149,32 +155,32 @@ func (vault exportVault) verifyExportSuper(super string) error {
 	}
 	key, err := hkdf.Key(sha256.New, entropy, salt, domain, 32)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer clear(key)
-	return vault.verifyWrapKey(key)
+	return vault.unwrapVaultKey(key)
 }
 
-func (vault exportVault) verifyWrapKey(key []byte) error {
+func (vault exportVault) unwrapVaultKey(key []byte) ([]byte, error) {
 	nonce, nonceErr := hex.DecodeString(vault.Nonce)
 	ciphertext, wrapErr := hex.DecodeString(strings.TrimPrefix(vault.Wrapped, "rsrs:v1:"))
 	if nonceErr != nil || wrapErr != nil || len(nonce) != 12 {
-		return errors.New("账户恢复材料格式无效")
+		return nil, errors.New("账户恢复材料格式无效")
 	}
 	block, err := aes.NewCipher(key)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	aead, err := cipher.NewGCM(block)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	urk, err := aead.Open(nil, nonce, ciphertext, nil)
-	defer clear(urk)
 	if err != nil || len(urk) != 32 {
-		return errors.New("Super Key 无法解开当前账户的密钥")
+		clear(urk)
+		return nil, errors.New("Super Key 无法解开当前账户的密钥")
 	}
-	return nil
+	return urk, nil
 }
 
 func writePrivateKeysExport(out, body string) (err error) {

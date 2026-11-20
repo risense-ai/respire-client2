@@ -8,7 +8,7 @@ import (
 	"errors"
 )
 
-func (m *Manager) desktopRuntimeKeyRecovery(context.Context, []string, string, string) (json.RawMessage, error) {
+func (m *Manager) desktopRuntimeKeyRecovery(context.Context, []string, string, string, string) (json.RawMessage, error) {
 	return nil, errors.New("macOS Keychain support requires a native Client2 build")
 }
 

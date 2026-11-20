@@ -20,10 +20,22 @@ type runtimeRecoveryOperation struct {
 	UseSuper   bool   `json:"use_super"`
 }
 
+func (op runtimeRecoveryOperation) MarshalJSON() ([]byte, error) {
+	if op.Kind == "super_reset" {
+		return json.Marshal(struct {
+			Kind string `json:"kind"`
+			Addr string `json:"addr"`
+		}{op.Kind, op.Server})
+	}
+	type fivekeys runtimeRecoveryOperation
+	return json.Marshal(fivekeys(op))
+}
+
 type runtimeRecoveryMaterial struct {
-	Account   string  `json:"keyring_account"`
-	Backend   string  `json:"keyring_backend"`
-	Challenge *string `json:"challenge,omitempty"`
+	Account   string                   `json:"keyring_account"`
+	Backend   string                   `json:"keyring_backend"`
+	Challenge *string                  `json:"challenge,omitempty"`
+	Reset     *runtimeRegisterMaterial `json:"reset,omitempty"`
 }
 
 type runtimeRecoveryInput struct {
@@ -84,8 +96,10 @@ func readRuntimeRecoveryReceipt(response rpcResponse, record runtimeAccountRecor
 		return runtimeRecoveryReceipt{}, errors.New("无法确认 Runtime 恢复回执，须查询原请求")
 	}
 	receipt := result.Summary
+	rotation := operation.Kind == "super_reset"
 	if receipt.OperationID != record.OperationID || !samePath(receipt.Source, record.Source) ||
-		receipt.Operation != operation || !validHash(receipt.Fingerprint) || receipt.Super != nil {
+		receipt.Operation != operation || !validHash(receipt.Fingerprint) ||
+		(!rotation || receipt.Outcome != "committed") && receipt.Super != nil {
 		return runtimeRecoveryReceipt{}, errors.New("Runtime 恢复回执与原操作不匹配")
 	}
 	switch receipt.Outcome {
@@ -100,7 +114,14 @@ func readRuntimeRecoveryReceipt(response rpcResponse, record runtimeAccountRecor
 			receipt.Identity.SessionDigest != *receipt.SessionDigest || receipt.Challenge != nil {
 			return runtimeRecoveryReceipt{}, errors.New("Runtime 恢复回执没有完整的目标会话身份")
 		}
-		if operation.User == "" {
+		if rotation {
+			if receipt.Outcome != "committed" || receipt.Super == nil || !samePath(*receipt.Target, record.Source) ||
+				receipt.AccountID == nil || record.Original.Identity.AccountID == nil ||
+				*receipt.AccountID != *record.Original.Identity.AccountID || receipt.Identity.Kind != "bound" ||
+				!reflect.DeepEqual(receipt.Identity.AccountID, receipt.AccountID) {
+				return runtimeRecoveryReceipt{}, errors.New("超级密码更换回执与原账户不匹配")
+			}
+		} else if operation.User == "" {
 			if operation.Server != "" || receipt.AccountID != nil || receipt.Identity.Kind != "unbound" ||
 				receipt.Identity.OperationID != record.OperationID {
 				return runtimeRecoveryReceipt{}, errors.New("离线恢复回执与原事务身份不匹配")

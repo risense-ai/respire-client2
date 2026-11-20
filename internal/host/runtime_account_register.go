@@ -81,13 +81,24 @@ func prepareDesktopRegistration(ctx context.Context, operation, profile, supplie
 	if suppliedSuper != "" {
 		return material, errors.New("新账户注册由 Client2 生成 Super Key")
 	}
+	var urk [32]byte
+	defer clear(urk[:])
+	if _, err := rand.Read(urk[:]); err != nil {
+		return material, err
+	}
+	return wrapRuntimeVaultKey(operation, urk[:])
+}
+
+func wrapRuntimeVaultKey(operation string, urk []byte) (runtimeRegisterMaterial, error) {
+	if len(urk) != 32 {
+		return runtimeRegisterMaterial{}, errors.New("账户数据密钥长度无效")
+	}
+	var material runtimeRegisterMaterial
 	var entropy [18]byte
 	var salt [16]byte
 	var nonce [12]byte
-	var urk [32]byte
 	defer clear(entropy[:])
-	defer clear(urk[:])
-	for _, part := range [][]byte{entropy[:], salt[:], nonce[:], urk[:]} {
+	for _, part := range [][]byte{entropy[:], salt[:], nonce[:]} {
 		if _, err := rand.Read(part); err != nil {
 			return material, err
 		}
@@ -114,7 +125,7 @@ func prepareDesktopRegistration(ctx context.Context, operation, profile, supplie
 	return runtimeRegisterMaterial{
 		Account: "login-" + strings.ReplaceAll(operation, "-", ""), Backend: runtimeLoginBackend(),
 		Salt: hex.EncodeToString(salt[:]), Nonce: hex.EncodeToString(nonce[:]), Super: code.String(),
-		Wrapped: "rsrs:v1:" + hex.EncodeToString(aead.Seal(nil, nonce[:], urk[:], nil)),
+		Wrapped: "rsrs:v1:" + hex.EncodeToString(aead.Seal(nil, nonce[:], urk, nil)),
 	}, nil
 }
 
