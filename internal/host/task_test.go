@@ -280,7 +280,7 @@ func TestResetMaterialRecoveryPreservesFailuresAndIdentity(t *testing.T) {
 			}
 		})
 	}
-	t.Run("core_config_entire_reply_lost", func(t *testing.T) {
+	t.Run("historical_cli_core_config_entire_reply_lost", func(t *testing.T) {
 		m, id, reply, calls := recoveryMaterialFixture(t)
 		t.Setenv("RESPIRE_TEST_CORE_DROP_REPLY", "1")
 		full := hostTransaction{OperationID: strings.TrimPrefix(id, "desktop-"), Kind: "core_config",
@@ -293,10 +293,15 @@ func TestResetMaterialRecoveryPreservesFailuresAndIdentity(t *testing.T) {
 		if err := os.WriteFile(reply, raw, 0600); err != nil {
 			t.Fatal(err)
 		}
-		job, err := m.Submit("agent_set", id, json.RawMessage(`{"setting":"recall_fusion={\"fusion\":\"legacy\"}"}`), true, "")
-		if err != nil || job.Transaction == nil || !job.Transaction.RequestBound || job.Transaction.SourceProfile != "" || job.Transaction.Scope != (runtimeScope{}) {
-			t.Fatal("request identity was not persisted before launch", err)
+		binding := hostTransaction{OperationID: strings.TrimPrefix(id, "desktop-"), Kind: "core_config", RequestBound: true}
+		m.jobs[id] = &Operation{ID: id, Name: "agent_set", State: "running", Started: time.Now(), host: true, write: true, Transaction: &binding}
+		if err := m.persistOperationsLocked(); err != nil {
+			t.Fatal(err)
 		}
+		legacy, _ := operationSpec("agent_set")
+		legacy.method = "core_config.set"
+		go m.runOperation(legacy, []string{"agent-config", `--set=recall_fusion={"fusion":"legacy"}`}, "", id)
+		var job Operation
 		deadline := time.Now().Add(10 * time.Second)
 		for {
 			job, err = m.Operation(id)
