@@ -19,6 +19,11 @@ func isWorkspaceModeSetting(key string) bool {
 	return key == "workspace_mode" || key == "readonly" || key == "memory_off"
 }
 
+func (m *Manager) SetWorkspaceMode(ctx context.Context, mode string) error {
+	_, err := m.setDesktopWorkspaceMode(ctx, "workspace_mode="+mode)
+	return err
+}
+
 func (m *Manager) setDesktopWorkspaceMode(ctx context.Context, setting string) (json.RawMessage, error) {
 	key, raw, ok := strings.Cut(setting, "=")
 	change := workspaceModeChange{key: strings.TrimSpace(key), raw: raw}

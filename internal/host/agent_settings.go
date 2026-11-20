@@ -29,27 +29,27 @@ func readAgentSettingsObject(path string) (map[string]any, error) {
 	return settings, nil
 }
 
-func (m *Manager) desktopAgentSettings() (json.RawMessage, error) {
+func (m *Manager) settingsWithWorkspaceMode() (map[string]any, string, error) {
 	_, device, err := m.readDeviceConfig()
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	settings, err := readAgentSettingsObject(filepath.Join(device.profile, "agent.json"))
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 
 	mode := "normal"
 	for _, name := range []string{"readonly_team", "readonly", "memory_off"} {
 		if value, present := settings[name]; present {
 			if _, ok := value.(bool); !ok {
-				return nil, fmt.Errorf("%s 必须是布尔值", name)
+				return nil, "", fmt.Errorf("%s 必须是布尔值", name)
 			}
 		}
 	}
 	if value, present := device.fields["service_mode"]; present {
 		if err := json.Unmarshal(value, &mode); err != nil {
-			return nil, err
+			return nil, "", err
 		}
 	} else if settings["memory_off"] == true {
 		mode = "off"
@@ -59,7 +59,19 @@ func (m *Manager) desktopAgentSettings() (json.RawMessage, error) {
 	if mode == "normal" && settings["readonly_team"] == true {
 		mode = "readonly"
 	}
+	return settings, mode, nil
+}
 
+func (m *Manager) WorkspaceMode() (string, error) {
+	_, mode, err := m.settingsWithWorkspaceMode()
+	return mode, err
+}
+
+func (m *Manager) desktopAgentSettings() (json.RawMessage, error) {
+	settings, mode, err := m.settingsWithWorkspaceMode()
+	if err != nil {
+		return nil, err
+	}
 	result := map[string]any{"workspace_mode": mode}
 	for _, name := range []string{"diary_mode", "recall_mode", "recall_api_base", "recall_model"} {
 		if value, present := settings[name]; present {

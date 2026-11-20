@@ -33,10 +33,6 @@ var settingsCommands = map[string]commandSpec{
 	"space_invite":          {words: []string{"space", "invite"}, host: true, write: true, args: []argument{opt("note", "--note"), flag("readonly", "--readonly")}},
 	"space_members":         {method: "desktop.space-members", args: []argument{{key: "name", kind: "string"}}},
 	"space_remove":          {words: []string{"space", "remove", "--yes"}, host: true, write: true, args: []argument{pos("name")}},
-	"inject_targets":        {words: []string{"inject", "--targets"}, host: true},
-	"inject_preview":        {words: []string{"inject", "--preview"}, host: true, args: []argument{requiredOpt("id", "--id"), flag("remove", "--remove")}},
-	"inject_apply":          {words: []string{"inject"}, host: true, write: true, args: []argument{requiredOpt("id", "--id"), opt("revision", "--expected"), flag("remove", "--remove")}},
-	"inject_all":            {words: []string{"inject", "--all"}, host: true, write: true},
 	"classification_config": {method: "desktop.classification", args: []argument{choice("backend", "--backend", "ds", "jev")}},
 	"classification_save":   {method: "desktop.classification-save", write: true, args: []argument{choice("backend", "--backend", "ds", "jev"), opt("base", "--api-base"), opt("model", "--model")}},
 }

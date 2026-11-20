@@ -1,10 +1,14 @@
 package desktop
 
 import (
+	"net"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
+
+	"respire-client2/internal/host"
 )
 
 func testHome(t *testing.T) injectHome {
@@ -20,6 +24,15 @@ func readFile(t *testing.T, path string) string {
 		t.Fatalf("read %s: %v", path, err)
 	}
 	return string(data)
+}
+
+func readJSONObject(t *testing.T, path string) map[string]any {
+	t.Helper()
+	value, err := parseJSONObject([]byte(readFile(t, path)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return value
 }
 
 func TestBlockRoundtripPreservesUserContent(t *testing.T) {
@@ -180,7 +193,7 @@ func TestOpenCodeInstructionsPreserveEntries(t *testing.T) {
 	if changed, err := patchInstructions(e, path, true); err != nil || !changed {
 		t.Fatalf("patch: changed=%v err=%v", changed, err)
 	}
-	cfg := readJSONObject(path)
+	cfg := readJSONObject(t, path)
 	entries, _ := cfg["instructions"].([]any)
 	if len(entries) != 2 {
 		t.Fatalf("entries = %v", entries)
@@ -197,7 +210,7 @@ func TestOpenCodeInstructionsPreserveEntries(t *testing.T) {
 	if changed, err := patchInstructions(e, path, false); err != nil || !changed {
 		t.Fatalf("remove: changed=%v err=%v", changed, err)
 	}
-	cfg = readJSONObject(path)
+	cfg = readJSONObject(t, path)
 	if entries, _ = cfg["instructions"].([]any); len(entries) != 1 {
 		t.Fatalf("foreign entry lost: %v", entries)
 	}
@@ -205,26 +218,47 @@ func TestOpenCodeInstructionsPreserveEntries(t *testing.T) {
 
 func TestWorkspaceModeResolution(t *testing.T) {
 	root := t.TempDir()
-	if mode := workspaceMode(root); mode != "normal" {
+	t.Setenv("RSRS_DATA_DIR", root)
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("RSRS_RPC_PORT", strconv.Itoa(listener.Addr().(*net.TCPAddr).Port))
+	if err := listener.Close(); err != nil {
+		t.Fatal(err)
+	}
+	manager, err := host.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager.ClientVersion = "2.0.0-dev.1"
+	mode := func() string {
+		value, err := manager.WorkspaceMode()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return value
+	}
+	if mode := mode(); mode != "normal" {
 		t.Fatalf("default mode = %s", mode)
 	}
-	if err := setWorkspaceMode(root, "readonly"); err != nil {
+	if err := manager.SetWorkspaceMode(t.Context(), "readonly"); err != nil {
 		t.Fatal(err)
 	}
-	if mode := workspaceMode(root); mode != "readonly" {
+	if mode := mode(); mode != "readonly" {
 		t.Fatalf("mode after set = %s", mode)
 	}
-	if err := setWorkspaceMode(root, "off"); err != nil {
+	if err := manager.SetWorkspaceMode(t.Context(), "off"); err != nil {
 		t.Fatal(err)
 	}
-	if mode := workspaceMode(root); mode != "off" {
+	if mode := mode(); mode != "off" {
 		t.Fatalf("mode after off = %s", mode)
 	}
-	if err := setWorkspaceMode(root, "nope"); err == nil {
+	if err := manager.SetWorkspaceMode(t.Context(), "nope"); err == nil {
 		t.Fatal("invalid mode accepted")
 	}
 	// agent.json flags count only when no service_mode is stored
-	config := readJSONObject(filepath.Join(root, "client.json"))
+	config := readJSONObject(t, filepath.Join(root, "client.json"))
 	delete(config, "service_mode")
 	data, err := jsonPretty(config)
 	if err != nil {
@@ -247,7 +281,7 @@ func TestWorkspaceModeResolution(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, "client.json"), data, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if mode := workspaceMode(root); mode != "off" {
+	if mode := mode(); mode != "off" {
 		t.Fatalf("agent.json fallback mode = %s", mode)
 	}
 }
