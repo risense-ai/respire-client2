@@ -43,9 +43,6 @@ func (m *Manager) Owns(exe string) bool {
 }
 
 func (m *Manager) Start() error {
-	if err := m.MigrateRuntime(); err != nil {
-		return err
-	}
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	h, _, err := m.Health(ctx)
 	cancel()

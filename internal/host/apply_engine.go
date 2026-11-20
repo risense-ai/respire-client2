@@ -35,9 +35,6 @@ func applyEngine(ctx context.Context, m *Manager, args []string, id string) (jso
 	if err != nil {
 		return nil, err
 	}
-	if err := m.ensureRuntimeFeature(ctx, minVariantRuntimeVersion, "选择模型权重变体"); err != nil {
-		return nil, err
-	}
 	scope, err := m.requestScope(ctx)
 	if err != nil {
 		return nil, err

@@ -12,8 +12,6 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
-
-	"golang.org/x/mod/semver"
 )
 
 type releaseProof struct {
@@ -270,127 +268,6 @@ func (m *Manager) verifyInstalled(info InstalledRuntime) error {
 		return errors.New("Runtime 安装凭据不匹配")
 	}
 	return verifyReleaseTree(m.runtimeDir(info.Version), receipt)
-}
-
-func (m *Manager) provenRuntimeMetadata(ctx context.Context, meta RuntimeMetadata) (RuntimeMetadata, error) {
-	if meta.ProofJSON != "" {
-		return meta, nil
-	}
-	target, err := runtimeTarget()
-	if err != nil {
-		return meta, err
-	}
-	name := "runtime-build-" + target + ".json"
-	payload, err := bootstrapDir()
-	if err == nil {
-		_, err = os.Stat(filepath.Join(payload, bootstrapManifestFile))
-		if errors.Is(err, os.ErrNotExist) {
-			if _, dirErr := os.Stat(payload); errors.Is(dirErr, os.ErrNotExist) {
-				err = errBootstrapAbsent
-			} else if dirErr != nil {
-				err = dirErr
-			}
-		}
-	}
-	var raw json.RawMessage
-	source := "embedded Runtime metadata"
-	if errors.Is(err, errBootstrapAbsent) {
-		source = "online Runtime metadata"
-		if err = m.fetchJSONOnce(ctx, "https://github.com/risense-ai/respire-runtime/releases/download/v"+meta.RuntimeVersion+"/"+name, &raw); err != nil {
-			return meta, fmt.Errorf("%s: %w", source, err)
-		}
-	} else if err != nil {
-		return meta, fmt.Errorf("bootstrap payload: %w", err)
-	} else if raw, err = os.ReadFile(filepath.Join(payload, name)); err != nil {
-		return meta, fmt.Errorf("%s: %w", source, err)
-	}
-	proven, err := NormalizeRuntimeMetadata(raw)
-	if err != nil {
-		return meta, fmt.Errorf("%s: %w", source, err)
-	}
-	if proven.RuntimeVersion != meta.RuntimeVersion || proven.BinaryHash != meta.BinaryHash {
-		return meta, errors.New("Runtime 旧安装与可信发布不匹配")
-	}
-	if _, err = runtimeReceipt(proven); err != nil {
-		return meta, fmt.Errorf("%s: %w", source, err)
-	}
-	return proven, nil
-}
-
-// MigrateRuntime verifies legacy installations before shared startup version checks.
-func (m *Manager) MigrateRuntime() error {
-	if _, err := os.Stat(m.runtimeManifest()); err == nil {
-		return nil
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return err
-	}
-	var selected sharedRuntimeReceipt
-	var source string
-	for _, base := range []string{m.DataRoot, m.Root} {
-		b, err := os.ReadFile(filepath.Join(base, "runtime.json"))
-		if errors.Is(err, os.ErrNotExist) {
-			continue
-		}
-		if err != nil {
-			return err
-		}
-		var candidate sharedRuntimeReceipt
-		if err = json.Unmarshal(b, &candidate); err != nil {
-			return err
-		}
-		if !validVersion(candidate.Version) || !validHash(candidate.SHA256) {
-			return errors.New("旧 Runtime 安装凭据无效")
-		}
-		if selected.Version == candidate.Version && selected.SHA256 != candidate.SHA256 {
-			return errors.New("旧 Runtime 安装凭据冲突")
-		}
-		if selected.Version != "" && semver.Compare("v"+selected.Version, "v"+candidate.Version) >= 0 {
-			continue
-		}
-		selected, source = candidate, filepath.Join(base, "runtime", candidate.Version)
-	}
-	if source == "" {
-		return nil
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-	defer cancel()
-	meta := RuntimeMetadata{RuntimeVersion: selected.Version, BinaryHash: selected.SHA256}
-	if selected.Release != nil {
-		if _, err := receiptFiles(selected); err != nil {
-			return err
-		}
-		meta.ProofJSON = selected.Release.JSON
-	}
-	meta, err := m.provenRuntimeMetadata(ctx, meta)
-	if err != nil {
-		return err
-	}
-	if selected.Release != nil {
-		meta, err = NormalizeRuntimeMetadata([]byte(selected.Release.JSON))
-		if err != nil {
-			return err
-		}
-	}
-	lock, err := m.lockRuntime(ctx)
-	if err != nil {
-		return err
-	}
-	defer lock.Close()
-	if _, err = os.Stat(m.runtimeManifest()); err == nil {
-		return nil
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return err
-	}
-	if err = m.publishRuntime(meta, func(stage string) error {
-		receipt, err := runtimeReceipt(meta)
-		if err != nil {
-			return err
-		}
-		return copyReleaseTree(source, stage, receipt)
-	}); err != nil {
-		return err
-	}
-	return m.selectRuntime(InstalledRuntime{Version: meta.RuntimeVersion, SHA256: meta.BinaryHash})
 }
 
 func (m *Manager) lockRuntime(ctx context.Context) (*os.File, error) {
