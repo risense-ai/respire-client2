@@ -42,8 +42,6 @@ type runtimePlan struct {
 	ArchiveFile string `json:"archive_file"`
 	ArchiveHash string `json:"archive_sha256"`
 	ArchiveURL  string `json:"archive_url"`
-	MinCLI      string `json:"min_cli"`
-	MaxCLI      string `json:"max_cli"`
 }
 
 // readInput accepts https URLs (real release sources) and plain paths
@@ -157,9 +155,6 @@ func main() {
 	if err != nil {
 		fail("CLI metadata: %v", err)
 	}
-	if err := host.CheckCLICompat(cliMeta.Version, meta.Compat); err != nil {
-		fail("compat: %v", err)
-	}
 	runtimeBinaryURL, err := assetURL(runtimeLatest, host.RuntimeRepo, meta.Binary, *fixtures)
 	if err != nil {
 		fail("Runtime %s: %v", runtimeLatest.Tag, err)
@@ -183,7 +178,6 @@ func main() {
 			Version: meta.RuntimeVersion, Tag: meta.Tag, SHA256: meta.BinaryHash,
 			BinaryFile: meta.Binary, BinaryURL: runtimeBinaryURL,
 			ArchiveFile: meta.ArchiveFile, ArchiveHash: meta.ArchiveHash, ArchiveURL: runtimeArchiveURL,
-			MinCLI: meta.Compat.MinCLI, MaxCLI: meta.Compat.MaxCLI,
 		},
 	}
 	enc := json.NewEncoder(os.Stdout)

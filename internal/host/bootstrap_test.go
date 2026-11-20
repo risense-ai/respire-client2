@@ -443,7 +443,7 @@ func TestInstallBootstrapCLIAtomicPlacement(t *testing.T) {
 			t.Fatal("a newer installed CLI must never be overwritten")
 		}
 	})
-	t.Run("unparseable existing file is not clobbered", func(t *testing.T) {
+	t.Run("verified CLI repairs an old file with an unreadable version", func(t *testing.T) {
 		payload, err := func() (bootstrapPayload, error) {
 			buildPayload(t, "1.2.3")
 			return readBootstrapPayload()
@@ -461,11 +461,11 @@ func TestInstallBootstrapCLIAtomicPlacement(t *testing.T) {
 		}
 		stubCLIProbe(t, cliProbeFixture{tmpVersion: "1.2.3", destBroken: true})
 		err = m.installBootstrapCLI(context.Background(), &payload)
-		if err == nil || !strings.Contains(err.Error(), "未覆盖") {
-			t.Fatalf("unparseable existing file must abort with a fix path, got %v", err)
+		if err != nil {
+			t.Fatalf("verified CLI did not replace an unreadable old version: %v", err)
 		}
-		if b, _ := os.ReadFile(dest); string(b) != "mystery-file" {
-			t.Fatal("the mystery file must stay untouched")
+		if got, err := fileHash(dest); err != nil || got != payload.Manifest.CLI.SHA256 {
+			t.Fatalf("verified CLI was not published: %s %v", got, err)
 		}
 	})
 	t.Run("failed staging probe leaves the existing CLI in place", func(t *testing.T) {
@@ -804,9 +804,6 @@ func TestBootstrapPayloadRejectsInvalidLocalComponents(t *testing.T) {
 		{"missing Runtime metadata", func(dir string) error { return os.Remove(metadataPath(dir)) }, "embedded Runtime metadata", true},
 		{"invalid Runtime metadata", func(dir string) error { return os.WriteFile(metadataPath(dir), []byte("{"), 0600) }, "embedded Runtime metadata", false},
 		{"mismatched Runtime version", damageMetadata(func(meta map[string]any) { meta["runtime_version"] = "1.0.22" }), "metadata does not match bootstrap manifest", false},
-		{"mismatched Runtime compatibility", damageMetadata(func(meta map[string]any) {
-			meta["compat"] = map[string]string{"min_cli": "0.5.0", "max_cli": "*"}
-		}), "metadata does not match bootstrap manifest", false},
 		{"incomplete Runtime proof", damageMetadata(func(meta map[string]any) { delete(meta, "files") }), "Runtime 发布凭据缺少完整文件清单或有效协议范围", false},
 		{"invalid manifest", func(dir string) error {
 			return os.WriteFile(filepath.Join(dir, bootstrapManifestFile), []byte("{"), 0600)
@@ -1093,7 +1090,7 @@ func TestInstallRuntimeIndependently(t *testing.T) {
 			t.Fatalf("deferred activation must retain previous task state: %v, %+v", err, m.TaskSnapshot())
 		}
 		denyCLI.Store(false)
-		if err := m.installOnlineCLI(context.Background(), meta.Compat); err != nil {
+		if err := m.installOnlineCLI(context.Background()); err != nil {
 			t.Fatalf("separate CLI installation failed: %v", err)
 		}
 		t.Run("startup missing CLI downloads only host", func(t *testing.T) {
@@ -1229,7 +1226,7 @@ func TestInstallRuntimeIndependently(t *testing.T) {
 			t.Fatal(err)
 		}
 		m.Endpoint = newFakeRuntimeServer(t, filepath.Join(m.runtimeDir(meta.RuntimeVersion), runtimeBinary()), "").URL
-		if err = m.installOnlineCLI(context.Background(), meta.Compat); err != nil {
+		if err = m.installOnlineCLI(context.Background()); err != nil {
 			t.Fatalf("online CLI repair with existing Runtime failed: %v", err)
 		}
 		if hash, err := fileHash(cli); err != nil || hash != cliMeta["binary_sha256"] {
@@ -1265,7 +1262,7 @@ func TestInstallRuntimeIndependently(t *testing.T) {
 		if _, err := os.Stat(cli); !errors.Is(err, os.ErrNotExist) {
 			t.Fatalf("retaining Runtime attempted to repair the CLI: %v", err)
 		}
-		for _, failure := range []string{"hash", "size", "compat"} {
+		for _, failure := range []string{"hash", "size"} {
 			cliMeta["binary_sha256"] = sha256Hex(t, cliBytes)
 			cliMeta["binary_size"] = len(cliBytes)
 			meta.Compat.MinCLI = "2.0.0-dev.1"
@@ -1274,8 +1271,6 @@ func TestInstallRuntimeIndependently(t *testing.T) {
 				cliMeta["binary_sha256"] = strings.Repeat("0", 64)
 			case "size":
 				cliMeta["binary_size"] = len(cliBytes) + 1
-			case "compat":
-				meta.Compat.MinCLI = "2.0.0-dev.2"
 			}
 			cliJSON, err = json.Marshal(cliMeta)
 			if err != nil {
@@ -1287,7 +1282,7 @@ func TestInstallRuntimeIndependently(t *testing.T) {
 			}
 			rejected := newInstallTestManager(t)
 			rejected.HTTPClient = m.HTTPClient
-			if err = rejected.installOnlineCLI(context.Background(), meta.Compat); err == nil {
+			if err = rejected.installOnlineCLI(context.Background()); err == nil {
 				t.Fatalf("invalid CLI %s must reject the CLI", failure)
 			}
 			if _, readErr := rejected.Installed(); !errors.Is(readErr, os.ErrNotExist) {

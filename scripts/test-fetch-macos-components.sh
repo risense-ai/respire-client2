@@ -2,7 +2,7 @@
 # Self-test for scripts/fetch-macos-components.sh against local release
 # fixtures (no network): the success path plus the failure modes the change
 # requires — tampered hashes, a missing target asset, an out-of-range CLI
-# compat window, and a stable channel with no full release. Also proves the
+# obsolete cross-product metadata, and a stable channel with no full release. Also proves the
 # version+hash cache reuse path by removing the fixture payloads between runs.
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -117,7 +117,7 @@ assert m["channel"] == "dev", m
 assert m["cli"]["version"] == "0.4.1-dev.1", m
 assert m["runtime"]["version"] == "1.0.21-dev.2", m
 assert len(m["runtime"]["sha256"]) == 64 and len(m["cli"]["sha256"]) == 64, m
-assert m["runtime"]["min_cli"] == "0.4.0" and m["runtime"]["max_cli"] == "*", m
+assert set(m["runtime"]) == {"version", "sha256"}, m
 PY
 echo "ok: success path"
 
@@ -147,10 +147,10 @@ fixture "$tmp/missing-target" "0.4.1-dev.1" "*" no
 run_fetch "$tmp/missing-target" "$tmp/out-missing" "$tmp/cache-missing" dev "does not carry runtime-build"
 echo "ok: missing target asset rejected"
 
-# 6. CLI outside the declared compat window.
+# 6. The two verified assets may ship together regardless of old CLI bounds.
 fixture "$tmp/compat" "0.4.1-dev.1" "0.4.0" yes
-run_fetch "$tmp/compat" "$tmp/out-compat" "$tmp/cache-compat" dev "compat"
-echo "ok: compat violation rejected"
+run_fetch "$tmp/compat" "$tmp/out-compat" "$tmp/cache-compat" dev
+echo "ok: old CLI bounds do not gate packaging"
 
 # 7. Stable channel with no full release must fail loudly.
 fixture "$tmp/stable" "0.4.1" "*" yes

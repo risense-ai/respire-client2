@@ -2,7 +2,7 @@
 # Fetch the macOS bootstrap components (managed Runtime + CLI) for the DMG.
 #
 # One channel is used for both components. Selection, metadata normalization,
-# identity checks and the CLI/Runtime compat window are enforced by the Go
+# and independent component identity checks are enforced by the Go
 # helper cmd/bootstrap-metadata, which reuses internal/host so the build-time
 # rules cannot drift from the client's online installer. This script then
 # downloads the three artifacts, verifies every SHA-256, expands the Runtime
@@ -99,22 +99,22 @@ PY
 # assemble <staging-runtime-dir> <cli> <cli-version> <cli-sha> <rt-version> <rt-sha> <min-cli> <max-cli>:
 # copy the verified tree into the payload layout and write bootstrap.json.
 assemble() {
-    local rt_dir="$1" cli="$2" cli_version="$3" cli_sha="$4" version="$5" binary_sha="$6" min_cli="$7" max_cli="$8"
+    local rt_dir="$1" cli="$2" cli_version="$3" cli_sha="$4" version="$5" binary_sha="$6"
     rm -rf "$out/runtime"
     cp -R "$rt_dir" "$out/runtime"
     [[ "$(sha_of "$cli")" == "$cli_sha" ]] || { echo "cached CLI binary SHA256 mismatch" >&2; exit 1; }
     cp "$cli" "$out/rsrs"
     [[ "$(sha_of "$out/rsrs")" == "$cli_sha" ]] || { echo "payload CLI binary SHA256 mismatch" >&2; exit 1; }
     chmod 0755 "$out/rsrs" "$out/runtime/rsrs-runtime"
-    python3 - "$out" "$target" "$channel" "$cli_version" "$cli_sha" "$version" "$binary_sha" "$min_cli" "$max_cli" <<'PY'
+    python3 - "$out" "$target" "$channel" "$cli_version" "$cli_sha" "$version" "$binary_sha" <<'PY'
 import json, os, sys
-out, target, channel, cli_version, cli_sha, version, binary_sha, min_cli, max_cli = sys.argv[1:10]
+out, target, channel, cli_version, cli_sha, version, binary_sha = sys.argv[1:]
 manifest = {
     "schema_version": 1,
     "target": target,
     "channel": channel,
     "cli": {"version": cli_version, "sha256": cli_sha},
-    "runtime": {"version": version, "sha256": binary_sha, "min_cli": min_cli, "max_cli": max_cli},
+    "runtime": {"version": version, "sha256": binary_sha},
 }
 with open(os.path.join(out, "bootstrap.json"), "w") as f:
     json.dump(manifest, f, indent=2)
@@ -146,9 +146,7 @@ print("rt_sha=" + p["runtime"]["sha256"])
 print("rt_url=" + p["runtime"]["binary_url"])
 print("rt_archive=" + p["runtime"]["archive_file"])
 print("rt_archive_sha=" + p["runtime"]["archive_sha256"])
-print("rt_archive_url=" + p["runtime"]["archive_url"])
-print("rt_min_cli=" + p["runtime"]["min_cli"])
-print("rt_max_cli=" + p["runtime"]["max_cli"])')
+print("rt_archive_url=" + p["runtime"]["archive_url"])')
 
 if [[ -f "$work/.complete" ]]; then
     echo "cache hit: $work" >&2
@@ -175,5 +173,5 @@ else
     : > "$work/.complete"
 fi
 
-assemble "$work/runtime" "$work/rsrs" "$PLAN_cli_version" "$PLAN_cli_sha" "$PLAN_rt_version" "$PLAN_rt_sha" "$PLAN_rt_min_cli" "$PLAN_rt_max_cli"
+assemble "$work/runtime" "$work/rsrs" "$PLAN_cli_version" "$PLAN_cli_sha" "$PLAN_rt_version" "$PLAN_rt_sha"
 echo "payload ready: $out (Runtime $PLAN_rt_version, CLI $PLAN_cli_version, channel $channel)" >&2

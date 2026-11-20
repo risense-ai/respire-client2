@@ -197,21 +197,6 @@ func CheckRuntimeMetadata(meta RuntimeMetadata, releaseTag, target string) error
 	return nil
 }
 
-// CheckCLICompat reports whether cliVersion sits inside the compatibility
-// window a Runtime release declares; "*" as max_cli means no upper bound.
-func CheckCLICompat(cliVersion string, compat Compat) error {
-	if !validVersion(cliVersion) {
-		return fmt.Errorf("CLI 版本无效: %s", cliVersion)
-	}
-	if semver.Compare("v"+cliVersion, "v"+compat.MinCLI) < 0 {
-		return fmt.Errorf("CLI %s 低于 Runtime 要求的最低版本 %s", cliVersion, compat.MinCLI)
-	}
-	if compat.MaxCLI != "*" && semver.Compare("v"+cliVersion, "v"+compat.MaxCLI) > 0 {
-		return fmt.Errorf("CLI %s 超出 Runtime 兼容上限 %s", cliVersion, compat.MaxCLI)
-	}
-	return nil
-}
-
 // SelectRelease picks the release a channel resolves to from a release list:
 // stable only accepts full non-prerelease versions, dev accepts the highest
 // published prerelease as well; drafts never win either channel.

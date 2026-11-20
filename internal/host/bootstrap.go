@@ -161,11 +161,7 @@ func parseBootstrapManifest(b []byte, manifest *bootstrapManifest) error {
 	if !validVersion(manifest.Runtime.Version) || !validHash(manifest.Runtime.SHA256) {
 		return errors.New("embedded Runtime identity invalid")
 	}
-	if !validVersion(manifest.Runtime.MinCLI) ||
-		(manifest.Runtime.MaxCLI != "*" && !validVersion(manifest.Runtime.MaxCLI)) {
-		return errors.New("embedded Runtime compat window invalid")
-	}
-	return CheckCLICompat(manifest.CLI.Version, Compat{MinCLI: manifest.Runtime.MinCLI, MaxCLI: manifest.Runtime.MaxCLI})
+	return nil
 }
 
 // runtimeMetadata validates the embedded release proof against the manifest.
@@ -178,8 +174,7 @@ func (p *bootstrapPayload) runtimeMetadata() (RuntimeMetadata, error) {
 	if err != nil {
 		return RuntimeMetadata{}, fmt.Errorf("embedded Runtime metadata: %w", err)
 	}
-	if meta.RuntimeVersion != p.Manifest.Runtime.Version || !strings.EqualFold(meta.BinaryHash, p.Manifest.Runtime.SHA256) ||
-		meta.Compat.MinCLI != p.Manifest.Runtime.MinCLI || meta.Compat.MaxCLI != p.Manifest.Runtime.MaxCLI {
+	if meta.RuntimeVersion != p.Manifest.Runtime.Version || !strings.EqualFold(meta.BinaryHash, p.Manifest.Runtime.SHA256) {
 		return RuntimeMetadata{}, errors.New("embedded Runtime metadata does not match bootstrap manifest")
 	}
 	if _, err = runtimeReceipt(meta); err != nil {
@@ -270,22 +265,21 @@ var probeCLIVersion = func(ctx context.Context, path string) (string, error) {
 
 // installBootstrapCLI publishes the embedded CLI to <data root>/bin/rsrs
 // atomically: staging file, hash and architecture checks, a --version probe,
-// then a rename. An existing newer CLI is kept (never downgrade); an
-// unparseable existing file is reported instead of clobbered.
+// then a rename. An existing newer CLI is kept.
 func (m *Manager) installBootstrapCLI(ctx context.Context, p *bootstrapPayload) error {
-	return m.installFrontendCLI(ctx, filepath.Join(p.Dir, cliBinary()), p.Manifest.CLI.Version, p.Manifest.CLI.SHA256,
-		Compat{MinCLI: p.Manifest.Runtime.MinCLI, MaxCLI: p.Manifest.Runtime.MaxCLI})
+	return m.installFrontendCLI(ctx, filepath.Join(p.Dir, cliBinary()), p.Manifest.CLI.Version, p.Manifest.CLI.SHA256)
 }
 
-func (m *Manager) canReuseFrontendCLI(ctx context.Context, version, expectedHash string, compat Compat) (bool, error) {
+func (m *Manager) canReuseFrontendCLI(ctx context.Context, version, expectedHash string) (bool, error) {
 	dest := filepath.Join(m.DataRoot, "bin", cliBinary())
 	if _, err := os.Stat(dest); err == nil {
 		existing, probeErr := probeCLIVersion(ctx, dest)
 		if probeErr != nil {
-			return false, fmt.Errorf("无法识别已有的 %s，未覆盖；请先手动移除或修复该文件后重试: %w", dest, probeErr)
+			// An unreadable version cannot establish reuse. Verify the new CLI before replacing it.
+			return false, ctx.Err()
 		}
 		if semver.Compare("v"+existing, "v"+version) > 0 {
-			return true, CheckCLICompat(existing, compat)
+			return true, nil
 		}
 		if existing == version {
 			hash, err := fileHash(dest)
@@ -293,7 +287,7 @@ func (m *Manager) canReuseFrontendCLI(ctx context.Context, version, expectedHash
 				return false, err
 			}
 			if hash == expectedHash {
-				return true, CheckCLICompat(existing, compat)
+				return true, nil
 			}
 		}
 	} else if !errors.Is(err, os.ErrNotExist) {
@@ -303,8 +297,8 @@ func (m *Manager) canReuseFrontendCLI(ctx context.Context, version, expectedHash
 }
 
 // installFrontendCLI shares verified, atomic CLI publication across both sources.
-func (m *Manager) installFrontendCLI(ctx context.Context, source, version, expectedHash string, compat Compat) error {
-	reuse, err := m.canReuseFrontendCLI(ctx, version, expectedHash, compat)
+func (m *Manager) installFrontendCLI(ctx context.Context, source, version, expectedHash string) error {
+	reuse, err := m.canReuseFrontendCLI(ctx, version, expectedHash)
 	if err != nil || reuse {
 		return err
 	}
@@ -356,9 +350,6 @@ func (m *Manager) installFrontendCLI(ctx context.Context, source, version, expec
 	}
 	if installed != version {
 		return fmt.Errorf("CLI 版本探测结果 %s 与发布版本 %s 不一致", installed, version)
-	}
-	if err = CheckCLICompat(installed, compat); err != nil {
-		return err
 	}
 	return os.Rename(tmpPath, dest)
 }

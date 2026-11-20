@@ -5,9 +5,7 @@ param(
 )
 # Download the managed Runtime (rsrs-runtime.exe + native-library archive) from
 # the latest respire-runtime stable release, verified against the published
-# runtime-build-<triple>.json metadata, and assert CLI compat. Mirrors the
-# validation rules of internal/host LatestRuntime. Requires scripts/fetch-cli.ps1
-# to have produced dist/cli/version.txt (the compat assertion reads it).
+# runtime-build-<triple>.json metadata. Mirrors the Runtime asset validation in internal/host.
 $ErrorActionPreference = 'Stop'
 $repoRoot = Split-Path -Parent $PSScriptRoot
 
@@ -93,15 +91,8 @@ function Compare-Semver([string]$Left, [string]$Right) {
     }
     return 0
 }
-function Test-VersionInRange([string]$Version, [string]$Min, [string]$Max) {
-    return ((Compare-Semver $Min $Version) -le 0) -and ((Compare-Semver $Version $Max) -le 0)
-}
-
 Push-Location $repoRoot
 try {
-    $cliVersion = (Get-Content (Join-Path $repoRoot 'dist/cli/version.txt') -Raw).Trim()
-    if (-not $cliVersion) { throw 'dist/cli/version.txt missing - run scripts/fetch-cli.ps1 first' }
-
     if ($Channel -eq 'stable') {
         $release = Invoke-GitHubJson 'https://api.github.com/repos/risense-ai/respire-runtime/releases/latest'
         if (-not $release.tag_name) { throw 'releases/latest returned no tag' }
@@ -152,10 +143,6 @@ try {
         if ($metaTarget -ne $target) { throw "metadata target mismatch: $metaTarget != $target" }
         if ($meta.binary_file -ne "rsrs-runtime-$target.exe") { throw "metadata binary_file mismatch: $($meta.binary_file)" }
         if ($meta.binary_sha256 -notmatch '^[0-9a-fA-F]{64}$' -or $metaArchiveHash -notmatch '^[0-9a-fA-F]{64}$') { throw 'metadata hashes invalid' }
-        $maxCli = if ($meta.compat.max_cli -eq '*') { $cliVersion } else { $meta.compat.max_cli }
-        if (-not (Test-VersionInRange $cliVersion $meta.compat.min_cli $maxCli)) {
-            throw "bundled CLI $cliVersion outside Runtime compat range [$($meta.compat.min_cli), $($meta.compat.max_cli)]"
-        }
         $expectedArchiveHash = $metaArchiveHash.ToLowerInvariant()
 
         $outDir = Join-Path $repoRoot $OutputDir
@@ -203,7 +190,7 @@ try {
         [IO.File]::WriteAllText((Join-Path $outDir 'version.txt'), "$($meta.runtime_version)", (New-Object Text.UTF8Encoding($false)))
         [IO.File]::WriteAllText((Join-Path $outDir 'sha256.txt'), "$($meta.binary_sha256.ToLowerInvariant())", (New-Object Text.UTF8Encoding($false)))
         [IO.File]::WriteAllText((Join-Path $outDir 'channel.txt'), "$Channel", (New-Object Text.UTF8Encoding($false)))
-        Write-Output "fetched rsrs-runtime $($meta.runtime_version) ($target, $Channel), binary+archive sha256 verified, CLI $cliVersion within compat [$($meta.compat.min_cli), $($meta.compat.max_cli)]"
+        Write-Output "fetched rsrs-runtime $($meta.runtime_version) ($target, $Channel), binary+archive sha256 verified"
     } finally {
         Remove-Item -LiteralPath $tmp -Recurse -Force -ErrorAction SilentlyContinue
     }
