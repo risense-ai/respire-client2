@@ -27,6 +27,23 @@ type deviceConfigReview struct {
 	SourceIdentity    runtimeAuthIdentity `json:"source_identity"`
 }
 
+type deviceConfigValidation struct {
+	deviceConfigReview
+	SchemaVersion int                   `json:"schema_version"`
+	Binding       runtimeControlBinding `json:"binding"`
+	Identity      runtimeAuthIdentity   `json:"identity"`
+	Original      *string               `json:"original_config"`
+}
+
+func (v deviceConfigValidation) request(id string) (runtimeControlRequest, error) {
+	raw, err := json.Marshal(v)
+	if err != nil {
+		return runtimeControlRequest{}, err
+	}
+	defer clear(raw)
+	return runtimeControlRequest{V: 1, ID: id, Method: "control.config_validate", Args: []string{string(raw)}}, nil
+}
+
 func deviceProfileIdentity(profile string) (runtimeAuthIdentity, error) {
 	data, err := readCredentialConfig(filepath.Join(profile, "session.json"), controlFrameLimit)
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
@@ -72,7 +89,11 @@ func (m *Manager) verifyDeviceConfigOwner(ctx context.Context, health HealthInfo
 	return nil
 }
 
-func (m *Manager) validateDeviceConfig(ctx context.Context, intent deviceConfigIntent) (result json.RawMessage, err error) {
+func (m *Manager) validateDeviceConfig(ctx context.Context, intent deviceConfigIntent) (json.RawMessage, error) {
+	return m.changeDeviceConfig(ctx, intent, nil)
+}
+
+func (m *Manager) changeDeviceConfig(ctx context.Context, intent deviceConfigIntent, workspace *workspaceModeChange) (result json.RawMessage, err error) {
 	takeover, err := m.lockRuntimeTakeover(ctx)
 	if err != nil {
 		return nil, err
@@ -81,15 +102,12 @@ func (m *Manager) validateDeviceConfig(ctx context.Context, intent deviceConfigI
 	if err := m.requireNoDeviceMaintenance(); err != nil {
 		return nil, err
 	}
-	edit, err := m.reviewDeviceConfig(intent)
-	if err != nil {
-		return nil, err
+	var mode string
+	if workspace != nil {
+		mode = workspace.mode
 	}
-	info, err := m.Installed()
+	edit, err := m.reviewDeviceConfig(intent, mode)
 	if err != nil {
-		return nil, err
-	}
-	if err := m.verifyInstalled(info); err != nil {
 		return nil, err
 	}
 	root, err := canonicalSessionDirectory(m.DataRoot)
@@ -102,6 +120,19 @@ func (m *Manager) validateDeviceConfig(ctx context.Context, intent deviceConfigI
 	}
 	health, _, err := m.Health(ctx)
 	wasServing := err == nil
+	if !wasServing && !IsUnavailable(err) {
+		return nil, err
+	}
+	var info InstalledRuntime
+	if workspace == nil || wasServing {
+		info, err = m.Installed()
+		if err != nil {
+			return nil, err
+		}
+		if err := m.verifyInstalled(info); err != nil {
+			return nil, err
+		}
+	}
 	if wasServing {
 		if err := m.verifyDeviceConfigOwner(ctx, health, info, edit.before.profile); err != nil {
 			return nil, err
@@ -109,8 +140,6 @@ func (m *Manager) validateDeviceConfig(ctx context.Context, intent deviceConfigI
 		if health.ManagedID != "" {
 			return nil, errors.New("请先由当前监督宿主停止 Runtime")
 		}
-	} else if !IsUnavailable(err) {
-		return nil, err
 	}
 	address, port, err := m.runtimeAccountEndpoint()
 	if err != nil {
@@ -148,45 +177,37 @@ func (m *Manager) validateDeviceConfig(ctx context.Context, intent deviceConfigI
 	if err != nil {
 		return nil, err
 	}
-	review := deviceConfigReview{CandidateRevision: controlDigest(edit.candidate), Intent: intent,
-		SourceProfile: source, TargetProfile: target, SourceIdentity: sourceIdentity}
-	var original *string
-	if edit.original != nil {
-		value, digest := string(edit.original), controlDigest(edit.original)
-		original, review.OriginalRevision = &value, &digest
-	}
-	id, err := controlUUID()
-	if err != nil {
-		return nil, err
-	}
-	params := struct {
-		deviceConfigReview
-		SchemaVersion int                   `json:"schema_version"`
-		Binding       runtimeControlBinding `json:"binding"`
-		Identity      runtimeAuthIdentity   `json:"identity"`
-		Original      *string               `json:"original_config"`
-	}{review, 1, runtimeControlBinding{root, target, token, targetIdentity.AccountID}, targetIdentity, original}
-	buildRequest := func() (runtimeControlRequest, error) {
-		raw, err := json.Marshal(params)
-		if err != nil {
-			return runtimeControlRequest{}, err
+	var params deviceConfigValidation
+	var requestID string
+	if workspace == nil {
+		params = deviceConfigValidation{
+			deviceConfigReview: deviceConfigReview{CandidateRevision: controlDigest(edit.candidate), Intent: intent,
+				SourceProfile: source, TargetProfile: target, SourceIdentity: sourceIdentity},
+			SchemaVersion: 1, Identity: targetIdentity,
+			Binding: runtimeControlBinding{root, target, token, targetIdentity.AccountID},
 		}
-		defer clear(raw)
-		return runtimeControlRequest{V: 1, ID: id, Method: "control.config_validate", Args: []string{string(raw)}}, nil
-	}
-	// The real grant substitutes a UUID of the same encoded width. Reject oversized requests before draining.
-	preview, err := buildRequest()
-	if err != nil {
-		return nil, err
-	}
-	frame, err := json.Marshal(preview)
-	if err != nil {
-		return nil, err
-	}
-	size := len(frame)
-	clear(frame)
-	if size > controlFrameLimit {
-		return nil, errors.New("设备配置超过 Runtime 私有验证帧上限")
+		if edit.original != nil {
+			value, digest := string(edit.original), controlDigest(edit.original)
+			params.Original, params.OriginalRevision = &value, &digest
+		}
+		requestID, err = controlUUID()
+		if err != nil {
+			return nil, err
+		}
+		// The real launch grant substitutes a UUID of the same encoded width.
+		preview, err := params.request(requestID)
+		if err != nil {
+			return nil, err
+		}
+		frame, err := json.Marshal(preview)
+		if err != nil {
+			return nil, err
+		}
+		size := len(frame)
+		clear(frame)
+		if size > controlFrameLimit {
+			return nil, errors.New("设备配置超过 Runtime 私有验证帧上限")
+		}
 	}
 	if err := os.MkdirAll(directory, 0700); err != nil {
 		return nil, err
@@ -213,6 +234,12 @@ func (m *Manager) validateDeviceConfig(ctx context.Context, intent deviceConfigI
 	var launchedPID uint32
 	defer func() {
 		if err == nil || maintenance.Marker == nil {
+			return
+		}
+		if workspace != nil && !wasServing && !staged {
+			if cleanupErr := removeOwnedRuntimeAccountRecord(markerPath, maintenance.Marker); cleanupErr != nil {
+				err = &unconfirmedError{cause: errors.Join(err, cleanupErr)}
+			}
 			return
 		}
 		cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), 35*time.Second)
@@ -252,38 +279,68 @@ func (m *Manager) validateDeviceConfig(ctx context.Context, intent deviceConfigI
 		err = fmt.Errorf("配置操作失败，原配置保留，维护已暂停以便核对: %w", err)
 	}()
 
+	var teamReadonly bool
+	if workspace != nil {
+		teamReadonly, err = workspace.check(root, target)
+		if err != nil {
+			return nil, err
+		}
+	}
 	if wasServing {
 		if err := m.stopDetached(ctx, health); err != nil {
 			return nil, err
 		}
 	}
-	if err := m.admitDeviceConfig(ctx, root, source, target, address, port, func(coordinator string) error {
+	if err := m.admitDeviceConfig(ctx, root, source, target, address, port, workspace == nil || wasServing, func(coordinator string) error {
 		marker.ID = coordinator
-		return updateMarker("Paused", target)
+		if workspace != nil {
+			teamReadonly, err = workspace.check(root, target)
+			if err != nil {
+				return err
+			}
+			identity, err := deviceProfileIdentity(target)
+			if err != nil || !reflect.DeepEqual(identity, targetIdentity) {
+				return errors.Join(errors.New("工作方式写入前账户身份已改变"), err)
+			}
+		}
+		if err := updateMarker("Paused", target); err != nil {
+			return err
+		}
+		if workspace != nil {
+			staged, err = edit.publish(ctx)
+			return err
+		}
+		return nil
 	}); err != nil {
 		return nil, err
 	}
-	control, err := m.prepareRuntimeAccountControl(ctx, image, info.SHA256, target, targetIdentity.AccountID, maintenance.Marker)
-	if err != nil {
-		return nil, err
-	}
-	params.Binding = control.binding
-	request, err := buildRequest()
-	if err != nil {
-		return nil, err
-	}
-	if staged, err = edit.publish(ctx); err != nil {
-		return nil, err
-	}
-	validation, cancel := context.WithTimeout(ctx, 10*time.Second)
-	reply, err := m.exchangeRuntimeControl(validation, control.image, control.port, control.grant, request)
-	cancel()
-	if err != nil {
-		return nil, err
-	}
-	off, err := verifyDeviceConfigReceipt(reply, review, targetIdentity)
-	if err != nil {
-		return nil, err
+	var off bool
+	if workspace == nil {
+		control, err := m.prepareRuntimeAccountControl(ctx, image, info.SHA256, target, targetIdentity.AccountID, maintenance.Marker)
+		if err != nil {
+			return nil, err
+		}
+		params.Binding = control.binding
+		request, err := params.request(requestID)
+		if err != nil {
+			return nil, err
+		}
+		var publishErr error
+		if staged, publishErr = edit.publish(ctx); publishErr != nil {
+			return nil, publishErr
+		}
+		validation, cancel := context.WithTimeout(ctx, 10*time.Second)
+		reply, err := m.exchangeRuntimeControl(validation, control.image, control.port, control.grant, request)
+		cancel()
+		if err != nil {
+			return nil, err
+		}
+		off, err = verifyDeviceConfigReceipt(reply, params.deviceConfigReview, targetIdentity)
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		off = workspace.mode == "off"
 	}
 	if err := edit.verifyCandidate(source, target, sourceIdentity, targetIdentity); err != nil {
 		return nil, err
@@ -292,6 +349,10 @@ func (m *Manager) validateDeviceConfig(ctx context.Context, intent deviceConfigI
 	applied := false
 	idle := targetIdentity.Kind == "unbound" ||
 		(targetIdentity.Kind == "absent" && !wasServing && source == target && sourceIdentity.Kind == "absent")
+	if workspace != nil {
+		idle = !wasServing
+	}
+	storeReady := false
 	if !idle {
 		// A private validation receipt cannot confirm a serving Runtime.
 		record := runtimeAccountRecord{Root: root, Source: source, Token: token}
@@ -326,9 +387,14 @@ func (m *Manager) validateDeviceConfig(ctx context.Context, intent deviceConfigI
 				return nil, err
 			}
 		}
-		if !active.StoreReady && !off {
+		allowLocked := workspace != nil && targetIdentity.Kind != "bound" && !health.StoreReady
+		if !active.StoreReady && !off && !allowLocked {
 			return nil, errors.New("Runtime 未确认目标存储已就绪")
 		}
+		if workspace != nil && off && active.StoreReady {
+			return nil, errors.New("停用工作区后 Runtime 存储仍处于打开状态")
+		}
+		storeReady = active.StoreReady
 		if wasServing {
 			applied = true
 		} else {
@@ -338,12 +404,14 @@ func (m *Manager) validateDeviceConfig(ctx context.Context, intent deviceConfigI
 			starting = false
 		}
 	}
-	current, err := m.Installed()
-	if err != nil || current != info {
-		return nil, errors.Join(errors.New("Runtime 选用版本已改变"), err)
-	}
-	if err := m.verifyInstalled(info); err != nil {
-		return nil, err
+	if workspace == nil || wasServing {
+		current, err := m.Installed()
+		if err != nil || current != info {
+			return nil, errors.Join(errors.New("Runtime 选用版本已改变"), err)
+		}
+		if err := m.verifyInstalled(info); err != nil {
+			return nil, err
+		}
 	}
 	if !applied {
 		if err := requireClosedRuntimePort(ctx, address); err != nil {
@@ -358,7 +426,27 @@ func (m *Manager) validateDeviceConfig(ctx context.Context, intent deviceConfigI
 	if err := edit.verifyCandidate(source, target, sourceIdentity, targetIdentity); err != nil {
 		return nil, err
 	}
-	result, err = m.deviceConfigResult(ctx, edit.after, applied)
+	if workspace == nil {
+		result, err = m.deviceConfigResult(ctx, edit.after, applied)
+	} else {
+		if applied {
+			active, _, err := m.Health(ctx)
+			if err != nil {
+				return nil, err
+			}
+			if err := m.verifyDeviceConfigOwner(ctx, active, info, target); err != nil {
+				return nil, err
+			}
+			if active.InstanceID != launchID || active.StoreReady != storeReady {
+				return nil, errors.New("工作方式应用前 Runtime 实例或存储状态已改变")
+			}
+		}
+		teamReadonly, err = workspace.check(root, target)
+		if err != nil {
+			return nil, err
+		}
+		result, err = workspace.result(teamReadonly, applied, storeReady)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -373,7 +461,7 @@ func (m *Manager) validateDeviceConfig(ctx context.Context, intent deviceConfigI
 
 // The current listener and these locks decide whether historical records can
 // be archived. Runtime rechecks the Paused grant after taking its own locks.
-func (m *Manager) admitDeviceConfig(ctx context.Context, root, source, target, address string, port uint64, pause func(string) error) (err error) {
+func (m *Manager) admitDeviceConfig(ctx context.Context, root, source, target, address string, port uint64, archiveRecords bool, pause func(string) error) (err error) {
 	for i, profile := range []string{root, source, target} {
 		if (i > 0 && samePath(profile, root)) || (i == 2 && samePath(target, source)) {
 			continue
@@ -389,6 +477,13 @@ func (m *Manager) admitDeviceConfig(ctx context.Context, root, source, target, a
 	}
 	if err := m.requireNoDeviceMaintenance(); err != nil {
 		return err
+	}
+	if !archiveRecords {
+		coordinator, err := runtimeRegistrationCoordinator(root, nil)
+		if err != nil {
+			return err
+		}
+		return pause(coordinator)
 	}
 	coordinator, err := deviceConfigCoordinator(root, port)
 	if err != nil {

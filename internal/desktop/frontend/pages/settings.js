@@ -29,7 +29,9 @@ function setting(label, description, control) {
 }
 export function settings(root, ctx) {
   let initialized = false,
-    agentAttempted = false;
+    agentAttempted = false,
+    savedWorkspace,
+    savedDiary;
   root.innerHTML =
     heading("设置", "外观、本机启动和 Runtime 行为，分别管理。") +
     panel(
@@ -193,11 +195,25 @@ export function settings(root, ctx) {
     event.preventDefault();
     action($("[type=submit]", event.target), async () => {
       const values = Object.fromEntries(new FormData(event.target));
-      await execute("agent_set", {
-        setting: "workspace_mode=" + values.workspace,
-      });
-      await execute("agent_set", { setting: "diary_mode=" + values.diary });
-      notify("工作方式已保存");
+      let workspace;
+      if (values.workspace !== savedWorkspace) {
+        workspace = summary(await execute("agent_set", {
+          setting: "workspace_mode=" + values.workspace,
+        }));
+        savedWorkspace = workspace.workspace_mode;
+        $("[name=workspace]", event.target).value = savedWorkspace;
+      }
+      if (values.diary !== savedDiary) {
+        await execute("agent_set", { setting: "diary_mode=" + values.diary });
+        savedDiary = values.diary;
+        if (!workspace) notify("琐事记录已保存");
+      }
+      if (workspace) {
+        if (!workspace.runtime_applied) notify("工作方式已保存，Runtime 当前未运行");
+        else if (workspace.workspace_mode !== "off" && !workspace.store_ready)
+          notify("工作方式已应用，记忆库仍未解锁");
+        else notify("工作方式已生效");
+      }
       await ctx.refresh();
     });
   });
@@ -219,8 +235,10 @@ export function settings(root, ctx) {
         .then((envelope) => {
           if (!root.isConnected) return;
           const value = summary(envelope);
-          $("[name=workspace]", root).value = value.workspace_mode || "normal";
-          $("[name=diary]", root).value = value.diary_mode || "concise";
+          savedWorkspace = value.workspace_mode || "normal";
+          $("[name=workspace]", root).value = savedWorkspace;
+          savedDiary = value.diary_mode || "concise";
+          $("[name=diary]", root).value = savedDiary;
         })
         .catch((error) => notify(error.message, true));
     }

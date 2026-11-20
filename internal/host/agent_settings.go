@@ -30,15 +30,11 @@ func readAgentSettingsObject(path string) (map[string]any, error) {
 }
 
 func (m *Manager) desktopAgentSettings() (json.RawMessage, error) {
-	device, err := readAgentSettingsObject(filepath.Join(m.DataRoot, "client.json"))
+	_, device, err := m.readDeviceConfig()
 	if err != nil {
 		return nil, err
 	}
-	profile, err := desktopProfilePath(m.DataRoot, device)
-	if err != nil {
-		return nil, err
-	}
-	settings, err := readAgentSettingsObject(filepath.Join(profile, "agent.json"))
+	settings, err := readAgentSettingsObject(filepath.Join(device.profile, "agent.json"))
 	if err != nil {
 		return nil, err
 	}
@@ -51,12 +47,9 @@ func (m *Manager) desktopAgentSettings() (json.RawMessage, error) {
 			}
 		}
 	}
-	if value, present := device["service_mode"]; present {
-		switch value {
-		case "normal", "readonly", "off":
-			mode = value.(string)
-		default:
-			return nil, errors.New("无效的 service_mode")
+	if value, present := device.fields["service_mode"]; present {
+		if err := json.Unmarshal(value, &mode); err != nil {
+			return nil, err
 		}
 	} else if settings["memory_off"] == true {
 		mode = "off"
