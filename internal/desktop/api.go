@@ -115,6 +115,13 @@ func (d *desktop) handler(static http.Handler) http.Handler {
 			}
 			if healthErr != nil {
 				result.(map[string]any)["connectionError"] = healthErr.Error()
+				if host.IsUnavailable(healthErr) {
+					if hasToken, sessionErr := d.m.LocalSessionHasToken(); sessionErr == nil {
+						result.(map[string]any)["localSessionHasToken"] = hasToken
+					} else {
+						result.(map[string]any)["localSessionError"] = sessionErr.Error()
+					}
+				}
 			} else {
 				// Locally readable inference selection (engine, weight file);
 				// profile models override it client-side via model.catalog.

@@ -238,15 +238,15 @@ export function authenticationPanel(root, ctx, refresh) {
         if (
           !(await confirm(
             "忘记本机身份",
-            "将移除本机会话和解密材料。记忆密文保留，但再次解锁需要你保存的恢复材料。请先导出密钥。",
+            "将移除本机会话及其中的解密材料。系统钥匙串和记忆密文保留。请先导出密钥，以便恢复访问。",
             "我已有恢复材料，继续",
           ))
         )
           return;
-        await execute("logout_full");
+        const result = await execute("logout_full");
         await ctx.refresh();
         await refresh();
-        notify("本机身份已清除");
+        notify(result?.summary?.session_found ? "本机身份已清除" : "当前没有本机会话");
       });
       return;
     }

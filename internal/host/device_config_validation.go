@@ -517,7 +517,7 @@ func (m *Manager) changeDeviceConfig(ctx context.Context, intent deviceConfigInt
 
 // The current listener and these locks decide whether historical records can
 // be archived. Runtime rechecks the Paused grant after taking its own locks.
-func (m *Manager) admitDeviceConfig(ctx context.Context, root, source, target, address string, port uint64, archiveRecords bool, pause func(string) error) (err error) {
+func withRuntimeLibraryLocks(ctx context.Context, root, source, target string, run func() error) (err error) {
 	for i, profile := range []string{root, source, target} {
 		if (i > 0 && samePath(profile, root)) || (i == 2 && samePath(target, source)) {
 			continue
@@ -528,6 +528,16 @@ func (m *Manager) admitDeviceConfig(ctx context.Context, root, source, target, a
 		}
 		defer func() { err = errors.Join(err, lock.Close()) }()
 	}
+	return run()
+}
+
+func (m *Manager) admitDeviceConfig(ctx context.Context, root, source, target, address string, port uint64, archiveRecords bool, pause func(string) error) error {
+	return withRuntimeLibraryLocks(ctx, root, source, target, func() error {
+		return m.admitLockedDeviceConfig(ctx, root, address, port, archiveRecords, pause)
+	})
+}
+
+func (m *Manager) admitLockedDeviceConfig(ctx context.Context, root, address string, port uint64, archiveRecords bool, pause func(string) error) error {
 	if err := requireClosedRuntimePort(ctx, address); err != nil {
 		return err
 	}

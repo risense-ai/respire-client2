@@ -324,6 +324,8 @@ func (m *Manager) runOperation(spec commandSpec, args []string, secret, id strin
 		envelope, err = m.desktopSpaceCreate(ctx, args[0])
 	case spec.method == "auth.login", spec.method == "auth.login.browser", spec.method == "auth.register":
 		envelope, err = m.desktopRuntimeAccountLogin(ctx, args, secret, id, spec.method)
+	case spec.method == "desktop.logout", spec.method == "desktop.logout-full":
+		envelope, err = m.desktopRuntimeLogout(ctx, id, spec.method == "desktop.logout-full", false)
 	case spec.method == "auth.recover", spec.method == "auth.reset":
 		envelope, err = m.desktopRuntimeKeyRecovery(ctx, args, secret, id, spec.method)
 	case spec.method == "desktop.agent-text-setting":
@@ -562,6 +564,8 @@ func (m *Manager) Recover(id string) (Operation, error) {
 	}
 	var envelope json.RawMessage
 	switch {
+	case job.Name == "logout", job.Name == "logout_full":
+		envelope, err = m.desktopRuntimeLogout(ctx, id, job.Name == "logout_full", true)
 	case job.Name == "server_set", job.Name == "autosync_set", job.Name == "cure_auto_set", job.Name == "data_dir_set",
 		job.Name == "account_use", job.Name == "space_use":
 		err = &unconfirmedError{id, errors.New("请核对本机设备配置、Runtime 状态和维护记录")}
