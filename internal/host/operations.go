@@ -57,6 +57,7 @@ type rpcResponse struct {
 	Envelope    json.RawMessage `json:"envelope"`
 	Scope       *runtimeScope   `json:"scope,omitempty"`
 	OperationID string          `json:"operation_id,omitempty"`
+	DataDir     string          `json:"data_dir,omitempty"`
 }
 
 var operationID = regexp.MustCompile(`^desktop-[0-9a-f-]{36}$`)
@@ -293,6 +294,18 @@ func (m *Manager) runOperation(spec commandSpec, args []string, secret, id strin
 	switch {
 	case spec.method == "model.apply-engine":
 		envelope, err = applyEngine(ctx, m, args, id)
+	case spec.method == "desktop.device-config":
+		envelope, err = m.desktopDeviceConfig(ctx, deviceConfigIntent{})
+	case spec.method == "desktop.server-set":
+		envelope, err = m.desktopDeviceConfig(ctx, deviceConfigIntent{Addr: &args[0]})
+	case spec.method == "desktop.autosync-set":
+		enabled := args[0] == "true"
+		envelope, err = m.desktopDeviceConfig(ctx, deviceConfigIntent{Autosync: &enabled})
+	case spec.method == "desktop.cure-auto-set":
+		enabled := args[0] == "true"
+		envelope, err = m.desktopDeviceConfig(ctx, deviceConfigIntent{CureAuto: &enabled})
+	case spec.method == "desktop.data-dir-set":
+		envelope, err = m.desktopDeviceConfig(ctx, deviceConfigIntent{DataDir: &args[0]})
 	case spec.method == "desktop.agent-config":
 		envelope, err = m.desktopAgentSettings()
 	case spec.method == "desktop.classification", spec.method == "desktop.classification-save":
@@ -534,11 +547,14 @@ func (m *Manager) Recover(id string) (Operation, error) {
 		ctx = timedCtx
 	}
 	var envelope json.RawMessage
-	if job.Name == "agent_set" && !job.host {
+	switch {
+	case job.Name == "server_set", job.Name == "autosync_set", job.Name == "cure_auto_set", job.Name == "data_dir_set":
+		err = &unconfirmedError{id, errors.New("请核对本机设备配置、Runtime 状态和维护记录")}
+	case job.Name == "agent_set" && !job.host:
 		envelope, err = m.recoverDesktopCoreConfig(ctx, job)
-	} else if job.host {
+	case job.host:
 		envelope, err = m.recoverHost(ctx, job)
-	} else {
+	default:
 		runtimeID := job.RuntimeID
 		if runtimeID == "" {
 			runtimeID = id

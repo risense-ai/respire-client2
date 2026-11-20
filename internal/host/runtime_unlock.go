@@ -134,7 +134,16 @@ func (m *Manager) unlockVerifiedRuntime(ctx context.Context, health HealthInfo, 
 	}
 	relative, err := filepath.Rel(windowsDOSPath(root), windowsDOSPath(profile))
 	if err != nil || !filepath.IsLocal(relative) {
-		return errors.New("Runtime unlock profile is outside the installation")
+		if !deviceConfigDefaultProfileLayout(m.DataRoot) {
+			return errors.New("Runtime unlock profile is outside the isolated installation")
+		}
+		_, config, err := m.readDeviceConfig()
+		if err != nil {
+			return err
+		}
+		if !samePath(config.profile, profile) {
+			return errors.New("Runtime unlock profile is not the selected default-layout profile")
+		}
 	}
 	off, err := m.runtimeServiceOff(profile)
 	if err != nil {

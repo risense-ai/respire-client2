@@ -15,7 +15,7 @@ export function storagePanel(root, ctx) {
   section.className = "section-gap";
   section.innerHTML = panel(
     "Runtime 数据目录",
-    `<form class="panel-body stack">${input("dir", "数据目录", ctx.status?.summary?.data_dir || "", { required: true })}<p class="hint">切换由 CLI 完成。原目录保留；不会自动搬迁记忆或复制密钥。使用 RSRS_DATA_DIR 的隔离环境还需遵循 Runtime 的路径限制。</p><div class="actions"><button type="button" data-folder>选择目录</button><button type="submit">切换数据目录</button></div></form>`,
+    `<form class="panel-body stack">${input("dir", "数据目录", ctx.status?.summary?.data_dir || "", { required: true })}<p class="hint">原目录保留；不会自动搬迁记忆或复制密钥。使用 RSRS_DATA_DIR 的隔离环境还需遵循 Runtime 的路径限制。</p><div class="actions"><button type="button" data-folder>选择目录</button><button type="submit">切换数据目录</button></div></form>`,
   );
   root.append(section);
   $("[data-folder]", section).onclick = (event) =>
@@ -37,7 +37,12 @@ export function storagePanel(root, ctx) {
         return;
       const result = await execute("data_dir_set", { dir });
       await ctx.refresh();
-      const expected = summary(result).data_dir,
+      const config = summary(result);
+      if (config.runtime_applied === false) {
+        notify("数据目录已切换，Runtime 当前未运行");
+        return;
+      }
+      const expected = config.data_dir,
         actual = ctx.status?.summary?.data_dir;
       const normalize = (s) =>
         navigator.userAgent.includes("Windows")

@@ -49,7 +49,7 @@ func (m *Manager) archiveStoppedEndpoint(ctx context.Context, address string) er
 				return err
 			}
 			relative, err := filepath.Rel(m.DataRoot, profile)
-			if err != nil || !filepath.IsLocal(relative) {
+			if (err != nil || !filepath.IsLocal(relative)) && !deviceConfigDefaultProfileLayout(m.DataRoot) {
 				return errors.New("Runtime 账户目录不属于当前安装")
 			}
 		}
@@ -66,20 +66,29 @@ func (m *Manager) archiveStoppedEndpoint(ctx context.Context, address string) er
 	if err := requireClosedRuntimePort(ctx, address); err != nil {
 		return err
 	}
+	return archiveRuntimeRecord(path, original)
+}
+
+// Call with takeover and the affected library locks held.
+func archiveRuntimeRecord(path string, original os.FileInfo) error {
+	if original.IsDir() {
+		return fmt.Errorf("Runtime 记录路径是目录 (%s)", filepath.Base(path))
+	}
 	current, err := os.Lstat(path)
 	if err != nil {
 		return err
 	}
 	if !os.SameFile(current, original) || !current.ModTime().Equal(original.ModTime()) || current.Size() != original.Size() {
-		return errors.New("旧 Runtime 端点在归档前已改变")
+		return fmt.Errorf("Runtime 记录在归档前已改变 (%s)", filepath.Base(path))
 	}
 	var nonce [16]byte
 	if _, err := rand.Read(nonce[:]); err != nil {
 		return err
 	}
-	archive := filepath.Join(filepath.Dir(path), "endpoint.stopped-"+hex.EncodeToString(nonce[:])+".json")
+	ext := filepath.Ext(path)
+	archive := path[:len(path)-len(ext)] + ".stopped-" + hex.EncodeToString(nonce[:]) + ext
 	if err := os.Rename(path, archive); err != nil {
-		return fmt.Errorf("归档已停止 Runtime 的端点: %w", err)
+		return fmt.Errorf("归档历史 Runtime 记录 (%s): %w", filepath.Base(path), err)
 	}
 	return nil
 }
