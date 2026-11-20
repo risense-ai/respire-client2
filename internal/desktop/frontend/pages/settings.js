@@ -61,7 +61,7 @@ export function settings(root, ctx) {
       ) +
         setting(
           "自动连接 Runtime",
-          "没有可连接的 Runtime 时启动客户端管理的版本。自动安装与更新设置在更新页。",
+          "没有可连接的 Runtime 时启动已选的本机版本。首次安装和自动更新设置在更新页。",
           '<input data-pref="autoRuntime" type="checkbox" aria-label="自动连接 Runtime">',
         ),
     ) +
@@ -242,11 +242,6 @@ export function settings(root, ctx) {
         })
         .catch((error) => notify(error.message, true));
     }
-    // The release-channel select lives on the updates page now; the guard
-    // keeps update() from aborting here (it silently emptied the paths and
-    // about rows below).
-    const channel = $("[data-pref=runtimeChannel]", root);
-    if (channel) channel.disabled = state.task?.busy;
     $("[data-paths]", root).innerHTML = pairs([
       ["客户端数据", state.root],
       ["当前记忆库", ctx.status?.summary?.data_dir],
@@ -290,8 +285,9 @@ export function updates(root, ctx) {
       u = state.clientUpdate || {},
       task = state.task || {},
       p = state.preferences || {};
-    const channelRow = (pref) =>
-      `<div class="panel-body setting-row"><div><strong>发布通道</strong><p>切换通道不会自动降级已经安装的版本。</p></div><select data-pref="${pref}"><option value="stable">Stable</option><option value="dev">Dev</option></select></div>`;
+    const runtimeRelease = latest?.channel === p.runtimeChannel ? latest : null;
+    const channelRow = (pref, label, disabled = false) =>
+      `<div class="panel-body setting-row"><div><strong>${label}</strong><p>切换通道不会自动降级已经安装的版本。</p></div><select data-pref="${pref}" aria-label="${label}" ${disabled ? "disabled" : ""}><option value="stable">Stable</option><option value="dev">Dev</option></select></div>`;
     // The gh-proxy release mirror is a China-only convenience.
     const mirrorButton = (target) =>
       currentLanguage() === "zh"
@@ -300,14 +296,14 @@ export function updates(root, ctx) {
     root.innerHTML =
       heading(
         "保持更新",
-        "客户端与 CLI 独立更新。更新包会按当前系统和架构匹配。",
+        "桌面客户端、Runtime 和可选 CLI 各自使用独立的发布通道。",
       ) +
       `<div class="grid">${panel(
         "桌面客户端",
         `<div class="panel-body setting-row"><div><strong>自动下载更新</strong><p>按检查频率自动发现并下载新版本。</p></div><input type="checkbox" data-pref="clientAutoUpdate" aria-label="自动下载更新"></div>` +
         `<div class="panel-body setting-row"><div><strong>自动重启应用</strong><p>下载完成后自动重启；关闭后由你点「重启并应用」。</p></div><input type="checkbox" data-pref="clientAutoRestart" aria-label="自动重启应用"></div>` +
         `<div class="panel-body setting-row"><div><strong>检查频率</strong><p>自动检查更新的间隔。</p></div><select data-pref="clientUpdateInterval"><option value="5m">5 分钟</option><option value="30m">30 分钟</option><option value="1h">1 小时</option><option value="6h">6 小时</option><option value="24h">一天</option></select></div>` +
-        channelRow("clientChannel") +
+        channelRow("clientChannel", "客户端发布通道") +
         pairs([
           ["当前版本", state.version],
           ["状态", updateNames[u.state] || u.state || "—"],
@@ -317,18 +313,23 @@ export function updates(root, ctx) {
           `<div class="panel-body upd-actions"><button data-update="client-check">检查更新</button><button class="primary" data-update="client-download" ${u.state === "ready" ? "disabled" : ""}>${u.error ? "重试下载" : "下载更新"}</button><button data-update="client-restart" ${u.state !== "ready" ? "disabled" : ""}>重启并应用</button>${u.cancellable ? `<button data-update="client-cancel">取消更新</button>` : ""}</div><div class="panel-body upd-actions upd-links"><button data-open-releases="client">GitHub Releases</button>${mirrorButton("client-mirror")}</div>${u.error ? `<div class="panel-body form-error">${h(u.error)}</div>` : ""}${u.notes ? `<details class="panel-body section-gap"><summary>版本说明</summary><pre class="release-notes">${h(u.notes)}</pre></details>` : ""}`,
       )}
       ${panel(
-        "CLI / Runtime",
-        `<div class="panel-body setting-row"><div><strong>自动安装更新</strong><p>按检查频率自动安装客户端管理的 Runtime。</p></div><input type="checkbox" data-pref="runtimeAutoUpdate" aria-label="自动安装更新"></div>` +
+        "Runtime",
+        `<div class="panel-body setting-row"><div><strong>自动安装更新</strong><p>按检查频率自动更新已安装的 Runtime。</p></div><input type="checkbox" data-pref="runtimeAutoUpdate" aria-label="自动安装更新"></div>` +
         `<div class="panel-body setting-row"><div><strong>自动重启 Runtime</strong><p>安装完成后自动重启；关闭时新版本下次启动生效。</p></div><input type="checkbox" data-pref="runtimeAutoRestart" aria-label="自动重启 Runtime"></div>` +
         `<div class="panel-body setting-row"><div><strong>检查频率</strong><p>自动检查更新的间隔。</p></div><select data-pref="runtimeUpdateInterval"><option value="5m">5 分钟</option><option value="30m">30 分钟</option><option value="1h">1 小时</option><option value="6h">6 小时</option><option value="24h">一天</option></select></div>` +
-        channelRow("runtimeChannel") +
+        channelRow("runtimeChannel", "Runtime 发布通道", task.busy) +
         pairs([
           ["当前运行", state.health?.bin || "未连接"],
-          ["已安装", state.installed?.version || (state.externalRuntime ? `${state.externalRuntime.version}（本机 bin）` : "未安装")],
-          ["可用版本", latest?.version || "尚未检查"],
-          ["更新来源", latest?.channel || "—"],
+          ["已安装", state.installed?.version || "未安装"],
+          ["可用版本", runtimeRelease?.version || "尚未检查"],
+          ["更新来源", runtimeRelease?.channel || "—"],
         ]) +
-          `<div class="panel-body upd-actions"><button data-cli-check>检查更新</button><button class="primary" data-update="runtime-update" ${task.busy ? "disabled" : ""}>下载并安装</button><button data-update="runtime-restart" ${task.busy || !state.installed?.version || state.installed.version === (state.health?.bin || "") ? "disabled" : ""}>重启并应用</button></div><div class="panel-body upd-actions upd-links"><button data-open-releases="cli">GitHub Releases</button>${mirrorButton("cli-mirror")}</div>`,
+          `<div class="panel-body upd-actions"><button data-runtime-check>检查更新</button><button class="primary" data-update="runtime-update" ${task.busy ? "disabled" : ""}>下载并安装</button><button data-update="${state.connected ? "runtime-restart" : "start"}" ${task.busy || !state.installed?.version || state.installed.version === (state.health?.bin || "") ? "disabled" : ""}>${state.connected ? "重启并应用" : "启动 Runtime"}</button></div><div class="panel-body upd-actions upd-links"><button data-open-releases="runtime">GitHub Releases</button>${mirrorButton("runtime-mirror")}</div>`,
+      )}
+      ${panel(
+        "CLI（可选）",
+        channelRow("cliChannel", "CLI 发布通道", task.busy) +
+          `<div class="panel-body upd-actions"><button class="primary" data-update="cli-install" ${task.busy ? "disabled" : ""}>安装 / 更新 CLI</button></div><div class="panel-body upd-actions upd-links"><button data-open-releases="cli">GitHub Releases</button>${mirrorButton("cli-mirror")}</div>`,
       )}</div>` +
       panel(
         "当前操作",
@@ -359,7 +360,7 @@ export function updates(root, ctx) {
     action(button, async () => {
       if (button.dataset.openReleases) {
         await api("open-releases", { target: button.dataset.openReleases });
-      } else if (button.hasAttribute("data-cli-check")) {
+      } else if (button.hasAttribute("data-runtime-check")) {
         latest = await api("runtime-release");
         update();
       } else if (button.dataset.update) {

@@ -341,7 +341,7 @@ export function createWizard(ctx) {
   function renderAccountOffline(body) {
     body.innerHTML = frame(
       "Runtime 尚未就绪",
-      "注册和登录需要客户端管理的 Runtime 或兼容的 CLI（1.0.18 或更高）。当前没有可连接的 Runtime。",
+      "注册和登录需要连接 Runtime。请打开更新页面，安装并启动本机 Runtime。",
       "",
       `<button type="button" data-open-updates>打开更新页面</button><button type="button" data-later-offline>稍后配置，先离线使用</button><button type="button" data-recheck>重新检查</button>${backButton("sync")}`,
     );

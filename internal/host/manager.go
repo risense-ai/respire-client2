@@ -18,6 +18,7 @@ type Preferences struct {
 	AutoUpdate     bool   `json:"autoUpdate"`
 	RuntimeChannel string `json:"runtimeChannel"`
 	ClientChannel  string `json:"clientChannel"`
+	CLIChannel     string `json:"cliChannel"`
 	Layout         string `json:"layout"`
 	Theme          string `json:"theme"`
 	Language       string `json:"language"`
@@ -70,7 +71,7 @@ func defaultPreferences() Preferences {
 	// repository has no full release. Flip back to "stable" once the first
 	// stable runtime is published.
 	return Preferences{
-		AutoRuntime: true, AutoUpdate: true, RuntimeChannel: "dev", ClientChannel: "stable", Layout: "sidebar", Theme: "system", Language: "",
+		AutoRuntime: true, AutoUpdate: true, RuntimeChannel: "dev", ClientChannel: "stable", CLIChannel: "dev", Layout: "sidebar", Theme: "system", Language: "",
 		ProxyMode:            ProxyModeSystem,
 		ModelMirror:          "auto",
 		ClientUpdateInterval: "6h", RuntimeUpdateInterval: "6h", ClientAutoUpdate: true, RuntimeAutoUpdate: true,
@@ -91,6 +92,10 @@ func migratePreferences(p Preferences, stored map[string]json.RawMessage) Prefer
 // MigratePreferences is the exported form used when importing preference
 // backups produced by older builds.
 func MigratePreferences(p Preferences, stored map[string]json.RawMessage) Preferences {
+	// The CLI used the Runtime channel before it had its own preference.
+	if _, ok := stored["cliChannel"]; !ok {
+		p.CLIChannel = p.RuntimeChannel
+	}
 	if _, ok := stored["clientAutoUpdate"]; !ok {
 		p.ClientAutoUpdate = p.AutoUpdate
 	}
@@ -157,7 +162,7 @@ func (p Preferences) validate() error {
 	if !proxyModes[p.ProxyMode] {
 		return errors.New("代理模式必须是 system 或 direct")
 	}
-	for _, channel := range []string{p.RuntimeChannel, p.ClientChannel} {
+	for _, channel := range []string{p.RuntimeChannel, p.ClientChannel, p.CLIChannel} {
 		if channel != "stable" && channel != "dev" {
 			return errors.New("更新通道必须是 stable 或 dev")
 		}

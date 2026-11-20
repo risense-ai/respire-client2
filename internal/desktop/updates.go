@@ -71,7 +71,7 @@ func (d *desktop) checkClient(download bool) error {
 		if download {
 			err = d.app.Updater.DownloadAndInstall(ctx)
 			if err == nil && d.m.Preferences().ClientAutoRestart && d.canRestartClient() {
-				err = d.app.Updater.Restart(ctx)
+				err = d.restartClient()
 			}
 		}
 	}

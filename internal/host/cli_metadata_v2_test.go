@@ -142,6 +142,7 @@ func TestLatestCLIBuildFrontendMetadata(t *testing.T) {
 			prefs:      defaultPreferences(),
 			HTTPClient: &http.Client{Transport: transport},
 		}
+		m.prefs.RuntimeChannel = "stable"
 		_, meta, err := m.LatestCLIBuild(context.Background())
 		if foreign {
 			if err == nil || metadataReads != 0 {
