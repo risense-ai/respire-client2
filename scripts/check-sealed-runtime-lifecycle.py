@@ -77,9 +77,18 @@ def check(report):
         with socket.socket() as reserved:
             reserved.bind(("127.0.0.1", 0))
             port = reserved.getsockname()[1]
-        child_env = dict(os.environ, PATH="", RSRS_DATA_DIR=str(profile), RSRS_RPC_PORT=str(port))
-        child_env.pop("GH_TOKEN", None)
-        require("RSRS_CORE_TEST_MODE" not in child_env, "Core test mode is forbidden")
+        require("RSRS_CORE_TEST_MODE" not in os.environ, "Core test mode is forbidden")
+        # Runtime uses the native ps on macOS to bind its process birth.
+        fixture_path = "" if platform.startswith("windows-") else "/usr/bin:/bin"
+        require(shutil.which("rsrs", path=fixture_path) is None, "CLI is reachable from the fixture PATH")
+        child_env = {
+            key: value for key, value in os.environ.items()
+            if key.upper() in {"HOME", "USERPROFILE", "LOCALAPPDATA", "APPDATA", "SYSTEMROOT", "WINDIR",
+                               "COMSPEC", "PATHEXT", "PROGRAMFILES", "PROGRAMDATA", "TEMP", "TMP", "TMPDIR",
+                               "HTTPS_PROXY", "HTTP_PROXY", "NO_PROXY", "SSL_CERT_FILE", "SSL_CERT_DIR",
+                               "LANG", "LC_ALL", "XDG_RUNTIME_DIR", "DBUS_SESSION_BUS_ADDRESS"}
+        }
+        child_env.update(PATH=fixture_path, RSRS_DATA_DIR=str(profile), RSRS_RPC_PORT=str(port))
 
         def client(action, data_dir=profile, success=True):
             process = subprocess.run([image, "--headless", action], cwd=root, capture_output=True,
@@ -125,7 +134,14 @@ def check(report):
                 return json.load(response)
 
         client("status", success=False)
-        client("start")
+        try:
+            client("start")
+        except RuntimeError:
+            logs = list((profile / "client2").glob("runtime-start-*.log"))
+            if len(logs) == 1:
+                with logs[0].open("rb") as stream:
+                    report["accountless_startup_log"] = stream.read(4096).decode("utf-8", errors="replace")
+            raise
         try:
             initial = health()
             require(initial["server"] == "respire" and initial["v"] == 1 and initial["startup_complete"]
