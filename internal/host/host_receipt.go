@@ -7,10 +7,9 @@ import (
 	"errors"
 	"path/filepath"
 	"regexp"
-	"strings"
 )
 
-// Persist only the public identity needed by the CLI's original-result commands.
+// Persist only the public identity needed to query original operations.
 type hostTransaction struct {
 	OperationID   string       `json:"operation_id"`
 	SourceProfile string       `json:"source_profile"`
@@ -137,51 +136,5 @@ func (m *Manager) recoverHost(ctx context.Context, job Operation) (json.RawMessa
 	if transaction != nil && transaction.RuntimeLogin {
 		return m.recoverDesktopRuntimeLogin(ctx, job)
 	}
-	if transaction != nil && transaction.RequestBound && transaction.Kind == "core_config" {
-		if transaction.OperationID != strings.TrimPrefix(job.ID, "desktop-") || !hostOperationID.MatchString(transaction.OperationID) {
-			return nil, &unconfirmedError{job.ID, errors.New("核心配置预绑定身份不匹配")}
-		}
-		raw, err := m.hostOperation(ctx, nil, "", "core_config.result", job.ID)
-		if err != nil && len(raw) == 0 {
-			return nil, &unconfirmedError{job.ID, err}
-		}
-		if !transaction.acceptsCoreResult(transactionFromEnvelope(job.Name, raw)) {
-			return raw, &unconfirmedError{job.ID, errors.New("核心配置查询尚未返回原事务身份")}
-		}
-		return raw, err
-	}
-	if transaction == nil || !hostOperationID.MatchString(transaction.OperationID) || !filepath.IsAbs(transaction.SourceProfile) {
-		return nil, &unconfirmedError{job.ID, errors.New("CLI 未返回可查询的结构化事务身份，请核对当前账户；不能以桌面请求 ID 代替宿主事务 ID")}
-	}
-	var args []string
-	switch transaction.Kind {
-	case "core_config":
-		if transaction.Scope.AccountID == "" || transaction.Scope.InstanceID == "" || transaction.Scope.Generation == 0 {
-			return nil, &unconfirmedError{job.ID, errors.New("原核心配置事务缺少 Runtime scope，不能重新应用")}
-		}
-		context, encodeErr := json.Marshal(map[string]any{"scope": transaction.Scope,
-			"operation_id": transaction.OperationID, "idempotency_key": transaction.OperationID})
-		if encodeErr != nil {
-			return nil, encodeErr
-		}
-		args = []string{"runtime", "core-config-result", "--context=" + string(context), "--source-profile=" + transaction.SourceProfile}
-	case "account":
-		args = []string{"runtime", "account-result", "--operation-id=" + transaction.OperationID, "--source-profile=" + transaction.SourceProfile}
-		if transaction.Register {
-			args = append(args, "--register")
-		}
-	case "key":
-		args = []string{"runtime", "key-result", "--operation-id=" + transaction.OperationID, "--source-profile=" + transaction.SourceProfile}
-	default:
-		return nil, &unconfirmedError{job.ID, errors.New("CLI 未提供此宿主事务的查询入口")}
-	}
-	raw, err := m.hostOperation(ctx, args, "", "runtime.result", job.ID)
-	if len(raw) == 0 {
-		return nil, &unconfirmedError{job.ID, err}
-	}
-	returned := transactionFromEnvelope(job.Name, raw)
-	if returned == nil || *returned != *transaction {
-		return nil, &unconfirmedError{job.ID, errors.New("宿主查询回执与原事务身份不匹配")}
-	}
-	return raw, err
+	return nil, &unconfirmedError{job.ID, errors.New("请通过原宿主查询这笔历史事务，桌面已保留记录")}
 }

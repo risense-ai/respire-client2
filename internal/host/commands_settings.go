@@ -17,7 +17,7 @@ var settingsCommands = map[string]commandSpec{
 	"autosync_set":          {method: "desktop.autosync-set", host: true, write: true, args: []argument{{key: "enabled", kind: "bool", required: true}}},
 	"cure_auto_set":         {method: "desktop.cure-auto-set", host: true, write: true, args: []argument{{key: "enabled", kind: "bool", required: true}}},
 	"agent_config":          {method: "desktop.agent-config"},
-	"agent_set":             {words: []string{"agent-config"}, host: true, write: true, args: []argument{requiredOpt("setting", "--set")}},
+	"agent_set":             {host: true, write: true, args: []argument{pos("setting")}},
 	"account_list":          {method: "desktop.account-list"},
 	"account_use":           {method: "desktop.account-use", host: true, write: true, args: []argument{pos("name")}},
 	"migration_list":        {method: "desktop.migration-list"},

@@ -21,7 +21,13 @@ func main() {
 		json.NewEncoder(os.Stdout).Encode(map[string]string{"version": version, "platform": host.Platform()})
 		return
 	}
-	m, err := host.New()
+	var m *host.Manager
+	var err error
+	if len(os.Args) > 2 && os.Args[1] == "--headless" && os.Args[2] == "prepare-cli" {
+		m, err = host.NewCLIInstaller()
+	} else {
+		m, err = host.New()
+	}
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -59,9 +65,7 @@ func headless(m *host.Manager) {
 			return m.InstallRuntime(false, false)
 		})
 	case "prepare-cli":
-		err = m.RunTask("准备 CLI", func() error {
-			return m.EnsureCoreConfigHost(context.Background())
-		})
+		err = m.InstallCLI(context.Background())
 	case "runtime-release":
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()

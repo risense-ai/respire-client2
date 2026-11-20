@@ -328,7 +328,7 @@ func (m *Manager) runOperation(spec commandSpec, args []string, secret, id strin
 	case spec.method == "desktop.classification", spec.method == "desktop.classification-save":
 		envelope, err = m.desktopClassificationConfig(ctx, args, secret, spec.method == "desktop.classification-save")
 	case spec.method == "desktop.core-config":
-		envelope, err = m.setDesktopCoreConfig(ctx, id, strings.TrimPrefix(args[1], "--set="))
+		envelope, err = m.setDesktopCoreConfig(ctx, id, args[0])
 	case spec.method == "desktop.keys-export":
 		envelope, err = m.desktopKeysExport(ctx, args)
 	case spec.method == "desktop.account-list", spec.method == "desktop.space-list":
@@ -352,9 +352,9 @@ func (m *Manager) runOperation(spec commandSpec, args []string, secret, id strin
 	case spec.method == "auth.recover", spec.method == "auth.reset":
 		envelope, err = m.desktopRuntimeKeyRecovery(ctx, args, secret, id, spec.method)
 	case spec.method == "desktop.agent-text-setting":
-		envelope, err = m.setDesktopAgentTextSetting(ctx, id, strings.TrimPrefix(args[1], "--set="))
+		envelope, err = m.setDesktopAgentTextSetting(ctx, id, args[0])
 	case spec.method == "desktop.workspace-setting":
-		envelope, err = m.setDesktopWorkspaceMode(ctx, strings.TrimPrefix(args[1], "--set="))
+		envelope, err = m.setDesktopWorkspaceMode(ctx, args[0])
 	case spec.method == "desktop.model-uninstall":
 		envelope, err = m.uninstallM3(ctx)
 	case spec.method == "desktop.space-kick":
@@ -365,8 +365,10 @@ func (m *Manager) runOperation(spec commandSpec, args []string, secret, id strin
 		envelope, err = m.removeDesktopSpace(ctx, id, args[0], false)
 	case spec.method == "desktop.space-join":
 		envelope, err = m.desktopSpaceMembership(ctx, id, args, "join", "", nativeRuntimeCredentialStore(ctx))
+	case spec.method == "desktop.install-engines":
+		envelope, err = m.installModelEngines(ctx)
 	case spec.host:
-		envelope, err = m.hostOperation(ctx, args, secret, spec.method, id)
+		err = errors.New("此宿主操作未注册处理程序")
 	default:
 		method := spec.method
 		if method == "" {

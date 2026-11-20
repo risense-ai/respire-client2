@@ -219,6 +219,28 @@ type Manager struct {
 }
 
 func New() (*Manager, error) {
+	port := os.Getenv("RSRS_RPC_PORT")
+	if port == "" {
+		port = "15169"
+	}
+	n, err := strconv.Atoi(port)
+	if err != nil || n < 1 || n > 65535 {
+		return nil, errors.New("RSRS_RPC_PORT must be a valid TCP port")
+	}
+	m, err := NewCLIInstaller()
+	if err != nil {
+		return nil, err
+	}
+	m.Endpoint = "http://127.0.0.1:" + port
+	m.localClient = &http.Client{Timeout: 30 * time.Second, Transport: &http.Transport{Proxy: nil}, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	if err := m.loadOperations(); err != nil {
+		return nil, err
+	}
+	return m, nil
+}
+
+// NewCLIInstaller reads the shared installer settings for an explicit CLI update.
+func NewCLIInstaller() (*Manager, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return nil, err
@@ -231,17 +253,8 @@ func New() (*Manager, error) {
 	if err != nil {
 		return nil, err
 	}
-	port := os.Getenv("RSRS_RPC_PORT")
-	if port == "" {
-		port = "15169"
-	}
-	n, err := strconv.Atoi(port)
-	if err != nil || n < 1 || n > 65535 {
-		return nil, errors.New("RSRS_RPC_PORT must be a valid TCP port")
-	}
-	m := &Manager{Root: filepath.Join(dataRoot, "client2"), DataRoot: dataRoot, Endpoint: "http://127.0.0.1:" + port,
-		localClient: &http.Client{Timeout: 30 * time.Second, Transport: &http.Transport{Proxy: nil}, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }},
-		prefs:       defaultPreferences(), task: TaskState{Stage: "就绪"},
+	m := &Manager{Root: filepath.Join(dataRoot, "client2"), DataRoot: dataRoot,
+		prefs: defaultPreferences(), task: TaskState{Stage: "就绪"},
 		proxy: newProxyResolver()}
 	proxyFor := m.proxy.proxyFunc(func() string { return m.Preferences().ProxyMode })
 	// Both outbound clients share the resolver: updates, release metadata and
@@ -260,8 +273,7 @@ func New() (*Manager, error) {
 		}
 		return nil
 	}}
-	modelTransport := outbound.Clone()
-	m.modelHTTPClient = &http.Client{Transport: modelTransport}
+	m.modelHTTPClient = &http.Client{Transport: outbound.Clone()}
 	if err := os.MkdirAll(m.Root, 0700); err != nil {
 		return nil, err
 	}
@@ -270,9 +282,6 @@ func New() (*Manager, error) {
 		return nil, err
 	}
 	m.prefs = prefs
-	if err := m.loadOperations(); err != nil {
-		return nil, err
-	}
 	return m, nil
 }
 
