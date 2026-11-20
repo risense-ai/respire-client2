@@ -24,7 +24,7 @@ var settingsCommands = map[string]commandSpec{
 	"migration_apply":       {words: []string{"migrate"}, host: true, write: true, args: []argument{requiredOpt("source", "--source"), requiredOpt("account", "--account")}},
 	"login":                 {method: "auth.login.browser", host: true, write: true, args: []argument{opt("addr", "--addr")}},
 	"logout":                {method: "desktop.logout", host: true, write: true},
-	"keygen":                {words: []string{"keygen"}, host: true, write: true},
+	"keygen":                {method: "desktop.offline-keygen", host: true, write: true},
 	"keys_export":           {method: "desktop.keys-export", write: true, args: []argument{requiredOpt("out", "--out")}},
 	"space_list":            {method: "desktop.space-list"},
 	"space_create":          {method: "desktop.space-create", host: true, write: true, args: []argument{pos("name")}},
