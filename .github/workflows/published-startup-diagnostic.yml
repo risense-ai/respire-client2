@@ -83,7 +83,6 @@ jobs:
       RUNTIME_VERSION: ${{ inputs.runtime_version }}
       TARGET_PLATFORM: ${{ matrix.platform }}
       RUNTIME_TARGET: ${{ matrix.target }}
-      INSTALL_EXACT_RUNTIME: 'true'
     steps:
       - uses: actions/checkout@v7
         with:
@@ -102,11 +101,13 @@ jobs:
         if: runner.os != 'Linux'
         env:
           GH_TOKEN: ${{ github.token }}
+          INSTALL_EXACT_RUNTIME: ${{ inputs.install_exact_runtime }}
         run: python scripts/check-sealed-runtime-lifecycle.py
       - name: Verify a sealed Linux package with the older encrypted library
         if: runner.os == 'Linux'
         env:
           GH_TOKEN: ${{ github.token }}
+          INSTALL_EXACT_RUNTIME: 'true'
           SEED_CLI_SHA256: ${{ matrix.seed_digest }}
           OLDER_CLI_SHA256: ${{ matrix.older_digest }}
         run: |
