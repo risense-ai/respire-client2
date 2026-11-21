@@ -17,19 +17,18 @@ func (m *Manager) installModelEngines(ctx context.Context) (result json.RawMessa
 	if err != nil {
 		return nil, err
 	}
-	install, err := m.lockRuntime(ctx)
-	if err != nil {
-		return nil, err
-	}
-	defer func() { err = errors.Join(err, install.Close()) }()
-
 	takeover, err := m.lockRuntimeTakeover(ctx)
 	if err != nil {
 		return nil, err
 	}
-	root, err := canonicalSessionDirectory(m.DataRoot)
+	install, err := m.lockRuntime(ctx)
 	if err != nil {
 		return nil, errors.Join(err, takeover.Close())
+	}
+	closeLocks := func() error { return errors.Join(install.Close(), takeover.Close()) }
+	root, err := canonicalSessionDirectory(m.DataRoot)
+	if err != nil {
+		return nil, errors.Join(err, closeLocks())
 	}
 	markerPath := filepath.Join(root, "runtime", "autostart", "maintenance.json")
 	var marker []byte
@@ -40,23 +39,23 @@ func (m *Manager) installModelEngines(ctx context.Context) (result json.RawMessa
 	defer func() {
 		// The private child must have exited before we release Paused authority.
 		if err != nil && strings.Contains(err.Error(), "exit unconfirmed") {
-			err = &unconfirmedError{cause: errors.Join(err, takeover.Close())}
+			err = &unconfirmedError{cause: errors.Join(err, closeLocks())}
 			return
 		}
 		if marker != nil {
 			if removeErr := removeOwnedRuntimeAccountRecord(markerPath, marker); removeErr != nil {
-				err = &unconfirmedError{cause: errors.Join(err, removeErr, takeover.Close())}
+				err = &unconfirmedError{cause: errors.Join(err, removeErr, closeLocks())}
 				return
 			}
 		}
 		if !stopped {
-			err = errors.Join(err, takeover.Close())
+			err = errors.Join(err, closeLocks())
 			return
 		}
 		restart, cancel := context.WithTimeout(context.WithoutCancel(ctx), 120*time.Second)
 		defer cancel()
 		active, restoreErr := m.startDetachedLocked(restart, info)
-		restoreErr = errors.Join(restoreErr, takeover.Close())
+		restoreErr = errors.Join(restoreErr, closeLocks())
 		if restoreErr == nil {
 			restoreErr = m.confirmProviderRuntime(restart, info, previous, active, profile)
 		}

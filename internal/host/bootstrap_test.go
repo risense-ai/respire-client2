@@ -21,6 +21,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 )
 
 func TestArchiveStoppedEndpointWithExtendedWindowsProfile(t *testing.T) {
@@ -1229,6 +1230,34 @@ func TestInstallRuntimeIndependently(t *testing.T) {
 		if err := m.RunTask("更新 Runtime", func() error { return errRuntimeUpdateDeferred }); err != nil || m.TaskSnapshot() != before {
 			t.Fatalf("deferred activation must retain previous task state: %v, %+v", err, m.TaskSnapshot())
 		}
+		t.Run("staging releases the installation lock before activation", func(t *testing.T) {
+			fresh := newInstallTestManager(t)
+			fresh.HTTPClient = m.HTTPClient
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			takeover, err := fresh.lockRuntimeTakeover(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer takeover.Close()
+			selected, err := fresh.stageRuntimeRelease(ctx, false, "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := fresh.verifyInstalled(selected); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := fresh.Installed(); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("staging must not activate the release: %v", err)
+			}
+			install, err := fresh.lockRuntime(ctx)
+			if err != nil {
+				t.Fatalf("a host holding takeover must be able to acquire the installation lock: %v", err)
+			}
+			if err := install.Close(); err != nil {
+				t.Fatal(err)
+			}
+		})
 		t.Run("install exact Runtime independently of channel latest", func(t *testing.T) {
 			fresh := newInstallTestManager(t)
 			fresh.HTTPClient = m.HTTPClient

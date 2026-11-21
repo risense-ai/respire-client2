@@ -11,8 +11,17 @@ import (
 	"regexp"
 )
 
-// Only the supervising host can pause its own restart policy.
 func (m *Manager) stopManaged(ctx context.Context, h HealthInfo) error {
+	lock, err := m.lockRuntimeTakeover(ctx)
+	if err != nil {
+		return err
+	}
+	defer lock.Close()
+	return m.stopManagedLocked(ctx, h)
+}
+
+// Only the supervising host can pause its own restart policy.
+func (m *Manager) stopManagedLocked(ctx context.Context, h HealthInfo) error {
 	if h.InstallationRoot == "" || !filepath.IsAbs(h.InstallationRoot) {
 		return errors.New("受监督 Runtime 未报告有效安装根目录")
 	}
@@ -25,15 +34,10 @@ func (m *Manager) stopManaged(ctx context.Context, h HealthInfo) error {
 	if h.ManagedID != "" {
 		return errors.New("请由当前监督宿主暂停自动拉起并停止 Runtime")
 	}
-	lock, err := m.lockRuntimeTakeover(ctx)
-	if err != nil {
-		return err
-	}
-	defer lock.Close()
 	if err := m.stopDetached(ctx, h); err != nil {
 		return err
 	}
-	_, _, err = m.Health(ctx)
+	_, _, err := m.Health(ctx)
 	if IsUnavailable(err) {
 		return nil
 	}
