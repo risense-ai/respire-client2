@@ -16,6 +16,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -851,6 +852,36 @@ func TestRuntimeStartInstallationState(t *testing.T) {
 			t.Fatalf("unlock host failure must not authorize install: %v", err)
 		}
 	})
+}
+
+func TestRuntimeStartupWaitsForTimedOutChildExit(t *testing.T) {
+	if os.Getenv("RESPIRE_TEST_DELAYED_RUNTIME") == "1" {
+		time.Sleep(30 * time.Second)
+		return
+	}
+	m := newInstallTestManager(t)
+	port, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.Endpoint = "http://" + port.Addr().String()
+	if err := port.Close(); err != nil {
+		t.Fatal(err)
+	}
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	child := exec.Command(exe, "-test.run=^TestRuntimeStartupWaitsForTimedOutChildExit$")
+	child.Env = append(os.Environ(), "RESPIRE_TEST_DELAYED_RUNTIME=1")
+	ctx, cancel := context.WithTimeout(context.Background(), 250*time.Millisecond)
+	defer cancel()
+	if _, err := m.launchRuntimeServing(ctx, child); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("startup timeout not reported: %v", err)
+	}
+	if child.ProcessState == nil {
+		t.Fatal("startup returned before the owned launch exited")
+	}
 }
 
 func TestBootstrapPayloadRejectsInvalidLocalComponents(t *testing.T) {

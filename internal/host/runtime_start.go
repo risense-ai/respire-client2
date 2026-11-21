@@ -58,7 +58,7 @@ func (m *Manager) startDetachedLocked(ctx context.Context, info InstalledRuntime
 	return health, m.verifySelectedHealth(health, info)
 }
 
-func (m *Manager) launchRuntimeServing(ctx context.Context, cmd *exec.Cmd) (HealthInfo, error) {
+func (m *Manager) launchRuntimeServing(ctx context.Context, cmd *exec.Cmd) (_ HealthInfo, err error) {
 	if err := ctx.Err(); err != nil {
 		return HealthInfo{}, err
 	}
@@ -72,7 +72,15 @@ func (m *Manager) launchRuntimeServing(ctx context.Context, cmd *exec.Cmd) (Heal
 		return HealthInfo{}, err
 	}
 	exited := make(chan error, 1)
-	go func() { exited <- cmd.Wait() }()
+	go func() {
+		exited <- cmd.Wait()
+		close(exited)
+	}()
+	defer func() {
+		if err != nil {
+			err = errors.Join(err, m.finishFailedRuntimeStart(ctx, cmd.Process, exited))
+		}
+	}()
 
 	ticker := time.NewTicker(100 * time.Millisecond)
 	defer ticker.Stop()
@@ -98,6 +106,36 @@ func (m *Manager) launchRuntimeServing(ctx context.Context, cmd *exec.Cmd) (Heal
 			return HealthInfo{}, fmt.Errorf("Runtime 启动结果未确认，见 %s: %w", log.Name(), ctx.Err())
 		case <-ticker.C:
 		}
+	}
+}
+
+func (m *Manager) finishFailedRuntimeStart(ctx context.Context, child *os.Process, exited <-chan error) error {
+	select {
+	case <-exited:
+		return nil
+	default:
+	}
+	cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), 35*time.Second)
+	defer cancel()
+	probe, cancelProbe := context.WithTimeout(cleanup, 3*time.Second)
+	h, _, err := m.Health(probe)
+	cancelProbe()
+	if err == nil && h.PID == uint32(child.Pid) {
+		// An owned listener may have admitted work. Use its normal drain protocol.
+		if err := m.stopDetached(cleanup, h); err != nil {
+			return fmt.Errorf("Runtime 启动失败后无法确认已排空停止: %w", err)
+		}
+	} else {
+		// Stop only the child we launched, never the process reported by the port.
+		if err := child.Kill(); err != nil && !errors.Is(err, os.ErrProcessDone) {
+			return fmt.Errorf("Runtime 启动失败后无法终止启动进程 %d: %w", child.Pid, err)
+		}
+	}
+	select {
+	case <-exited:
+		return nil
+	case <-cleanup.Done():
+		return fmt.Errorf("Runtime 启动进程 %d 退出未确认: %w", child.Pid, cleanup.Err())
 	}
 }
 
