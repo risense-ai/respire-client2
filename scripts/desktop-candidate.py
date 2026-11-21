@@ -129,14 +129,17 @@ def inputs():
 
 def producer(root):
     repo = os.environ["GITHUB_REPOSITORY"]
+    review_branch = "codex/client2-sealed-review-20261121"
+    require(os.environ["GITHUB_REF"] == "refs/heads/" + review_branch,
+            "Review package verification requires the diagnostic branch")
     run_id, attempt = os.environ["INPUT_RUN_ID"], int(os.environ["INPUT_ATTEMPT"])
     run = gh(f"repos/{repo}/actions/runs/{run_id}/attempts/{attempt}")
     workflow = gh(f"repos/{repo}/actions/workflows/desktop.yml")
     require(run["repository"]["full_name"] == run["head_repository"]["full_name"] == repo
             and run["workflow_id"] == workflow["id"] and run["event"] == "workflow_dispatch"
-            and run["head_branch"] == "main" and run["head_sha"] == os.environ["CANDIDATE_SOURCE"]
+            and run["head_branch"] == review_branch and run["head_sha"] == os.environ["CANDIDATE_SOURCE"]
             and run["run_attempt"] == attempt and run["status"] == "completed"
-            and run["conclusion"] == "success", "Producer is not the successful trusted main attempt/source")
+            and run["conclusion"] == "success", "Producer is not the successful reviewed attempt/source")
     name = f"desktop-package-checks-{attempt}"
     pages = gh("--paginate", "--slurp", f"repos/{repo}/actions/runs/{run_id}/artifacts?per_page=100")
     artifacts = [artifact for page in pages for artifact in page["artifacts"] if artifact["name"] == name]
