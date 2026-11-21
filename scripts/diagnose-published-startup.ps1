@@ -380,8 +380,31 @@ try {
     $legacyRead = Invoke-Child 'legacy_cli_readback' $seedCli @('--client-only','--json','show',$memoryId)
     if ($legacyRead.status -cne 'ok' -or $legacyRead.details.entry.id -cne $memoryId -or
         $legacyRead.details.entry.content -cne $text) { throw 'Legacy CLI readback differs' }
-    Assert-NoManagedCLI 'reconciled_library_without_cli'
     $report.legacy_cli_readback = $true
+    $legacyText = 'older-cli-online-' + [Guid]::NewGuid().ToString('N')
+    $legacyWrite = Invoke-Child 'legacy_cli_online_remember' $seedCli @('--client-only','--json','remember',$legacyText,'--title',$legacyText,'--importance','important','--force')
+    $legacyId = $legacyWrite.summary.id
+    if ($legacyWrite.status -cne 'ok' -or $legacyId -isnot [string] -or -not $legacyId -or $legacyId -ceq $memoryId) {
+        throw 'Legacy CLI online write did not confirm a new memory'
+    }
+    $verifyId = 'older-cli-readback-' + [Guid]::NewGuid().ToString('N')
+    $verify = @{v=1; id=$verifyId; operation_id=$verifyId; idempotency_key=$verifyId; scope=$scope; method='cli.exec'; args=@('--json','show',$legacyId)}
+    $confirmed = Invoke-RestMethod -Uri "http://127.0.0.1:$port/api/rpc" -Method Post -ContentType 'application/json' -Body ($verify | ConvertTo-Json -Depth 5 -Compress) -TimeoutSec 30 -NoProxy
+    if ($confirmed.v -ne 1 -or $confirmed.id -cne $verifyId -or -not $confirmed.ok -or $confirmed.exit -ne 0 -or
+        $confirmed.operation_id -cne $verifyId -or $confirmed.idempotency_key -cne $verifyId -or
+        $confirmed.scope.account_id -cne $scope.account_id -or $confirmed.scope.instance_id -cne $scope.instance_id -or
+        $confirmed.scope.generation -ne $scope.generation -or $confirmed.envelope.status -cne 'ok' -or
+        $confirmed.envelope.details.entry.id -cne $legacyId -or $confirmed.envelope.details.entry.content -cne $legacyText) {
+        throw 'Legacy CLI online write differs on direct RPC readback'
+    }
+    $afterLegacy = Health
+    if ($afterLegacy.pid -ne $health.pid -or $afterLegacy.account_id -cne $scope.account_id -or
+        $afterLegacy.instance_id -cne $scope.instance_id -or $afterLegacy.generation -ne $scope.generation) {
+        throw 'Runtime identity changed during older CLI online operations'
+    }
+    Assert-NoManagedCLI 'reconciled_library_without_cli'
+    $report.legacy_cli_online_remember = $true
+    $report.legacy_cli_online_runtime_identity = $true
     $report.status = 'diagnostic-passed'
     }
 } catch {
@@ -409,6 +432,9 @@ try {
         'Runtime identity changed during readback'='runtime_changed_during_readback'
         'Child operation failed; raw output withheld'='child_operation_failed'
         'Legacy CLI readback differs'='legacy_cli_readback_mismatch'
+        'Legacy CLI online write did not confirm a new memory'='legacy_cli_online_write_unconfirmed'
+        'Legacy CLI online write differs on direct RPC readback'='legacy_cli_online_readback_mismatch'
+        'Runtime identity changed during older CLI online operations'='legacy_cli_online_runtime_changed'
     }
     $report.failure_code = if ($fixedFailures.ContainsKey($_.Exception.Message)) { $fixedFailures[$_.Exception.Message] } else { 'diagnostic_operation_failed' }
     if (-not $report.failure_category) { $report.failure_category = Classify $_.Exception.Message }
