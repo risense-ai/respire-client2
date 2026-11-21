@@ -16,11 +16,13 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 )
 
 func TestArchiveStoppedEndpointWithExtendedWindowsProfile(t *testing.T) {
@@ -100,10 +102,6 @@ func buildRuntimeTree(t *testing.T, dir, target string) (binaryHash string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	target, targetErr := runtimeTarget()
-	if targetErr != nil {
-		t.Fatal(targetErr)
-	}
 	binary := filepath.Join(dir, "rsrs-runtime-"+target)
 	if err := os.WriteFile(binary, b, 0700); err != nil {
 		t.Fatal(err)
@@ -142,7 +140,7 @@ func buildRuntimeTree(t *testing.T, dir, target string) (binaryHash string) {
 // architecture check genuinely passes on the host running the test.
 func buildPayload(t *testing.T, cliVersion string) string {
 	t.Helper()
-	target, err := runtimeTarget()
+	target, err := cliTarget()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -571,7 +569,7 @@ func TestPublishRuntimeStagingAndPromotion(t *testing.T) {
 		if err = m.publishRuntime(meta, stageBootstrapRuntime(payload.Dir), true); err != nil {
 			t.Fatalf("publish failed: %v", err)
 		}
-		if err = verifyRuntime(m.runtimeDir(meta.RuntimeVersion), meta.BinaryHash); err != nil {
+		if err = verifyRuntime(m.runtimeDir(meta.RuntimeVersion), meta.BinaryHash, meta.Target); err != nil {
 			t.Fatalf("published dir must verify: %v", err)
 		}
 		if _, err = os.Stat(filepath.Join(m.runtimeDir(meta.RuntimeVersion), "core-notices")); !errors.Is(err, os.ErrNotExist) {
@@ -790,7 +788,7 @@ func TestRuntimeStartInstallationState(t *testing.T) {
 						t.Fatal(err)
 					}
 				}
-				m.Endpoint = newFakeRuntimeServer(t, filepath.Join(m.runtimeDir("1.0.21"), runtimeBinary()), "").URL
+				m.Endpoint = newFakeRuntimeServer(t, m.DataRoot, filepath.Join(m.runtimeDir("1.0.21"), runtimeBinary()), "").URL
 				err := m.Start()
 				if err == nil || !strings.Contains(err.Error(), "读取 Runtime 安装信息失败") {
 					t.Fatalf("owned Runtime must report a %s selection: %v", name, err)
@@ -809,9 +807,38 @@ func TestRuntimeStartInstallationState(t *testing.T) {
 		if err := writeJSON(m.runtimeManifest(), map[string]any{"version": "invalid"}); err != nil {
 			t.Fatal(err)
 		}
-		m.Endpoint = newFakeRuntimeServer(t, "/external/rsrs-runtime", "").URL
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			lockPath := filepath.Join(m.DataRoot, "bin", "runtime", ".install.lock")
+			lock, err := os.OpenFile(lockPath, os.O_RDWR, 0600)
+			if err != nil {
+				t.Error(err)
+			} else {
+				defer lock.Close()
+				if err := tryRuntimeLock(lock); !errors.Is(err, errRuntimeLocked) {
+					t.Errorf("startup must exclude selection changes during the health check: %v", err)
+				}
+			}
+			fmt.Fprintf(w, `{"server":"respire","v":1,"pid":4242,"exe":"/external/rsrs-runtime","installation_root":%q,"data_dir":%q,"store_ready":true}`, m.DataRoot, m.DataRoot)
+		}))
+		defer srv.Close()
+		m.Endpoint = srv.URL
 		if err := m.Start(); err != nil {
 			t.Fatalf("running external Runtime must not require a local selection: %v", err)
+		}
+	})
+	t.Run("running foreign profile is refused even when unlocked", func(t *testing.T) {
+		m := newInstallTestManager(t)
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Method != http.MethodGet || r.URL.Path != "/api/health" {
+				t.Errorf("unexpected request to another profile: %s %s", r.Method, r.URL.Path)
+			}
+			fmt.Fprintf(w, `{"server":"respire","v":1,"pid":4242,"store_ready":true,"installation_root":%q,"data_dir":%q}`,
+				m.DataRoot, filepath.Join(m.DataRoot, "other-profile"))
+		}))
+		defer srv.Close()
+		m.Endpoint = srv.URL
+		if err := m.Start(); err == nil || !strings.Contains(err.Error(), "其他 Runtime 账户") {
+			t.Fatalf("foreign profile was accepted: %v", err)
 		}
 	})
 	t.Run("unlock failure is not a fresh install", func(t *testing.T) {
@@ -827,8 +854,38 @@ func TestRuntimeStartInstallationState(t *testing.T) {
 	})
 }
 
+func TestRuntimeStartupWaitsForTimedOutChildExit(t *testing.T) {
+	if os.Getenv("RESPIRE_TEST_DELAYED_RUNTIME") == "1" {
+		time.Sleep(30 * time.Second)
+		return
+	}
+	m := newInstallTestManager(t)
+	port, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.Endpoint = "http://" + port.Addr().String()
+	if err := port.Close(); err != nil {
+		t.Fatal(err)
+	}
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	child := exec.Command(exe, "-test.run=^TestRuntimeStartupWaitsForTimedOutChildExit$")
+	child.Env = append(os.Environ(), "RESPIRE_TEST_DELAYED_RUNTIME=1")
+	ctx, cancel := context.WithTimeout(context.Background(), 250*time.Millisecond)
+	defer cancel()
+	if _, err := m.launchRuntimeServing(ctx, child); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("startup timeout not reported: %v", err)
+	}
+	if child.ProcessState == nil {
+		t.Fatal("startup returned before the owned launch exited")
+	}
+}
+
 func TestBootstrapPayloadRejectsInvalidLocalComponents(t *testing.T) {
-	target, err := runtimeTarget()
+	target, err := cliTarget()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -874,19 +931,11 @@ func TestBootstrapPayloadRejectsInvalidLocalComponents(t *testing.T) {
 			if err != nil {
 				return err
 			}
-			target, err := runtimeTarget()
-			if err != nil {
-				return err
-			}
 			return os.WriteFile(path, bytes.Replace(data, []byte(target), []byte("invalid-target"), 1), 0600)
 		}, "embedded payload targets invalid-target, not", false},
 		{"foreign target with invalid channel", func(dir string) error {
 			path := filepath.Join(dir, bootstrapManifestFile)
 			data, err := os.ReadFile(path)
-			if err != nil {
-				return err
-			}
-			target, err := runtimeTarget()
 			if err != nil {
 				return err
 			}
@@ -1021,7 +1070,11 @@ func TestInstallRuntimeIndependently(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		cliMeta := frontendMetadataFixture(target)
+		optionalCLITarget, err := cliTarget()
+		if err != nil {
+			t.Fatal(err)
+		}
+		cliMeta := frontendMetadataFixture(optionalCLITarget)
 		cliMeta["binary_sha256"] = sha256Hex(t, cliBytes)
 		cliMeta["binary_size"] = len(cliBytes)
 		cliJSON, err := json.Marshal(cliMeta)
@@ -1041,7 +1094,7 @@ func TestInstallRuntimeIndependently(t *testing.T) {
 		}
 		cliPrefix := "https://github.com/risense-ai/respire-cli/releases/download/v2.0.0-dev.1/"
 		cliAssets := []map[string]string{
-			{"name": "cli-build-" + target + ".json", "browser_download_url": cliPrefix + "cli-build-" + target + ".json"},
+			{"name": "cli-build-" + optionalCLITarget + ".json", "browser_download_url": cliPrefix + "cli-build-" + optionalCLITarget + ".json"},
 			{"name": cliMeta["binary_file"].(string), "browser_download_url": cliPrefix + cliMeta["binary_file"].(string)},
 		}
 		cliList, err := json.Marshal([]map[string]any{{"tag_name": "v2.0.0-dev.1", "prerelease": true, "assets": cliAssets}})
@@ -1057,8 +1110,13 @@ func TestInstallRuntimeIndependently(t *testing.T) {
 		}
 		retainedMetadataName := "runtime-build-" + target + ".json"
 		retainedMetadataPath := "/risense-ai/respire-runtime/releases/download/" + retainedMeta.Tag + "/" + retainedMetadataName
+		retainedPrefix := "https://github.com" + strings.TrimSuffix(retainedMetadataPath, retainedMetadataName)
 		retainedReleaseJSON, err := json.Marshal(ReleaseInfo{Tag: retainedMeta.Tag, Prerelease: true,
-			Assets: []ReleaseAsset{{Name: retainedMetadataName, URL: "https://github.com" + retainedMetadataPath}}})
+			Assets: []ReleaseAsset{
+				{Name: retainedMetadataName, URL: retainedPrefix + retainedMetadataName},
+				{Name: retainedMeta.Binary, URL: retainedPrefix + retainedMeta.Binary},
+				{Name: retainedMeta.ArchiveFile, URL: retainedPrefix + retainedMeta.ArchiveFile},
+			}})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -1082,7 +1140,7 @@ func TestInstallRuntimeIndependently(t *testing.T) {
 				_, _ = w.Write(retainedReleaseJSON)
 			case name == retainedMetadataPath:
 				_, _ = w.Write(retainedJSON)
-			case strings.HasSuffix(name, "cli-build-"+target+".json"):
+			case strings.HasSuffix(name, "cli-build-"+optionalCLITarget+".json"):
 				_, _ = w.Write(cliJSON)
 			case strings.HasSuffix(name, cliMeta["binary_file"].(string)):
 				_, _ = w.Write(cliBytes)
@@ -1139,7 +1197,7 @@ func TestInstallRuntimeIndependently(t *testing.T) {
 		if err = m.InstallRuntime(true, true); err == nil || !strings.Contains(err.Error(), "不是兼容") {
 			t.Fatalf("incompatible Runtime must block activation: %v", err)
 		}
-		m.Endpoint = newFakeRuntimeServer(t, "/external/rsrs-runtime", "foreign-supervisor").URL
+		m.Endpoint = newFakeRuntimeServer(t, m.DataRoot, "/external/rsrs-runtime", "foreign-supervisor").URL
 		if err = m.InstallRuntime(true, true); err == nil || !strings.Contains(err.Error(), "其他 Runtime 实例") {
 			t.Fatalf("foreign Runtime must block activation: %v", err)
 		}
@@ -1232,6 +1290,50 @@ func TestInstallRuntimeIndependently(t *testing.T) {
 		if err := m.RunTask("更新 Runtime", func() error { return errRuntimeUpdateDeferred }); err != nil || m.TaskSnapshot() != before {
 			t.Fatalf("deferred activation must retain previous task state: %v, %+v", err, m.TaskSnapshot())
 		}
+		t.Run("staging releases the installation lock before activation", func(t *testing.T) {
+			fresh := newInstallTestManager(t)
+			fresh.HTTPClient = m.HTTPClient
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			takeover, err := fresh.lockRuntimeTakeover(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer takeover.Close()
+			selected, err := fresh.stageRuntimeRelease(ctx, false, "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := fresh.verifyInstalled(selected); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := fresh.Installed(); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("staging must not activate the release: %v", err)
+			}
+			install, err := fresh.lockRuntime(ctx)
+			if err != nil {
+				t.Fatalf("a host holding takeover must be able to acquire the installation lock: %v", err)
+			}
+			if err := install.Close(); err != nil {
+				t.Fatal(err)
+			}
+		})
+		t.Run("install exact Runtime independently of channel latest", func(t *testing.T) {
+			fresh := newInstallTestManager(t)
+			fresh.HTTPClient = m.HTTPClient
+			channel := fresh.Preferences().RuntimeChannel
+			queries := runtimeQueries.Load()
+			if err := fresh.InstallRuntimeVersion(retainedMeta.RuntimeVersion); err != nil {
+				t.Fatal(err)
+			}
+			want := InstalledRuntime{Version: retainedMeta.RuntimeVersion, SHA256: binaryHash}
+			if installed, err := fresh.Installed(); err != nil || installed != want {
+				t.Fatalf("exact Runtime selection differs: %+v, %v", installed, err)
+			}
+			if runtimeQueries.Load() != queries || fresh.Preferences().RuntimeChannel != channel {
+				t.Fatal("an exact Runtime installation used or changed the channel")
+			}
+		})
 		denyCLI.Store(false)
 		if err := m.installOnlineCLI(context.Background()); err != nil {
 			t.Fatalf("separate CLI installation failed: %v", err)
@@ -1337,7 +1439,7 @@ func TestInstallRuntimeIndependently(t *testing.T) {
 		t.Run("without restart reuse leaves an older running instance alone", func(t *testing.T) {
 			stubCLIProbe(t, cliProbeFixture{tmpVersion: "2.0.0-dev.1", destVer: "2.0.0-dev.1"})
 			olderExe := filepath.Join(m.runtimeDir("2.0.0-dev.8"), runtimeBinary())
-			m.Endpoint = newFakeRuntimeServer(t, olderExe, "").URL
+			m.Endpoint = newFakeRuntimeServer(t, m.DataRoot, olderExe, "").URL
 			if err := m.InstallRuntime(false, false); err != nil {
 				t.Fatalf("reuse must not try to stop the running instance: %v", err)
 			}
@@ -1359,7 +1461,7 @@ func TestInstallRuntimeIndependently(t *testing.T) {
 		if err = os.Remove(cli); err != nil {
 			t.Fatal(err)
 		}
-		m.Endpoint = newFakeRuntimeServer(t, filepath.Join(m.runtimeDir(meta.RuntimeVersion), runtimeBinary()), "").URL
+		m.Endpoint = newFakeRuntimeServer(t, m.DataRoot, filepath.Join(m.runtimeDir(meta.RuntimeVersion), runtimeBinary()), "").URL
 		if err = m.installOnlineCLI(context.Background()); err != nil {
 			t.Fatalf("online CLI repair with existing Runtime failed: %v", err)
 		}
@@ -1456,14 +1558,14 @@ func sha256Hex(t *testing.T, b []byte) string {
 
 // newFakeRuntimeServer answers /api/health with a minimal valid health
 // identity for the ownership checks.
-func newFakeRuntimeServer(t *testing.T, exe, managedID string) *httptest.Server {
+func newFakeRuntimeServer(t *testing.T, root, exe, managedID string) *httptest.Server {
 	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/api/health" && r.Header.Get("X-Respire-Health") != "runtime-v1" {
 			t.Error("health must request the actual Runtime identity")
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = fmt.Fprintf(w, `{"server":"respire","v":1,"pid":4242,"exe":%q,"managed_id":%q}`, exe, managedID)
+		_, _ = fmt.Fprintf(w, `{"server":"respire","v":1,"pid":4242,"exe":%q,"managed_id":%q,"installation_root":%q,"data_dir":%q}`, exe, managedID, root, root)
 	}))
 	t.Cleanup(srv.Close)
 	return srv

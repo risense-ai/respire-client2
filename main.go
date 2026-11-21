@@ -62,7 +62,14 @@ func headless(m *host.Manager) {
 		err = m.RunTask("停止 Runtime", func() error { return m.Stop(false) })
 	case "install-runtime":
 		err = m.RunTask("安装 Runtime", func() error {
-			return m.InstallRuntime(false, false)
+			switch len(os.Args) {
+			case 3:
+				return m.InstallRuntime(false, false)
+			case 4:
+				return m.InstallRuntimeVersion(os.Args[3])
+			default:
+				return errors.New("用法：--headless install-runtime [version]")
+			}
 		})
 	case "prepare-cli":
 		err = m.InstallCLI(context.Background())

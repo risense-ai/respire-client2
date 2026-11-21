@@ -15,6 +15,10 @@ on:
         description: 'Exact published Runtime version, without v'
         required: true
         type: string
+      install_exact_runtime:
+        description: 'Lifecycle only: install the specified public Runtime instead of resolving the current channel'
+        type: boolean
+        default: false
       cli_run_id:
         description: 'Existing-keys only: Windows CLI artifact run ID'
         type: string
@@ -61,8 +65,8 @@ jobs:
           - {runner: windows-11-arm, platform: windows-arm64, target: aarch64-pc-windows-msvc}
           - {runner: macos-15-intel, platform: darwin-amd64, target: x86_64-apple-darwin}
           - {runner: macos-15, platform: darwin-arm64, target: aarch64-apple-darwin}
-          - {runner: ubuntu-22.04, platform: linux-amd64, target: x86_64-unknown-linux-gnu}
-          - {runner: ubuntu-22.04-arm, platform: linux-arm64, target: aarch64-unknown-linux-gnu}
+          - {runner: ubuntu-22.04, platform: linux-amd64, target: x86_64-unknown-linux-musl}
+          - {runner: ubuntu-22.04-arm, platform: linux-arm64, target: aarch64-unknown-linux-musl}
     env:
       INPUT_RUN_ID: ${{ inputs.client2_run_id }}
       INPUT_ATTEMPT: ${{ inputs.client2_run_attempt }}
@@ -88,6 +92,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           TARGET_PLATFORM: ${{ matrix.platform }}
           RUNTIME_TARGET: ${{ matrix.target }}
+          INSTALL_EXACT_RUNTIME: ${{ inputs.install_exact_runtime }}
         run: python scripts/check-sealed-runtime-lifecycle.py
       - uses: actions/upload-artifact@v7
         if: always()

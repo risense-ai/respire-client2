@@ -47,7 +47,7 @@ func acceptsRuntimeBinary(name string) bool {
 	return samePath(name, runtimeBinary()) || samePath(name, cliBinary())
 }
 
-func runtimeTarget() (string, error) {
+func cliTarget() (string, error) {
 	target := map[string]string{
 		"windows-amd64": "x86_64-pc-windows-msvc",
 		"windows-arm64": "aarch64-pc-windows-msvc",
@@ -60,6 +60,14 @@ func runtimeTarget() (string, error) {
 		return "", fmt.Errorf("没有为 %s 配置 CLI 发布目标", Platform())
 	}
 	return target, nil
+}
+
+func runtimeTarget() (string, error) {
+	target, err := cliTarget()
+	if err != nil {
+		return "", err
+	}
+	return strings.Replace(target, "-linux-gnu", "-linux-musl", 1), nil
 }
 
 func samePath(a, b string) bool {

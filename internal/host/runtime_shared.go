@@ -48,31 +48,38 @@ func runtimeReceipt(meta RuntimeMetadata) (sharedRuntimeReceipt, error) {
 	sum := sha256.Sum256([]byte(meta.ProofJSON))
 	receipt := sharedRuntimeReceipt{Version: meta.RuntimeVersion, SHA256: meta.BinaryHash,
 		Release: &releaseProof{Hash: hex.EncodeToString(sum[:]), JSON: meta.ProofJSON}}
-	_, err := receiptFiles(receipt)
+	_, _, err := receiptFiles(receipt)
 	return receipt, err
 }
 
-func receiptFiles(receipt sharedRuntimeReceipt) ([]releaseFile, error) {
+func receiptFiles(receipt sharedRuntimeReceipt) ([]releaseFile, RuntimeMetadata, error) {
 	if !validVersion(receipt.Version) || !validHash(receipt.SHA256) || receipt.Release == nil || len(receipt.Release.JSON) > 2<<20 {
-		return nil, errors.New("Runtime 缺少完整发布凭据，请重新安装可信发布包")
+		return nil, RuntimeMetadata{}, errors.New("Runtime 缺少完整发布凭据，请重新安装可信发布包")
 	}
 	sum := sha256.Sum256([]byte(receipt.Release.JSON))
 	if !strings.EqualFold(hex.EncodeToString(sum[:]), receipt.Release.Hash) {
-		return nil, errors.New("Runtime 发布凭据摘要不匹配")
+		return nil, RuntimeMetadata{}, errors.New("Runtime 发布凭据摘要不匹配")
 	}
 	meta, err := NormalizeRuntimeMetadata([]byte(receipt.Release.JSON))
 	if err != nil {
-		return nil, err
+		return nil, RuntimeMetadata{}, err
 	}
 	target, err := runtimeTarget()
 	if err != nil {
-		return nil, err
+		return nil, RuntimeMetadata{}, err
 	}
-	if err = CheckRuntimeMetadata(meta, "v"+receipt.Version, target); err != nil {
-		return nil, err
+	// Previously installed GNU releases still require their exact authenticated target.
+	if meta.Target != target {
+		previousTarget, err := cliTarget()
+		if err != nil || meta.Target != previousTarget {
+			return nil, RuntimeMetadata{}, errors.New("Runtime 发布凭据目标与当前平台不匹配")
+		}
+	}
+	if err = CheckRuntimeMetadata(meta, "v"+receipt.Version, meta.Target); err != nil {
+		return nil, RuntimeMetadata{}, err
 	}
 	if meta.Schema != 2 || !strings.EqualFold(meta.BinaryHash, receipt.SHA256) {
-		return nil, errors.New("Runtime 发布凭据与版本选择不匹配")
+		return nil, RuntimeMetadata{}, errors.New("Runtime 发布凭据与版本选择不匹配")
 	}
 	var inventory struct {
 		Files    []releaseFile `json:"files"`
@@ -83,34 +90,34 @@ func receiptFiles(receipt sharedRuntimeReceipt) ([]releaseFile, error) {
 		} `json:"protocol_range"`
 	}
 	if err = json.Unmarshal([]byte(receipt.Release.JSON), &inventory); err != nil {
-		return nil, err
+		return nil, RuntimeMetadata{}, err
 	}
 	if len(inventory.Commit) != 40 || inventory.Protocol.Minimum < 1 || inventory.Protocol.Maximum < inventory.Protocol.Minimum || len(inventory.Files) == 0 || len(inventory.Files) > 4096 {
-		return nil, errors.New("Runtime 发布凭据缺少完整文件清单或有效协议范围")
+		return nil, RuntimeMetadata{}, errors.New("Runtime 发布凭据缺少完整文件清单或有效协议范围")
 	}
 	if _, err = hex.DecodeString(inventory.Commit); err != nil {
-		return nil, errors.New("Runtime 发布提交标识无效")
+		return nil, RuntimeMetadata{}, errors.New("Runtime 发布提交标识无效")
 	}
 	seen := map[string]bool{}
 	var total int64
 	for i := range inventory.Files {
 		file := &inventory.Files[i]
 		if !filepath.IsLocal(filepath.FromSlash(file.Path)) || strings.ContainsAny(file.Path, "\\:") || !validHash(file.Hash) || file.Size <= 0 || file.Size > 256<<20 || seen[strings.ToLower(file.Path)] {
-			return nil, errors.New("Runtime 发布文件清单无效")
+			return nil, RuntimeMetadata{}, errors.New("Runtime 发布文件清单无效")
 		}
 		seen[strings.ToLower(file.Path)] = true
 		total += file.Size
 		if file.Path == meta.Binary {
 			if !strings.EqualFold(file.Hash, receipt.SHA256) {
-				return nil, errors.New("Runtime 发布文件与程序摘要不匹配")
+				return nil, RuntimeMetadata{}, errors.New("Runtime 发布文件与程序摘要不匹配")
 			}
 			file.Path = runtimeBinary()
 		}
 	}
 	if total > 512<<20 || !seen[strings.ToLower(meta.Binary)] || !seen["core-runtime.json"] {
-		return nil, errors.New("Runtime 发布文件清单不完整")
+		return nil, RuntimeMetadata{}, errors.New("Runtime 发布文件清单不完整")
 	}
-	return inventory.Files, nil
+	return inventory.Files, meta, nil
 }
 
 func regularRuntimeFile(root, name string) (string, error) {
@@ -136,11 +143,7 @@ func regularRuntimeFile(root, name string) (string, error) {
 }
 
 func copyReleaseTree(source, dest string, receipt sharedRuntimeReceipt) error {
-	files, err := receiptFiles(receipt)
-	if err != nil {
-		return err
-	}
-	target, err := runtimeTarget()
+	files, meta, err := receiptFiles(receipt)
 	if err != nil {
 		return err
 	}
@@ -148,7 +151,7 @@ func copyReleaseTree(source, dest string, receipt sharedRuntimeReceipt) error {
 		name := file.Path
 		if name == runtimeBinary() {
 			if _, err := os.Stat(filepath.Join(source, name)); errors.Is(err, os.ErrNotExist) {
-				name = "rsrs-runtime-" + target + binaryExtension()
+				name = meta.Binary
 			}
 		}
 		if strings.HasPrefix(name, "core-notices/") {
@@ -192,7 +195,7 @@ func copyReleaseTree(source, dest string, receipt sharedRuntimeReceipt) error {
 }
 
 func verifyReleaseTree(dir string, receipt sharedRuntimeReceipt) error {
-	files, err := receiptFiles(receipt)
+	files, meta, err := receiptFiles(receipt)
 	if err != nil {
 		return err
 	}
@@ -233,7 +236,7 @@ func verifyReleaseTree(dir string, receipt sharedRuntimeReceipt) error {
 	}); err != nil {
 		return err
 	}
-	return verifyRuntime(dir, receipt.SHA256)
+	return verifyRuntime(dir, receipt.SHA256, meta.Target)
 }
 
 func (m *Manager) selectRuntime(info InstalledRuntime) error {

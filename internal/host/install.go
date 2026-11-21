@@ -84,7 +84,7 @@ func extractRuntime(archive, dir string) error {
 	}
 }
 
-func verifyRuntime(dir, binaryHash string) error {
+func verifyRuntime(dir, binaryHash, target string) error {
 	hash, err := fileHash(filepath.Join(dir, runtimeBinary()))
 	if err != nil {
 		return err
@@ -93,10 +93,6 @@ func verifyRuntime(dir, binaryHash string) error {
 		return errors.New("installed Runtime hash mismatch")
 	}
 	if err := verifyExecutable(filepath.Join(dir, runtimeBinary())); err != nil {
-		return err
-	}
-	cliTarget, err := runtimeTarget()
-	if err != nil {
 		return err
 	}
 	var manifest struct {
@@ -114,7 +110,7 @@ func verifyRuntime(dir, binaryHash string) error {
 	if err = json.Unmarshal(b, &manifest); err != nil {
 		return err
 	}
-	if manifest.Schema != 1 || manifest.Target != cliTarget || len(manifest.Files) == 0 {
+	if manifest.Schema != 1 || manifest.Target != target || len(manifest.Files) == 0 {
 		return errors.New("invalid core-runtime manifest")
 	}
 	for _, file := range manifest.Files {
@@ -175,7 +171,7 @@ func (m *Manager) publishRuntime(meta RuntimeMetadata, fill func(stage string) e
 	if reportProgress {
 		m.progress("校验并准备 Runtime", 0, 0)
 	}
-	if err = verifyRuntime(stage, meta.BinaryHash); err != nil {
+	if err = verifyRuntime(stage, meta.BinaryHash, meta.Target); err != nil {
 		return err
 	}
 	clean, err := os.MkdirTemp(versions, ".verified-*")
@@ -264,56 +260,111 @@ func (m *Manager) InstallCLI(ctx context.Context) error {
 }
 
 func (m *Manager) InstallRuntime(automatic bool, restart bool) error {
+	return m.installRuntime(automatic, restart, "")
+}
+
+// InstallRuntimeVersion installs a public Runtime release by explicit request.
+// It preserves the component channel and leaves any running instance alone.
+func (m *Manager) InstallRuntimeVersion(version string) error {
+	if !validVersion(version) {
+		return errors.New("无效的 Runtime 版本")
+	}
+	return m.installRuntime(false, false, version)
+}
+
+func (m *Manager) installRuntime(automatic, restart bool, version string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
 	defer cancel()
-	lock, err := m.lockRuntime(ctx)
+	selected, err := m.stageRuntimeRelease(ctx, automatic, version)
 	if err != nil {
 		return err
 	}
-	defer lock.Close()
-
-	release, meta, err := m.LatestRuntime(ctx)
-	if err != nil {
-		return err
-	}
-
-	// Publishing a verified version directory does not require the lifecycle task.
-	if err := m.publishRuntime(meta, m.stageDownloadRuntime(ctx, release, meta, !automatic), !automatic); err != nil {
-		return err
-	}
-	previous, previousErr := m.Installed()
-	selected := InstalledRuntime{Version: meta.RuntimeVersion, SHA256: meta.BinaryHash}
-	if automatic && previousErr == nil && previous == selected && !restart {
+	previous, err := m.Installed()
+	if automatic && !restart && err == nil && previous == selected {
 		return nil
 	}
 	apply := func() error {
-		if previousErr != nil && !errors.Is(previousErr, os.ErrNotExist) &&
-			(automatic || !errors.Is(previousErr, errInvalidRuntimeSelection)) {
-			return fmt.Errorf("已暂存 Runtime，但无法读取当前选择: %w", previousErr)
+		active, err := m.applyRuntimeRelease(ctx, selected, automatic, restart, version != "")
+		if err != nil || !restart {
+			return err
 		}
-		if automatic && errors.Is(previousErr, os.ErrNotExist) {
-			return errRuntimeUpdateDeferred
-		}
-		if previousErr == nil {
-			newerSelection := semver.Compare("v"+previous.Version, "v"+selected.Version) > 0
-			if newerSelection || (automatic && previous != selected) {
-				if err := m.verifyInstalled(previous); err != nil {
-					return fmt.Errorf("已暂存 Runtime，但无法验证当前选择: %w", err)
-				}
-			}
-			if newerSelection {
-				if automatic {
-					return errRuntimeUpdateDeferred
-				}
-				selected = previous
-			}
-		}
-		return m.activateRuntimeRelease(ctx, selected, automatic, restart, previousErr == nil && previous == selected)
+		return m.unlockIfNeeded(active)
 	}
 	if automatic {
 		return m.RunTask("更新 Runtime", apply)
 	}
 	return apply()
+}
+
+func (m *Manager) stageRuntimeRelease(ctx context.Context, automatic bool, version string) (InstalledRuntime, error) {
+	lock, err := m.lockRuntime(ctx)
+	if err != nil {
+		return InstalledRuntime{}, err
+	}
+	defer lock.Close()
+
+	var release ReleaseInfo
+	var meta RuntimeMetadata
+	if version == "" {
+		release, meta, err = m.LatestRuntime(ctx)
+	} else {
+		release, meta, err = m.runtimeReleaseVersion(ctx, version)
+	}
+	if err != nil {
+		return InstalledRuntime{}, err
+	}
+
+	// Publishing a verified version directory does not require the lifecycle task.
+	if err := m.publishRuntime(meta, m.stageDownloadRuntime(ctx, release, meta, !automatic), !automatic); err != nil {
+		return InstalledRuntime{}, err
+	}
+	return InstalledRuntime{Version: meta.RuntimeVersion, SHA256: meta.BinaryHash}, nil
+}
+
+func (m *Manager) applyRuntimeRelease(ctx context.Context, selected InstalledRuntime, automatic, restart, exact bool) (HealthInfo, error) {
+	// CLI startup may resolve or install Runtime under takeover. Use the same
+	// ordering and keep takeover across stop, selection and startup.
+	if restart {
+		takeover, err := m.lockRuntimeTakeover(ctx)
+		if err != nil {
+			return HealthInfo{}, err
+		}
+		defer takeover.Close()
+	}
+	install, err := m.lockRuntime(ctx)
+	if err != nil {
+		return HealthInfo{}, err
+	}
+	defer install.Close()
+	if err := m.verifyInstalled(selected); err != nil {
+		return HealthInfo{}, err
+	}
+	previous, previousErr := m.Installed()
+	if previousErr != nil && !errors.Is(previousErr, os.ErrNotExist) &&
+		(automatic || !errors.Is(previousErr, errInvalidRuntimeSelection)) {
+		return HealthInfo{}, fmt.Errorf("已暂存 Runtime，但无法读取当前选择: %w", previousErr)
+	}
+	if automatic && errors.Is(previousErr, os.ErrNotExist) {
+		return HealthInfo{}, errRuntimeUpdateDeferred
+	}
+	if previousErr == nil {
+		newerSelection := semver.Compare("v"+previous.Version, "v"+selected.Version) > 0
+		if newerSelection || (automatic && previous != selected) {
+			if err := m.verifyInstalled(previous); err != nil {
+				return HealthInfo{}, fmt.Errorf("已暂存 Runtime，但无法验证当前选择: %w", err)
+			}
+		}
+		if newerSelection {
+			if automatic {
+				return HealthInfo{}, errRuntimeUpdateDeferred
+			}
+			if exact {
+				return HealthInfo{}, fmt.Errorf("已暂存 Runtime %s，当前已选择较新版本 %s", selected.Version, previous.Version)
+			}
+			selected = previous
+		}
+	}
+	return m.activateRuntimeRelease(ctx, selected, automatic, restart, previousErr == nil && previous == selected)
 }
 
 var errRuntimeUpdateDeferred = errors.New("Runtime update deferred while requests are active")
@@ -324,9 +375,9 @@ func (m *Manager) runtimeMatchesRelease(h HealthInfo, selected InstalledRuntime)
 		samePath(h.Exe, filepath.Join(m.runtimeDir(selected.Version), runtimeBinary()))
 }
 
-func (m *Manager) activateRuntimeRelease(ctx context.Context, selected InstalledRuntime, automatic, restart, alreadySelected bool) error {
+func (m *Manager) activateRuntimeRelease(ctx context.Context, selected InstalledRuntime, automatic, restart, alreadySelected bool) (HealthInfo, error) {
 	if !automatic && !restart {
-		return m.selectRuntime(selected)
+		return HealthInfo{}, m.selectRuntime(selected)
 	}
 
 	healthCtx, cancelHealth := context.WithTimeout(ctx, 3*time.Second)
@@ -334,30 +385,30 @@ func (m *Manager) activateRuntimeRelease(ctx context.Context, selected Installed
 	cancelHealth()
 	if err == nil {
 		if automatic && alreadySelected && m.runtimeMatchesRelease(h, selected) {
-			return errRuntimeUpdateDeferred
+			return HealthInfo{}, errRuntimeUpdateDeferred
 		}
 		if !m.Owns(h.Exe) || !samePath(h.InstallationRoot, m.DataRoot) {
-			return errors.New("RPC 端口由其他 Runtime 实例使用，已保留暂存包")
+			return HealthInfo{}, errors.New("RPC 端口由其他 Runtime 实例使用，已保留暂存包")
 		}
 		if h.ManagedID != "" {
-			return errors.New("Runtime 由 CLI 的系统监督器管理，请通过 CLI 切换版本")
+			return HealthInfo{}, errors.New("Runtime 由 CLI 的系统监督器管理，请通过 CLI 切换版本")
 		}
 		if err := verifyHostProcess(h); err != nil {
-			return fmt.Errorf("无法确认当前 Runtime 进程，已保留暂存包: %w", err)
+			return HealthInfo{}, fmt.Errorf("无法确认当前 Runtime 进程，已保留暂存包: %w", err)
 		}
 	} else if !IsUnavailable(err) {
-		return err
+		return HealthInfo{}, err
 	} else if automatic {
-		return errRuntimeUpdateDeferred
+		return HealthInfo{}, errRuntimeUpdateDeferred
 	}
 	if m.HasActiveOperations() {
 		if automatic {
-			return errRuntimeUpdateDeferred
+			return HealthInfo{}, errRuntimeUpdateDeferred
 		}
-		return errors.New("客户端业务操作尚未完成，已保留暂存包")
+		return HealthInfo{}, errors.New("客户端业务操作尚未完成，已保留暂存包")
 	}
 	if !restart {
-		return m.selectRuntime(selected)
+		return HealthInfo{}, m.selectRuntime(selected)
 	}
 	if automatic {
 		var load struct {
@@ -367,32 +418,32 @@ func (m *Manager) activateRuntimeRelease(ctx context.Context, selected Installed
 			} `json:"rpc"`
 		}
 		if err := json.Unmarshal(body, &load); err != nil {
-			return err
+			return HealthInfo{}, err
 		}
 		if load.RPC.Running == nil || load.RPC.Queued == nil {
-			return errors.New("Runtime 未报告队列状态，无法确认空闲")
+			return HealthInfo{}, errors.New("Runtime 未报告队列状态，无法确认空闲")
 		}
 		if *load.RPC.Running > 0 || *load.RPC.Queued > 0 {
-			return errRuntimeUpdateDeferred
+			return HealthInfo{}, errRuntimeUpdateDeferred
 		}
 	}
 	if h.PID != 0 && !m.runtimeMatchesRelease(h, selected) {
 		m.progress("等待 Runtime 停止", 0, 0)
-		if err := m.stopManaged(ctx, h); err != nil {
-			return err
+		if err := m.stopManagedLocked(ctx, h); err != nil {
+			return HealthInfo{}, err
 		}
 	}
 	if err := m.selectRuntime(selected); err != nil {
-		return err
+		return HealthInfo{}, err
 	}
 	startCtx, cancelStart := context.WithTimeout(ctx, 90*time.Second)
 	defer cancelStart()
-	active, err := m.startDetached(startCtx, selected)
+	active, err := m.startDetachedLocked(startCtx, selected)
 	if err != nil {
-		return fmt.Errorf("新版 Runtime 启动失败，已保留新版选择和原始错误: %w", err)
+		return HealthInfo{}, fmt.Errorf("新版 Runtime 启动失败，已保留新版选择和原始错误: %w", err)
 	}
 	if !m.runtimeMatchesRelease(active, selected) {
-		return errors.New("新版 Runtime 未通过启动验证，已保留新版选择")
+		return HealthInfo{}, errors.New("新版 Runtime 未通过启动验证，已保留新版选择")
 	}
-	return m.unlockIfNeeded(active)
+	return active, nil
 }

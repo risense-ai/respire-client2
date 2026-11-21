@@ -159,27 +159,7 @@ func (d *desktop) handler(static http.Handler) http.Handler {
 					go d.task("安装 / 更新 Runtime", func() error { return d.m.InstallRuntime(false, false) })
 					result = "已请求安装 / 更新"
 				case "/api/runtime-restart":
-					// Restart & apply: gracefully stop the running instance and
-					// start the newly installed version the pointer now names.
-					go d.task("重启并应用 Runtime", func() error {
-						if err := d.m.Stop(true); err != nil {
-							return err
-						}
-						if err := d.m.Start(); err != nil {
-							return err
-						}
-						ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-						defer cancel()
-						h, _, healthErr := d.m.Health(ctx)
-						cancel()
-						if healthErr != nil {
-							return healthErr
-						}
-						if !d.m.Owns(h.Exe) {
-							return errors.New("Runtime 已启动，但不是客户端管理的版本")
-						}
-						return nil
-					})
+					go d.task("重启并应用 Runtime", d.m.Restart)
 					result = "正在重启 Runtime"
 				case "/api/client-check":
 					go d.checkClient(false)
