@@ -34,6 +34,11 @@ func (m *Manager) stopManagedLocked(ctx context.Context, h HealthInfo) error {
 	if h.ManagedID != "" {
 		return errors.New("请由当前监督宿主暂停自动拉起并停止 Runtime")
 	}
+	if samePath(h.InstallationRoot, m.DataRoot) {
+		if err := m.verifyRuntimeProfile(h); err != nil {
+			return err
+		}
+	}
 	if err := m.stopDetached(ctx, h); err != nil {
 		return err
 	}

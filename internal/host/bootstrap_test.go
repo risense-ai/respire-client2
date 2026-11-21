@@ -787,7 +787,7 @@ func TestRuntimeStartInstallationState(t *testing.T) {
 						t.Fatal(err)
 					}
 				}
-				m.Endpoint = newFakeRuntimeServer(t, filepath.Join(m.runtimeDir("1.0.21"), runtimeBinary()), "").URL
+				m.Endpoint = newFakeRuntimeServer(t, m.DataRoot, filepath.Join(m.runtimeDir("1.0.21"), runtimeBinary()), "").URL
 				err := m.Start()
 				if err == nil || !strings.Contains(err.Error(), "读取 Runtime 安装信息失败") {
 					t.Fatalf("owned Runtime must report a %s selection: %v", name, err)
@@ -806,9 +806,38 @@ func TestRuntimeStartInstallationState(t *testing.T) {
 		if err := writeJSON(m.runtimeManifest(), map[string]any{"version": "invalid"}); err != nil {
 			t.Fatal(err)
 		}
-		m.Endpoint = newFakeRuntimeServer(t, "/external/rsrs-runtime", "").URL
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			lockPath := filepath.Join(m.DataRoot, "bin", "runtime", ".install.lock")
+			lock, err := os.OpenFile(lockPath, os.O_RDWR, 0600)
+			if err != nil {
+				t.Error(err)
+			} else {
+				defer lock.Close()
+				if err := tryRuntimeLock(lock); !errors.Is(err, errRuntimeLocked) {
+					t.Errorf("startup must exclude selection changes during the health check: %v", err)
+				}
+			}
+			fmt.Fprintf(w, `{"server":"respire","v":1,"pid":4242,"exe":"/external/rsrs-runtime","installation_root":%q,"data_dir":%q,"store_ready":true}`, m.DataRoot, m.DataRoot)
+		}))
+		defer srv.Close()
+		m.Endpoint = srv.URL
 		if err := m.Start(); err != nil {
 			t.Fatalf("running external Runtime must not require a local selection: %v", err)
+		}
+	})
+	t.Run("running foreign profile is refused even when unlocked", func(t *testing.T) {
+		m := newInstallTestManager(t)
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Method != http.MethodGet || r.URL.Path != "/api/health" {
+				t.Errorf("unexpected request to another profile: %s %s", r.Method, r.URL.Path)
+			}
+			fmt.Fprintf(w, `{"server":"respire","v":1,"pid":4242,"store_ready":true,"installation_root":%q,"data_dir":%q}`,
+				m.DataRoot, filepath.Join(m.DataRoot, "other-profile"))
+		}))
+		defer srv.Close()
+		m.Endpoint = srv.URL
+		if err := m.Start(); err == nil || !strings.Contains(err.Error(), "其他 Runtime 账户") {
+			t.Fatalf("foreign profile was accepted: %v", err)
 		}
 	})
 	t.Run("unlock failure is not a fresh install", func(t *testing.T) {
@@ -1137,7 +1166,7 @@ func TestInstallRuntimeIndependently(t *testing.T) {
 		if err = m.InstallRuntime(true, true); err == nil || !strings.Contains(err.Error(), "不是兼容") {
 			t.Fatalf("incompatible Runtime must block activation: %v", err)
 		}
-		m.Endpoint = newFakeRuntimeServer(t, "/external/rsrs-runtime", "foreign-supervisor").URL
+		m.Endpoint = newFakeRuntimeServer(t, m.DataRoot, "/external/rsrs-runtime", "foreign-supervisor").URL
 		if err = m.InstallRuntime(true, true); err == nil || !strings.Contains(err.Error(), "其他 Runtime 实例") {
 			t.Fatalf("foreign Runtime must block activation: %v", err)
 		}
@@ -1379,7 +1408,7 @@ func TestInstallRuntimeIndependently(t *testing.T) {
 		t.Run("without restart reuse leaves an older running instance alone", func(t *testing.T) {
 			stubCLIProbe(t, cliProbeFixture{tmpVersion: "2.0.0-dev.1", destVer: "2.0.0-dev.1"})
 			olderExe := filepath.Join(m.runtimeDir("2.0.0-dev.8"), runtimeBinary())
-			m.Endpoint = newFakeRuntimeServer(t, olderExe, "").URL
+			m.Endpoint = newFakeRuntimeServer(t, m.DataRoot, olderExe, "").URL
 			if err := m.InstallRuntime(false, false); err != nil {
 				t.Fatalf("reuse must not try to stop the running instance: %v", err)
 			}
@@ -1401,7 +1430,7 @@ func TestInstallRuntimeIndependently(t *testing.T) {
 		if err = os.Remove(cli); err != nil {
 			t.Fatal(err)
 		}
-		m.Endpoint = newFakeRuntimeServer(t, filepath.Join(m.runtimeDir(meta.RuntimeVersion), runtimeBinary()), "").URL
+		m.Endpoint = newFakeRuntimeServer(t, m.DataRoot, filepath.Join(m.runtimeDir(meta.RuntimeVersion), runtimeBinary()), "").URL
 		if err = m.installOnlineCLI(context.Background()); err != nil {
 			t.Fatalf("online CLI repair with existing Runtime failed: %v", err)
 		}
@@ -1498,14 +1527,14 @@ func sha256Hex(t *testing.T, b []byte) string {
 
 // newFakeRuntimeServer answers /api/health with a minimal valid health
 // identity for the ownership checks.
-func newFakeRuntimeServer(t *testing.T, exe, managedID string) *httptest.Server {
+func newFakeRuntimeServer(t *testing.T, root, exe, managedID string) *httptest.Server {
 	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/api/health" && r.Header.Get("X-Respire-Health") != "runtime-v1" {
 			t.Error("health must request the actual Runtime identity")
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = fmt.Fprintf(w, `{"server":"respire","v":1,"pid":4242,"exe":%q,"managed_id":%q}`, exe, managedID)
+		_, _ = fmt.Fprintf(w, `{"server":"respire","v":1,"pid":4242,"exe":%q,"managed_id":%q,"installation_root":%q,"data_dir":%q}`, exe, managedID, root, root)
 	}))
 	t.Cleanup(srv.Close)
 	return srv

@@ -12,15 +12,6 @@ import (
 	"time"
 )
 
-func (m *Manager) startDetached(ctx context.Context, info InstalledRuntime) (HealthInfo, error) {
-	lock, err := m.lockRuntimeTakeover(ctx)
-	if err != nil {
-		return HealthInfo{}, err
-	}
-	defer lock.Close()
-	return m.startDetachedLocked(ctx, info)
-}
-
 func (m *Manager) startDetachedLocked(ctx context.Context, info InstalledRuntime) (HealthInfo, error) {
 	selected, err := m.Installed()
 	if err != nil {

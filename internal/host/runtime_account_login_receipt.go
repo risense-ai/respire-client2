@@ -5,7 +5,6 @@ package host
 import (
 	"encoding/json"
 	"errors"
-	"os"
 	"path/filepath"
 	"strings"
 )
@@ -46,39 +45,6 @@ func verifyRuntimeLoginTarget(record runtimeAccountRecord, receipt runtimeLoginR
 		return "", errors.New("Runtime login target session identity differs from its receipt")
 	}
 	return actual, nil
-}
-
-func selectedRuntimeLoginProfile(root string) (string, error) {
-	selected := root
-	raw, err := readCredentialConfig(filepath.Join(root, "client.json"), 1<<20)
-	if err != nil && !errors.Is(err, os.ErrNotExist) {
-		return "", err
-	}
-	if err == nil {
-		var fields map[string]json.RawMessage
-		if json.Unmarshal(raw, &fields) != nil || fields == nil {
-			return "", errors.New("Cannot verify the selected Runtime account in client.json")
-		}
-		if field, present := fields["data_dir"]; present {
-			var directory *string
-			if json.Unmarshal(field, &directory) != nil || directory == nil ||
-				(*directory != "" && !filepath.IsAbs(*directory)) {
-				return "", errors.New("Invalid selected Runtime account path")
-			}
-			if *directory != "" {
-				selected = *directory
-			}
-		}
-	}
-	chosen, err := canonicalSessionDirectory(selected)
-	if err != nil {
-		return "", err
-	}
-	relative, err := filepath.Rel(root, chosen)
-	if err != nil || !filepath.IsLocal(relative) || !samePath(chosen, selected) {
-		return "", errors.New("Selected Runtime account is outside its installation or was redirected")
-	}
-	return chosen, nil
 }
 
 type runtimeLoginReceipt struct {
