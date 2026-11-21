@@ -244,12 +244,24 @@ def check_linux_key_handoff(root, env, seed, client, health, assert_runtime_only
 
             def seed_command(label, *args):
                 result = subprocess.run([seed, *args], env=env, cwd=root, capture_output=True, timeout=300)
-                require(result.returncode == 0 and json.loads(result.stdout).get("status") == "ok",
-                        f"CLI fixture {label} failed with exit {result.returncode}")
+                require(result.returncode == 0, f"CLI fixture {label} failed with exit {result.returncode}")
+                envelope = json.loads(result.stdout)
+                require(envelope.get("status") == "ok", f"CLI fixture {label} returned a failure envelope")
+                return envelope
 
             env["RSRS_M3_DIR"] = str(root / "models" / "bge-m3")
             seed_command("model preparation", "--direct", "model", "install-m3", "--json")
             seed_command("offline keygen", "--json", "keygen", "--pass", "Isolated-" + uuid.uuid4().hex)
+            old_text = "linux-legacy-" + uuid.uuid4().hex
+            seed_command("start", "--json", "runtime", "start")
+            try:
+                legacy = health()
+                require(legacy["store_ready"] and legacy["credential_state"] == "available",
+                        "Original host did not open the seed library")
+                old_id = seed_command("remember", "--client-only", "--json", "remember", old_text,
+                                      "--title", old_text, "--importance", "important", "--force")["summary"]["id"]
+            finally:
+                seed_command("stop", "--json", "runtime", "stop")
             seed.unlink()
             require(shutil.which("rsrs", path=env["PATH"]) is None and assert_runtime_only(),
                     "CLI must be absent before reopening the seed library")
@@ -276,7 +288,12 @@ def check_linux_key_handoff(root, env, seed, client, health, assert_runtime_only
             client("start")
             try:
                 first = health()
-                require(first["store_ready"] and first["credential_state"] == "available", "Initial host key handoff failed")
+                require(first["store_ready"] and first["credential_state"] == "available"
+                        and first["account_id"] == legacy["account_id"] and first["instance_id"] != legacy["instance_id"],
+                        "Initial host key handoff failed")
+                old_entry = business(first, "show", old_id)["details"]["entry"]
+                require(old_entry["id"] == old_id and old_entry["content"] == old_text, "Legacy library readback differs")
+                checks.append("legacy_library_readback_without_cli")
                 memory_id = business(first, "remember", text, "--title", text, "--importance", "important", "--force")["summary"]["id"]
             finally:
                 client("stop")
