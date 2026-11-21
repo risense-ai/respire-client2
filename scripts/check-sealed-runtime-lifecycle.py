@@ -1,4 +1,4 @@
-"""Exercise sealed Client2 without an account or CLI on a fresh hosted runner."""
+"""Exercise Client2 without CLI on a fresh hosted runner."""
 
 import hashlib
 import json
@@ -10,7 +10,9 @@ import socket
 import subprocess
 import tarfile
 import tempfile
+import time
 import urllib.request
+import uuid
 
 
 def require(condition, message):
@@ -193,10 +195,113 @@ def check(report):
         require(assert_runtime_only() == expected, "Runtime selection or CLI absence changed")
         checks.append("owned_stop_drained_no_cli")
 
+        if "SEED_CLI" in os.environ:
+            require(platform.startswith("linux-") and install_exact, "Linux seed requires exact Runtime selection")
+            seed = Path(os.environ["SEED_CLI"]).resolve()
+            require(seed.parent == Path(os.environ["RUNNER_TEMP"]).resolve()
+                    and digest(seed) == os.environ["SEED_CLI_SHA256"], "Incorrect isolated CLI seed")
+            report["seed_cli"] = {"name": seed.name, "sha256": digest(seed)}
+            check_linux_key_handoff(root, child_env, seed, client, health, assert_runtime_only, opener, port, checks)
+
+
+def check_linux_key_handoff(root, env, seed, client, health, assert_runtime_only, opener, port, checks):
+    require(env.get("DBUS_SESSION_BUS_ADDRESS", "").startswith("unix:"), "Private session bus required")
+    private = root / "credentials"
+    control = private / "run"
+    control.mkdir(mode=0o700, parents=True)
+    env.update(HOME=str(private), XDG_DATA_HOME=str(private / "data"), XDG_CONFIG_HOME=str(private / "config"),
+               XDG_CACHE_HOME=str(private / "cache"), XDG_RUNTIME_DIR=str(control))
+    keyring_env = dict(env, GNOME_KEYRING_CONTROL=str(control))
+
+    def dbus(destination, path, method, *args):
+        return subprocess.check_output(["gdbus", "call", "--session", "--dest", destination,
+                                        "--object-path", path, "--method", method, *args],
+                                       env=keyring_env, text=True, timeout=5).strip()
+
+    bus = "org.freedesktop.DBus"
+    service = "org.freedesktop.secrets"
+    bus_path = "/org/freedesktop/DBus"
+    require(dbus(bus, bus_path, bus + ".NameHasOwner", service) == "(false,)",
+            "The test bus already has a Secret Service owner")
+    with subprocess.Popen(["gnome-keyring-daemon", "--foreground", "--unlock", "--components=secrets",
+                           "--control-directory", str(control)], env=keyring_env, stdin=subprocess.PIPE,
+                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL) as keyring:
+        try:
+            keyring.stdin.write(uuid.uuid4().hex.encode("ascii"))
+            keyring.stdin.close()
+            deadline = time.monotonic() + 15
+            while time.monotonic() < deadline:
+                require(keyring.poll() is None, "Private Secret Service exited")
+                if dbus(bus, bus_path, bus + ".NameHasOwner", service) == "(true,)":
+                    require(dbus(bus, bus_path, bus + ".GetConnectionUnixProcessID", service)
+                            == f"(uint32 {keyring.pid},)", "Unexpected Secret Service owner")
+                    collection = dbus(service, "/org/freedesktop/secrets", "org.freedesktop.Secret.Service.ReadAlias", "default")
+                    if collection != "(objectpath '/',)":
+                        break
+                time.sleep(0.05)
+            else:
+                raise RuntimeError("Private Secret Service collection never appeared")
+
+            def seed_command(label, *args):
+                result = subprocess.run([seed, *args], env=env, cwd=root, capture_output=True, timeout=300)
+                require(result.returncode == 0 and json.loads(result.stdout).get("status") == "ok",
+                        f"CLI fixture {label} failed with exit {result.returncode}")
+
+            env["RSRS_M3_DIR"] = str(root / "models" / "bge-m3")
+            seed_command("model preparation", "--direct", "model", "install-m3", "--json")
+            seed_command("offline keygen", "--json", "keygen", "--pass", "Isolated-" + uuid.uuid4().hex)
+            seed.unlink()
+            require(shutil.which("rsrs", path=env["PATH"]) is None and assert_runtime_only(),
+                    "CLI must be absent before reopening the seed library")
+            checks.append("existing_library_cli_fixture_removed")
+
+            def business(owner, command, *args):
+                request_id = "linux-handoff-" + uuid.uuid4().hex
+                scope = {key: owner[key] for key in ("account_id", "instance_id", "generation")}
+                request = urllib.request.Request(f"http://127.0.0.1:{port}/api/rpc",
+                    data=json.dumps({"v": 1, "method": "cli.exec", "args": ["--json", command, *args],
+                                     "id": request_id, "operation_id": request_id,
+                                     "idempotency_key": request_id, "scope": scope}).encode(),
+                    headers={"Content-Type": "application/json"})
+                with opener.open(request, timeout=60) as response:
+                    result = json.load(response)
+                require(result["v"] == 1 and result["ok"] and result["exit"] == 0 and result["scope"] == scope
+                        and all(result[key] == request_id for key in ("id", "operation_id", "idempotency_key")),
+                        f"Runtime {command} receipt differs")
+                envelope = result["envelope"]
+                require(envelope["status"] == "ok" and envelope["command"] == command, f"Runtime {command} failed")
+                return envelope
+
+            text = "linux-handoff-" + uuid.uuid4().hex
+            client("start")
+            try:
+                first = health()
+                require(first["store_ready"] and first["credential_state"] == "available", "Initial host key handoff failed")
+                memory_id = business(first, "remember", text, "--title", text, "--importance", "important", "--force")["summary"]["id"]
+            finally:
+                client("stop")
+            client("start")
+            try:
+                reopened = health()
+                require(reopened["store_ready"] and reopened["credential_state"] == "available"
+                        and reopened["account_id"] == first["account_id"] and reopened["instance_id"] != first["instance_id"]
+                        and reopened["image_sha256"] == first["image_sha256"] and assert_runtime_only(),
+                        "Client2 did not reopen the same library without CLI")
+                entry = business(reopened, "show", memory_id)["details"]["entry"]
+                require(entry["id"] == memory_id and entry["content"] == text, "Reopened library readback differs")
+                checks.extend(["scoped_remember_receipt", "native_key_handoff_on_restart_no_cli", "encrypted_library_readback"])
+            finally:
+                client("stop")
+        finally:
+            if keyring.poll() is None:
+                keyring.terminate()
+            keyring.wait(timeout=10)
+
 
 if __name__ == "__main__":
     package_kind = "unpublished PR package" if "CLIENT2_PR_PACKAGE" in os.environ else "sealed package"
-    result = {"status": "failed", "scope": f"{package_kind}, accountless native lifecycle", "checks": []}
+    scope = "accountless lifecycle and existing Linux library" if "SEED_CLI" in os.environ else "accountless native lifecycle"
+    result = {"status": "failed", "scope": f"{package_kind}, {scope}", "checks": []}
     try:
         check(result)
         result["status"] = "passed"
