@@ -116,19 +116,12 @@ def inputs():
     mode = os.environ.get("INPUT_MODE", "candidate")
     version = os.environ.get("INPUT_VERSION", "")
     source = os.environ["GITHUB_SHA"]
-    if os.environ["GITHUB_REF"].startswith("refs/tags/v"):
-        mode, version = "tag", os.environ["GITHUB_REF_NAME"][1:]
-        subprocess.run(["git", "merge-base", "--is-ancestor", source, "origin/main"], check=True)
-    else:
-        require(os.environ["GITHUB_EVENT_NAME"] == "workflow_dispatch"
-                and os.environ["GITHUB_REF"] == "refs/heads/main", "Dispatch must use trusted main")
-        require(mode in {"candidate", "promote"}, "Unknown desktop action")
+    require(os.environ["GITHUB_EVENT_NAME"] == "workflow_dispatch"
+            and os.environ["GITHUB_REF"] == "refs/heads/codex/client2-sealed-review-20261121",
+            "Review packaging requires the dedicated diagnostic branch")
+    require(mode == "candidate" and os.environ.get("INPUT_CONFIRM") != "true",
+            "This review build cannot publish")
     require(VERSION.fullmatch(version), "An explicit semantic version without v is required")
-    if mode == "promote":
-        require(os.environ.get("INPUT_CONFIRM") == "true", "Promotion requires explicit publication confirmation")
-        source = os.environ.get("INPUT_SOURCE_SHA", "")
-        for key in ["INPUT_RUN_ID", "INPUT_ATTEMPT"]:
-            require(re.fullmatch(r"[1-9][0-9]*", os.environ.get(key, "")), f"Missing producer {key}")
     require(SHA.fullmatch(source), "Expected the full immutable source SHA")
     with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
         output.write(f"mode={mode}\nversion={version}\nsource={source}\n")
