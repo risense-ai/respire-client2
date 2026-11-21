@@ -237,28 +237,40 @@ export function memoryWorkspace(root, ctx) {
   function finish() {
     all(".memory-row", tree).forEach((node) => (node.draggable = true));
     count.textContent =
-      searchCaption ||
+      unavailableMessage() || searchCaption ||
       `已载入 ${number(records.length)} / ${number(ctx.status?.summary?.local_alive)} 条 · 已选 ${checked.size} 条`;
     $("[data-merge]", root).disabled = checked.size < 2 || busy;
     $("[data-more]", root).disabled =
       busy ||
       records.length >= Number(ctx.status?.summary?.local_alive || Infinity);
   }
-  function locked() {
-    reader.innerHTML = `<div class="empty"><strong>本机记忆库尚未解锁</strong>登录账户，或初始化本机离线记忆库。<div class="actions"><button data-accounts>账户与本机密钥</button></div></div>`;
-    $("[data-accounts]", reader).addEventListener("click", () =>
-      ctx.navigate("accounts"),
-    );
-    count.textContent = ctx.desktop?.connected
-      ? "需要解锁记忆库"
-      : "等待 Runtime 连接";
+  function unavailableMessage() {
+    if (!ctx.desktop?.connected) return "等待 Runtime 连接";
+    const unlocked = ctx.status?.summary?.unlocked;
+    if (unlocked === false) return "需要解锁记忆库";
+    if (unlocked === true) return "";
+    return ctx.statusError ? "状态读取失败" : "正在读取记忆目录…";
+  }
+  function showUnavailable() {
+    const message = unavailableMessage();
+    if (!message) return false;
+    revision = "";
+    count.textContent = message;
+    if (ctx.desktop?.connected && ctx.status?.summary?.unlocked === false) {
+      renderedEntry = null;
+      selectedEntry = null;
+      ++selectionVersion;
+      reader.innerHTML = `<div class="empty"><strong>本机记忆库尚未解锁</strong>登录账户，或初始化本机离线记忆库。<div class="actions"><button data-accounts>账户与本机密钥</button></div></div>`;
+      $("[data-accounts]", reader).addEventListener("click", () =>
+        ctx.navigate("accounts"),
+      );
+    } else if (!loaded) {
+      reader.innerHTML = `<div class="empty">${h(t(message))}</div>`;
+    }
+    return true;
   }
   async function load() {
-    if (busy) return;
-    if (!ctx.desktop?.connected || ctx.status?.summary?.unlocked === false) {
-      locked();
-      return;
-    }
+    if (busy || showUnavailable()) return;
     busy = true;
     let succeeded = false;
     count.textContent = "正在读取记忆目录…";
@@ -376,6 +388,7 @@ export function memoryWorkspace(root, ctx) {
     });
   }
   async function choose(id, scroll = true) {
+    if (showUnavailable()) return;
     const byId = inventory(records).byId,
       seen = new Set();
     let ancestor = byId.get(id);
@@ -755,12 +768,8 @@ export function memoryWorkspace(root, ctx) {
     }
   });
   function update() {
-    const s = ctx.status?.summary;
-    if (!s?.unlocked) {
-      if (!loaded) locked();
-      return;
-    }
-    if (document.querySelector("dialog[open]")) return;
+    if (showUnavailable() || document.querySelector("dialog[open]")) return;
+    const s = ctx.status.summary;
     const stamp = `${s.data_dir}/${s.local_total}/${s.max_updated_at}`;
     if (stamp !== revision && !busy) {
       revision = stamp;

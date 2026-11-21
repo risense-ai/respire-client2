@@ -204,5 +204,37 @@ async function test(name, fn) { await fn(); console.log(`PASS ${++count}: ${name
     assert.equal(save.disabled, false);
     assert.deepEqual(calls, ['agent_set', ['operation-recover', {id:'desktop-original'}], ['operation-recover', {id:'desktop-original'}]]);
   });
+  await test('memory workspace keeps connection and status failures distinct from a confirmed lock', () => {
+    const workspace = fs.readFileSync('internal/desktop/frontend/memory/workspace.js', 'utf8');
+    const start = workspace.indexOf('  function unavailableMessage()');
+    const end = workspace.indexOf('  async function load()', start);
+    assert.ok(start >= 0 && end > start);
+    const ctx = {desktop: {connected: false}, status: null, statusError: ''};
+    const reader = {innerHTML: ''}, counter = {textContent: ''};
+    const showUnavailable = new Function('ctx', 'reader', 'count', '$', 't', 'h',
+      'let loaded = false, revision = "", renderedEntry, selectedEntry, selectionVersion = 0;\n' +
+      workspace.slice(start, end) +
+      '\nreturn (alreadyLoaded = false) => { loaded = alreadyLoaded; return showUnavailable(); };'
+    )(ctx, reader, counter, () => ({addEventListener() {}}), text => text, text => text);
+    assert.equal(showUnavailable(), true);
+    assert.equal(counter.textContent, '等待 Runtime 连接');
+    assert.doesNotMatch(reader.innerHTML, /data-accounts/);
+
+    ctx.desktop.connected = true;
+    assert.equal(showUnavailable(), true);
+    assert.equal(counter.textContent, '正在读取记忆目录…');
+    reader.innerHTML = 'previously loaded entry';
+    ctx.statusError = 'status failed';
+    assert.equal(showUnavailable(true), true);
+    assert.equal(counter.textContent, '状态读取失败');
+    assert.equal(reader.innerHTML, 'previously loaded entry');
+
+    ctx.status = {summary: {unlocked: false}};
+    assert.equal(showUnavailable(true), true);
+    assert.equal(counter.textContent, '需要解锁记忆库');
+    assert.match(reader.innerHTML, /data-accounts/);
+    ctx.status = {summary: {unlocked: true}};
+    assert.equal(showUnavailable(true), false);
+  });
   console.log(`${count} focused refresh tests passed; browser/native UIA not exercised.`);
 })().catch(error => { console.error(error); process.exitCode = 1; });
