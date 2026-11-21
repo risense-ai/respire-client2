@@ -824,7 +824,7 @@ func TestRuntimeStartInstallationState(t *testing.T) {
 }
 
 func TestBootstrapPayloadRejectsInvalidLocalComponents(t *testing.T) {
-	target, err := runtimeTarget()
+	target, err := cliTarget()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -870,19 +870,11 @@ func TestBootstrapPayloadRejectsInvalidLocalComponents(t *testing.T) {
 			if err != nil {
 				return err
 			}
-			target, err := runtimeTarget()
-			if err != nil {
-				return err
-			}
 			return os.WriteFile(path, bytes.Replace(data, []byte(target), []byte("invalid-target"), 1), 0600)
 		}, "embedded payload targets invalid-target, not", false},
 		{"foreign target with invalid channel", func(dir string) error {
 			path := filepath.Join(dir, bootstrapManifestFile)
 			data, err := os.ReadFile(path)
-			if err != nil {
-				return err
-			}
-			target, err := runtimeTarget()
 			if err != nil {
 				return err
 			}
@@ -1017,7 +1009,11 @@ func TestInstallRuntimeIndependently(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		cliMeta := frontendMetadataFixture(target)
+		optionalCLITarget, err := cliTarget()
+		if err != nil {
+			t.Fatal(err)
+		}
+		cliMeta := frontendMetadataFixture(optionalCLITarget)
 		cliMeta["binary_sha256"] = sha256Hex(t, cliBytes)
 		cliMeta["binary_size"] = len(cliBytes)
 		cliJSON, err := json.Marshal(cliMeta)
@@ -1037,7 +1033,7 @@ func TestInstallRuntimeIndependently(t *testing.T) {
 		}
 		cliPrefix := "https://github.com/risense-ai/respire-cli/releases/download/v2.0.0-dev.1/"
 		cliAssets := []map[string]string{
-			{"name": "cli-build-" + target + ".json", "browser_download_url": cliPrefix + "cli-build-" + target + ".json"},
+			{"name": "cli-build-" + optionalCLITarget + ".json", "browser_download_url": cliPrefix + "cli-build-" + optionalCLITarget + ".json"},
 			{"name": cliMeta["binary_file"].(string), "browser_download_url": cliPrefix + cliMeta["binary_file"].(string)},
 		}
 		cliList, err := json.Marshal([]map[string]any{{"tag_name": "v2.0.0-dev.1", "prerelease": true, "assets": cliAssets}})
@@ -1078,7 +1074,7 @@ func TestInstallRuntimeIndependently(t *testing.T) {
 				_, _ = w.Write(retainedReleaseJSON)
 			case name == retainedMetadataPath:
 				_, _ = w.Write(retainedJSON)
-			case strings.HasSuffix(name, "cli-build-"+target+".json"):
+			case strings.HasSuffix(name, "cli-build-"+optionalCLITarget+".json"):
 				_, _ = w.Write(cliJSON)
 			case strings.HasSuffix(name, cliMeta["binary_file"].(string)):
 				_, _ = w.Write(cliBytes)
