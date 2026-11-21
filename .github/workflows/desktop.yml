@@ -218,7 +218,13 @@ jobs:
         if: matrix.os != 'windows'
         shell: bash
         run: |
-          bash scripts/build.sh "$CANDIDATE_VERSION" '${{ matrix.arch }}'
+          bundle_build="$GITHUB_RUN_NUMBER.$GITHUB_RUN_ATTEMPT"
+          bash scripts/build.sh "$CANDIDATE_VERSION" '${{ matrix.arch }}' "$bundle_build"
+          if [[ '${{ matrix.os }}' == darwin ]]; then
+            plist=dist/Respire.app/Contents/Info.plist
+            test "$(plutil -extract CFBundleShortVersionString raw "$plist")" = "${CANDIDATE_VERSION%%-*}"
+            test "$(plutil -extract CFBundleVersion raw "$plist")" = "$bundle_build"
+          fi
           if [[ '${{ matrix.os }}-${{ matrix.arch }}' == darwin-arm64 ]]; then bash scripts/build-dmg.sh; fi
       - uses: actions/upload-artifact@v7
         with:

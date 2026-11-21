@@ -21,6 +21,8 @@ mkdir -p dist
 go build -tags "$tags" -trimpath -ldflags "-s -w -X main.version=$version" -o dist/respire .
 file dist/respire
 if [[ "$goos" == darwin ]]; then
+    bundle_build="${3:-${version%%-*}}"
+    [[ "$bundle_build" =~ ^[0-9]+(\.[0-9]+){0,2}$ ]] || { echo 'Invalid macOS bundle build number' >&2; exit 1; }
     bundle=dist/Respire.app
     mkdir -p "$bundle/Contents/MacOS" "$bundle/Contents/Resources"
     cp dist/respire "$bundle/Contents/MacOS/respire"
@@ -45,7 +47,7 @@ if [[ "$goos" == darwin ]]; then
 <key>CFBundlePackageType</key><string>APPL</string>
 <key>CFBundleIconFile</key><string>respire.icns</string>
 <key>CFBundleShortVersionString</key><string>${version%%-*}</string>
-<key>CFBundleVersion</key><string>${version%%-*}</string>
+<key>CFBundleVersion</key><string>$bundle_build</string>
 <key>LSMinimumSystemVersion</key><string>12.0</string>
 <key>NSHighResolutionCapable</key><true/>
 </dict></plist>
