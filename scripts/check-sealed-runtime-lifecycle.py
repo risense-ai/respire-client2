@@ -201,10 +201,11 @@ def check(report):
             require(seed.parent == Path(os.environ["RUNNER_TEMP"]).resolve()
                     and digest(seed) == os.environ["SEED_CLI_SHA256"], "Incorrect isolated CLI seed")
             report["seed_cli"] = {"name": seed.name, "sha256": digest(seed)}
-            check_linux_key_handoff(root, child_env, seed, client, health, assert_runtime_only, opener, port, checks)
+            check_linux_key_handoff(root, child_env, seed, client, health, assert_runtime_only, opener, port, report)
 
 
-def check_linux_key_handoff(root, env, seed, client, health, assert_runtime_only, opener, port, checks):
+def check_linux_key_handoff(root, env, seed, client, health, assert_runtime_only, opener, port, report):
+    checks = report["checks"]
     require(env.get("DBUS_SESSION_BUS_ADDRESS", "").startswith("unix:"), "Private session bus required")
     private = root / "credentials"
     control = private / "run"
@@ -242,26 +243,26 @@ def check_linux_key_handoff(root, env, seed, client, health, assert_runtime_only
             else:
                 raise RuntimeError("Private Secret Service collection never appeared")
 
-            def seed_command(label, *args):
-                result = subprocess.run([seed, *args], env=env, cwd=root, capture_output=True, timeout=300)
+            def cli_command(binary, label, *args):
+                result = subprocess.run([binary, *args], env=env, cwd=root, capture_output=True, timeout=300)
                 require(result.returncode == 0, f"CLI fixture {label} failed with exit {result.returncode}")
                 envelope = json.loads(result.stdout)
                 require(envelope.get("status") == "ok", f"CLI fixture {label} returned a failure envelope")
                 return envelope
 
             env["RSRS_M3_DIR"] = str(root / "models" / "bge-m3")
-            seed_command("model preparation", "--direct", "model", "install-m3", "--json")
-            seed_command("offline keygen", "--json", "keygen", "--pass", "Isolated-" + uuid.uuid4().hex)
+            cli_command(seed, "model preparation", "--direct", "model", "install-m3", "--json")
+            cli_command(seed, "offline keygen", "--json", "keygen", "--pass", "Isolated-" + uuid.uuid4().hex)
             old_text = "linux-legacy-" + uuid.uuid4().hex
-            seed_command("start", "--json", "runtime", "start")
+            cli_command(seed, "start", "--json", "runtime", "start")
             try:
                 legacy = health()
                 require(legacy["store_ready"] and legacy["credential_state"] == "available",
                         "Original host did not open the seed library")
-                old_id = seed_command("remember", "--client-only", "--json", "remember", old_text,
+                old_id = cli_command(seed, "remember", "--client-only", "--json", "remember", old_text,
                                       "--title", old_text, "--importance", "important", "--force")["summary"]["id"]
             finally:
-                seed_command("stop", "--json", "runtime", "stop")
+                cli_command(seed, "stop", "--json", "runtime", "stop")
             seed.unlink()
             require(shutil.which("rsrs", path=env["PATH"]) is None and assert_runtime_only(),
                     "CLI must be absent before reopening the seed library")
@@ -307,6 +308,29 @@ def check_linux_key_handoff(root, env, seed, client, health, assert_runtime_only
                 entry = business(reopened, "show", memory_id)["details"]["entry"]
                 require(entry["id"] == memory_id and entry["content"] == text, "Reopened library readback differs")
                 checks.extend(["scoped_remember_receipt", "native_key_handoff_on_restart_no_cli", "encrypted_library_readback"])
+                if "OLDER_CLI_SHA256" in os.environ:
+                    selection = Path(env["RSRS_DATA_DIR"]) / "bin/runtime.json"
+                    selected = selection.read_bytes()
+                    older = root / ("older-" + seed.name)
+                    subprocess.run(["gh", "release", "download", "v2.0.0-dev.23", "-R", "risense-ai/respire-cli",
+                                    "-p", seed.name, "-O", older], check=True, timeout=90)
+                    require(digest(older) == os.environ["OLDER_CLI_SHA256"], "Older online CLI digest differs")
+                    older.chmod(0o700)
+                    report["online_cli"] = {"version": "2.0.0-dev.23", "sha256": digest(older)}
+                    online = cli_command(older, "older online show", "--client-only", "--json", "show", memory_id)["details"]["entry"]
+                    require(online["id"] == memory_id and online["content"] == text, "Older online CLI read differs")
+                    online_text = "linux-online-" + uuid.uuid4().hex
+                    saved = cli_command(older, "older online remember", "--client-only", "--json", "remember",
+                                        online_text, "--title", online_text, "--importance", "important", "--force")
+                    online_id = saved["summary"]["id"]
+                    require(online_id not in (old_id, memory_id), "Older CLI did not create a new entry")
+                    roundtrip = business(reopened, "show", online_id)["details"]["entry"]
+                    require(roundtrip["id"] == online_id and roundtrip["content"] == online_text, "Older online write differs")
+                    current = health()
+                    require(all(current[key] == reopened[key] for key in
+                                ("pid", "process_start_id", "instance_id", "generation", "account_id", "image_sha256"))
+                            and selection.read_bytes() == selected, "Older CLI changed the Client2-owned Runtime")
+                    checks.extend(["older_cli_online_read_write", "older_cli_preserved_instance_and_selection"])
             finally:
                 client("stop")
         finally:

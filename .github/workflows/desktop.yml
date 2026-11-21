@@ -121,8 +121,18 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - {runner: ubuntu-22.04, arch: amd64, target: x86_64-unknown-linux-musl, digest: c58cb7ead24b5d15245a192ebbae7355d73322bf0a161b86e378ad75a395bbd3, cli_digest: 141cc7a1c694df02f510b8122d6af1798b1a6b54f28cd0fc1eca247e7e955245}
-          - {runner: ubuntu-22.04-arm, arch: arm64, target: aarch64-unknown-linux-musl, digest: d4f56d16a286ea34d4eb9dec6a4f36e1918dd5eaa09e80e8e4308bbf8b86c946, cli_digest: 677b3bccb6d7cdff68cfd8b95bf826b8ddb8536eb99b7f4fe915fc99164789a1}
+          - runner: ubuntu-22.04
+            arch: amd64
+            target: x86_64-unknown-linux-musl
+            digest: c58cb7ead24b5d15245a192ebbae7355d73322bf0a161b86e378ad75a395bbd3
+            cli_digest: 141cc7a1c694df02f510b8122d6af1798b1a6b54f28cd0fc1eca247e7e955245
+            older_cli_digest: ebc7cf8ebfd70547295cd5a423f9e24c178af0027721fc6227ba3c47dfb51e19
+          - runner: ubuntu-22.04-arm
+            arch: arm64
+            target: aarch64-unknown-linux-musl
+            digest: d4f56d16a286ea34d4eb9dec6a4f36e1918dd5eaa09e80e8e4308bbf8b86c946
+            cli_digest: 677b3bccb6d7cdff68cfd8b95bf826b8ddb8536eb99b7f4fe915fc99164789a1
+            older_cli_digest: 540b14c9209eeea9de3f9b9b5aa9d0bb3f81b9524ad3fb24ba4533d7403166b6
     env:
       CANDIDATE_VERSION: 2.0.0-pr.${{ github.event.number }}
     steps:
@@ -151,6 +161,7 @@ jobs:
           INSTALL_EXACT_RUNTIME: 'true'
           CLIENT2_PR_PACKAGE: dist/respire-linux-${{ matrix.arch }}.tar.gz
           SEED_CLI_SHA256: ${{ matrix.cli_digest }}
+          OLDER_CLI_SHA256: ${{ matrix.older_cli_digest }}
         run: |
           set -euo pipefail
           export SEED_CLI="$RUNNER_TEMP/rsrs-$RUNTIME_TARGET"
