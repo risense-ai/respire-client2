@@ -100,10 +100,6 @@ func buildRuntimeTree(t *testing.T, dir, target string) (binaryHash string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	target, targetErr := runtimeTarget()
-	if targetErr != nil {
-		t.Fatal(targetErr)
-	}
 	binary := filepath.Join(dir, "rsrs-runtime-"+target)
 	if err := os.WriteFile(binary, b, 0700); err != nil {
 		t.Fatal(err)
@@ -142,7 +138,7 @@ func buildRuntimeTree(t *testing.T, dir, target string) (binaryHash string) {
 // architecture check genuinely passes on the host running the test.
 func buildPayload(t *testing.T, cliVersion string) string {
 	t.Helper()
-	target, err := runtimeTarget()
+	target, err := cliTarget()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -571,7 +567,7 @@ func TestPublishRuntimeStagingAndPromotion(t *testing.T) {
 		if err = m.publishRuntime(meta, stageBootstrapRuntime(payload.Dir), true); err != nil {
 			t.Fatalf("publish failed: %v", err)
 		}
-		if err = verifyRuntime(m.runtimeDir(meta.RuntimeVersion), meta.BinaryHash); err != nil {
+		if err = verifyRuntime(m.runtimeDir(meta.RuntimeVersion), meta.BinaryHash, meta.Target); err != nil {
 			t.Fatalf("published dir must verify: %v", err)
 		}
 		if _, err = os.Stat(filepath.Join(m.runtimeDir(meta.RuntimeVersion), "core-notices")); !errors.Is(err, os.ErrNotExist) {

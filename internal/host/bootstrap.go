@@ -122,7 +122,7 @@ func readBootstrapPayload() (bootstrapPayload, error) {
 	if err = verifyExecutable(cliPath); err != nil {
 		return payload, fmt.Errorf("embedded CLI architecture mismatch: %w", err)
 	}
-	if err = verifyRuntime(filepath.Join(dir, bootstrapRuntimeDir), payload.Manifest.Runtime.SHA256); err != nil {
+	if err = verifyRuntime(filepath.Join(dir, bootstrapRuntimeDir), payload.Manifest.Runtime.SHA256, payload.Manifest.Target); err != nil {
 		return payload, fmt.Errorf("embedded Runtime verification failed: %w", err)
 	}
 	if payload.Metadata, err = payload.runtimeMetadata(); err != nil {
@@ -142,7 +142,7 @@ func parseBootstrapManifest(b []byte, manifest *bootstrapManifest) error {
 	if err := dec.Decode(new(any)); !errors.Is(err, io.EOF) {
 		return errors.New("trailing bootstrap manifest data")
 	}
-	target, err := runtimeTarget()
+	target, err := cliTarget()
 	if err != nil {
 		return err
 	}
@@ -174,7 +174,7 @@ func (p *bootstrapPayload) runtimeMetadata() (RuntimeMetadata, error) {
 	if err != nil {
 		return RuntimeMetadata{}, fmt.Errorf("embedded Runtime metadata: %w", err)
 	}
-	if meta.RuntimeVersion != p.Manifest.Runtime.Version || !strings.EqualFold(meta.BinaryHash, p.Manifest.Runtime.SHA256) {
+	if meta.Target != p.Manifest.Target || meta.RuntimeVersion != p.Manifest.Runtime.Version || !strings.EqualFold(meta.BinaryHash, p.Manifest.Runtime.SHA256) {
 		return RuntimeMetadata{}, errors.New("embedded Runtime metadata does not match bootstrap manifest")
 	}
 	if _, err = runtimeReceipt(meta); err != nil {

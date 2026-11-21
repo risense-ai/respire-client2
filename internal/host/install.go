@@ -84,7 +84,7 @@ func extractRuntime(archive, dir string) error {
 	}
 }
 
-func verifyRuntime(dir, binaryHash string) error {
+func verifyRuntime(dir, binaryHash, target string) error {
 	hash, err := fileHash(filepath.Join(dir, runtimeBinary()))
 	if err != nil {
 		return err
@@ -93,10 +93,6 @@ func verifyRuntime(dir, binaryHash string) error {
 		return errors.New("installed Runtime hash mismatch")
 	}
 	if err := verifyExecutable(filepath.Join(dir, runtimeBinary())); err != nil {
-		return err
-	}
-	cliTarget, err := runtimeTarget()
-	if err != nil {
 		return err
 	}
 	var manifest struct {
@@ -114,7 +110,7 @@ func verifyRuntime(dir, binaryHash string) error {
 	if err = json.Unmarshal(b, &manifest); err != nil {
 		return err
 	}
-	if manifest.Schema != 1 || manifest.Target != cliTarget || len(manifest.Files) == 0 {
+	if manifest.Schema != 1 || manifest.Target != target || len(manifest.Files) == 0 {
 		return errors.New("invalid core-runtime manifest")
 	}
 	for _, file := range manifest.Files {
@@ -175,7 +171,7 @@ func (m *Manager) publishRuntime(meta RuntimeMetadata, fill func(stage string) e
 	if reportProgress {
 		m.progress("校验并准备 Runtime", 0, 0)
 	}
-	if err = verifyRuntime(stage, meta.BinaryHash); err != nil {
+	if err = verifyRuntime(stage, meta.BinaryHash, meta.Target); err != nil {
 		return err
 	}
 	clean, err := os.MkdirTemp(versions, ".verified-*")

@@ -61,8 +61,8 @@ jobs:
           - {runner: windows-11-arm, platform: windows-arm64, target: aarch64-pc-windows-msvc}
           - {runner: macos-15-intel, platform: darwin-amd64, target: x86_64-apple-darwin}
           - {runner: macos-15, platform: darwin-arm64, target: aarch64-apple-darwin}
-          - {runner: ubuntu-22.04, platform: linux-amd64, target: x86_64-unknown-linux-gnu}
-          - {runner: ubuntu-22.04-arm, platform: linux-arm64, target: aarch64-unknown-linux-gnu}
+          - {runner: ubuntu-22.04, platform: linux-amd64, target: x86_64-unknown-linux-musl}
+          - {runner: ubuntu-22.04-arm, platform: linux-arm64, target: aarch64-unknown-linux-musl}
     env:
       INPUT_RUN_ID: ${{ inputs.client2_run_id }}
       INPUT_ATTEMPT: ${{ inputs.client2_run_attempt }}

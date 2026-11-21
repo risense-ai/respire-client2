@@ -26,7 +26,7 @@ func frontendMetadataFixture(target string) map[string]any {
 }
 
 func TestNormalizeCLIFrontendMetadata(t *testing.T) {
-	target, err := runtimeTarget()
+	target, err := cliTarget()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -105,7 +105,7 @@ func (f cliMetadataTransport) RoundTrip(r *http.Request) (*http.Response, error)
 }
 
 func TestLatestCLIBuildFrontendMetadata(t *testing.T) {
-	target, err := runtimeTarget()
+	target, err := cliTarget()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -160,7 +160,7 @@ func TestInstallFrontendCLIFromNormalizedMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	target, err := runtimeTarget()
+	target, err := cliTarget()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -184,7 +184,7 @@ func TestInstallFrontendCLIFromNormalizedMetadata(t *testing.T) {
 }
 
 func TestLegacyCLIMetadataStillRequiresRuntimeArchive(t *testing.T) {
-	target, err := runtimeTarget()
+	target, err := cliTarget()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -205,7 +205,7 @@ func TestLegacyCLIMetadataStillRequiresRuntimeArchive(t *testing.T) {
 }
 
 func TestNormalizeCLIFrontendMetadataRejectsMalformedJSON(t *testing.T) {
-	target, err := runtimeTarget()
+	target, err := cliTarget()
 	if err != nil {
 		t.Fatal(err)
 	}
