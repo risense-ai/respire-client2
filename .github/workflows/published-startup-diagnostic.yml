@@ -65,14 +65,25 @@ jobs:
           - {runner: windows-11-arm, platform: windows-arm64, target: aarch64-pc-windows-msvc}
           - {runner: macos-15-intel, platform: darwin-amd64, target: x86_64-apple-darwin}
           - {runner: macos-15, platform: darwin-arm64, target: aarch64-apple-darwin}
-          - {runner: ubuntu-22.04, platform: linux-amd64, target: x86_64-unknown-linux-musl}
-          - {runner: ubuntu-22.04-arm, platform: linux-arm64, target: aarch64-unknown-linux-musl}
+          - runner: ubuntu-22.04
+            platform: linux-amd64
+            target: x86_64-unknown-linux-musl
+            seed_digest: 141cc7a1c694df02f510b8122d6af1798b1a6b54f28cd0fc1eca247e7e955245
+            older_digest: ebc7cf8ebfd70547295cd5a423f9e24c178af0027721fc6227ba3c47dfb51e19
+          - runner: ubuntu-22.04-arm
+            platform: linux-arm64
+            target: aarch64-unknown-linux-musl
+            seed_digest: 677b3bccb6d7cdff68cfd8b95bf826b8ddb8536eb99b7f4fe915fc99164789a1
+            older_digest: 540b14c9209eeea9de3f9b9b5aa9d0bb3f81b9524ad3fb24ba4533d7403166b6
     env:
       INPUT_RUN_ID: ${{ inputs.client2_run_id }}
       INPUT_ATTEMPT: ${{ inputs.client2_run_attempt }}
       CANDIDATE_SOURCE: ${{ inputs.client2_source_sha }}
       CANDIDATE_VERSION: ${{ inputs.client2_version }}
       RUNTIME_VERSION: ${{ inputs.runtime_version }}
+      TARGET_PLATFORM: ${{ matrix.platform }}
+      RUNTIME_TARGET: ${{ matrix.target }}
+      INSTALL_EXACT_RUNTIME: 'true'
     steps:
       - uses: actions/checkout@v7
         with:
@@ -82,18 +93,29 @@ jobs:
           python-version: '3.12'
       - name: Install the desktop executable's Linux dependencies
         if: runner.os == 'Linux'
-        run: sudo apt-get update -qq && sudo apt-get install -y libgtk-3-0 libwebkit2gtk-4.1-0
+        run: sudo apt-get update -qq && sudo apt-get install -y libgtk-3-0 libwebkit2gtk-4.1-0 dbus gnome-keyring
       - name: Verify and unpack the exact sealed candidate
         env:
           GH_TOKEN: ${{ github.token }}
         run: python scripts/desktop-candidate.py producer --root sealed
       - name: Run the sealed executable with an isolated Runtime profile
+        if: runner.os != 'Linux'
         env:
           GH_TOKEN: ${{ github.token }}
-          TARGET_PLATFORM: ${{ matrix.platform }}
-          RUNTIME_TARGET: ${{ matrix.target }}
-          INSTALL_EXACT_RUNTIME: ${{ inputs.install_exact_runtime }}
         run: python scripts/check-sealed-runtime-lifecycle.py
+      - name: Verify a sealed Linux package with the older encrypted library
+        if: runner.os == 'Linux'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SEED_CLI_SHA256: ${{ matrix.seed_digest }}
+          OLDER_CLI_SHA256: ${{ matrix.older_digest }}
+        run: |
+          set -euo pipefail
+          export SEED_CLI="$RUNNER_TEMP/rsrs-$RUNTIME_TARGET"
+          gh release download v2.0.0-dev.24 -R risense-ai/respire-cli -p "rsrs-$RUNTIME_TARGET" -O "$SEED_CLI"
+          printf '%s  %s\n' "$SEED_CLI_SHA256" "$SEED_CLI" | sha256sum --check
+          chmod 0700 "$SEED_CLI"
+          dbus-run-session -- python scripts/check-sealed-runtime-lifecycle.py
       - uses: actions/upload-artifact@v7
         if: always()
         with:
