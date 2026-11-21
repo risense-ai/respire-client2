@@ -1049,8 +1049,13 @@ func TestInstallRuntimeIndependently(t *testing.T) {
 		}
 		retainedMetadataName := "runtime-build-" + target + ".json"
 		retainedMetadataPath := "/risense-ai/respire-runtime/releases/download/" + retainedMeta.Tag + "/" + retainedMetadataName
+		retainedPrefix := "https://github.com" + strings.TrimSuffix(retainedMetadataPath, retainedMetadataName)
 		retainedReleaseJSON, err := json.Marshal(ReleaseInfo{Tag: retainedMeta.Tag, Prerelease: true,
-			Assets: []ReleaseAsset{{Name: retainedMetadataName, URL: "https://github.com" + retainedMetadataPath}}})
+			Assets: []ReleaseAsset{
+				{Name: retainedMetadataName, URL: retainedPrefix + retainedMetadataName},
+				{Name: retainedMeta.Binary, URL: retainedPrefix + retainedMeta.Binary},
+				{Name: retainedMeta.ArchiveFile, URL: retainedPrefix + retainedMeta.ArchiveFile},
+			}})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -1224,6 +1229,22 @@ func TestInstallRuntimeIndependently(t *testing.T) {
 		if err := m.RunTask("更新 Runtime", func() error { return errRuntimeUpdateDeferred }); err != nil || m.TaskSnapshot() != before {
 			t.Fatalf("deferred activation must retain previous task state: %v, %+v", err, m.TaskSnapshot())
 		}
+		t.Run("install exact Runtime independently of channel latest", func(t *testing.T) {
+			fresh := newInstallTestManager(t)
+			fresh.HTTPClient = m.HTTPClient
+			channel := fresh.Preferences().RuntimeChannel
+			queries := runtimeQueries.Load()
+			if err := fresh.InstallRuntimeVersion(retainedMeta.RuntimeVersion); err != nil {
+				t.Fatal(err)
+			}
+			want := InstalledRuntime{Version: retainedMeta.RuntimeVersion, SHA256: binaryHash}
+			if installed, err := fresh.Installed(); err != nil || installed != want {
+				t.Fatalf("exact Runtime selection differs: %+v, %v", installed, err)
+			}
+			if runtimeQueries.Load() != queries || fresh.Preferences().RuntimeChannel != channel {
+				t.Fatal("an exact Runtime installation used or changed the channel")
+			}
+		})
 		denyCLI.Store(false)
 		if err := m.installOnlineCLI(context.Background()); err != nil {
 			t.Fatalf("separate CLI installation failed: %v", err)

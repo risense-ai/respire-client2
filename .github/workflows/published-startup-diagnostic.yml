@@ -15,6 +15,10 @@ on:
         description: 'Exact published Runtime version, without v'
         required: true
         type: string
+      install_exact_runtime:
+        description: 'Lifecycle only: install the specified public Runtime instead of resolving the current channel'
+        type: boolean
+        default: false
       cli_run_id:
         description: 'Existing-keys only: Windows CLI artifact run ID'
         type: string
@@ -88,6 +92,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           TARGET_PLATFORM: ${{ matrix.platform }}
           RUNTIME_TARGET: ${{ matrix.target }}
+          INSTALL_EXACT_RUNTIME: ${{ inputs.install_exact_runtime }}
         run: python scripts/check-sealed-runtime-lifecycle.py
       - uses: actions/upload-artifact@v7
         if: always()

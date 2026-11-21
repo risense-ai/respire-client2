@@ -31,6 +31,7 @@ def check(report):
     platform = os.environ["TARGET_PLATFORM"]
     target = os.environ["RUNTIME_TARGET"]
     version = os.environ["RUNTIME_VERSION"]
+    install_exact = os.environ.get("INSTALL_EXACT_RUNTIME") == "true"
     require(re.fullmatch(r"\d+\.\d+\.\d+(?:-[A-Za-z0-9.-]+)?", version), "Invalid Runtime version")
     repo = "risense-ai/respire-runtime"
     release = json.loads(subprocess.check_output(["gh", "api", f"repos/{repo}/releases/tags/v{version}"]))
@@ -46,6 +47,9 @@ def check(report):
             "Runtime metadata version or platform differs")
     archive, = [item for item in release["assets"] if item["name"] == metadata["archive_file"]]
     require(archive["digest"] == "sha256:" + metadata["archive_sha256"], "Runtime archive digest differs")
+    if "RUNTIME_ARCHIVE_SHA256" in os.environ:
+        require(metadata["archive_sha256"] == os.environ["RUNTIME_ARCHIVE_SHA256"],
+                "Runtime archive differs from the pinned test fixture")
     report["runtime"] = {
         "version": version, "target": target, "archive_id": archive["id"],
         "archive_sha256": metadata["archive_sha256"], "image_sha256": metadata["binary_sha256"],
@@ -53,13 +57,21 @@ def check(report):
     checks = report["checks"]
     with tempfile.TemporaryDirectory(dir=os.environ["RUNNER_TEMP"]) as temporary:
         root = Path(temporary).resolve()
-        sealed = Path("sealed").resolve()
-        manifest = json.loads((sealed / "candidate.json").read_text(encoding="utf-8"))
-        package = sealed / manifest["targets"][platform][0]
-        require(digest(package) == manifest["files"][package.name]["sha256"], "Client2 package digest differs")
+        if "CLIENT2_PR_PACKAGE" in os.environ:
+            require(os.environ["GITHUB_EVENT_NAME"] == "pull_request" and platform.startswith("linux-"),
+                    "Use the unpublished package path only in the native Linux PR check")
+            package = Path(os.environ["CLIENT2_PR_PACKAGE"]).resolve()
+            candidate_version = os.environ["CANDIDATE_VERSION"]
+            producer = {"source": os.environ["GITHUB_SHA"], "run_id": os.environ["GITHUB_RUN_ID"]}
+        else:
+            sealed = Path("sealed").resolve()
+            manifest = json.loads((sealed / "candidate.json").read_text(encoding="utf-8"))
+            package = sealed / manifest["targets"][platform][0]
+            require(digest(package) == manifest["files"][package.name]["sha256"], "Client2 package digest differs")
+            candidate_version, producer = manifest["version"], manifest["producer"]
         report["client2"] = {
-            "version": manifest["version"], "package": package.name, "sha256": digest(package),
-            "producer": manifest["producer"],
+            "version": candidate_version, "package": package.name, "sha256": digest(package),
+            "producer": producer,
         }
         if platform.startswith("windows-"):
             image = package
@@ -90,8 +102,8 @@ def check(report):
         }
         child_env.update(PATH=fixture_path, RSRS_DATA_DIR=str(profile), RSRS_RPC_PORT=str(port))
 
-        def client(action, data_dir=profile, expected_error=None):
-            process = subprocess.run([image, "--headless", action], cwd=root, capture_output=True,
+        def client(action, *args, data_dir=profile, expected_error=None):
+            process = subprocess.run([image, "--headless", action, *args], cwd=root, capture_output=True,
                                      env=dict(child_env, RSRS_DATA_DIR=str(data_dir)), timeout=180)
             result = json.loads(process.stdout)
             success = expected_error is None
@@ -108,11 +120,14 @@ def check(report):
             return state.get("installed_runtime")
 
         release_info = subprocess.check_output([image, "--version"], env=child_env, cwd=root, timeout=30)
-        require(json.loads(release_info) == {"version": manifest["version"], "platform": platform},
+        require(json.loads(release_info) == {"version": candidate_version, "platform": platform},
                 "Client2 executable identity differs")
         require(not assert_runtime_only(), "Fixture already has a Runtime selection")
         checks.append("fresh_profile_no_cli")
-        client("install-runtime")
+        if install_exact:
+            client("install-runtime", version)
+        else:
+            client("install-runtime")
         expected = {"version": version, "sha256": metadata["binary_sha256"]}
         require(assert_runtime_only() == expected, "Installed selection differs from verified release")
         runtime_dir = profile / "bin/runtime" / version
@@ -125,7 +140,7 @@ def check(report):
             installed = runtime_dir / filename
             require(installed.stat().st_size == record["size"] and digest(installed) == record["sha256"],
                     f"Installed Runtime file differs: {filename}")
-        checks.append("online_install_verified")
+        checks.append("exact_online_install_verified" if install_exact else "online_install_verified")
 
         opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
         health_url = f"http://127.0.0.1:{port}/api/health"
@@ -180,7 +195,8 @@ def check(report):
 
 
 if __name__ == "__main__":
-    result = {"status": "failed", "scope": "sealed package, accountless native lifecycle", "checks": []}
+    package_kind = "unpublished PR package" if "CLIENT2_PR_PACKAGE" in os.environ else "sealed package"
+    result = {"status": "failed", "scope": f"{package_kind}, accountless native lifecycle", "checks": []}
     try:
         check(result)
         result["status"] = "passed"

@@ -260,6 +260,19 @@ func (m *Manager) InstallCLI(ctx context.Context) error {
 }
 
 func (m *Manager) InstallRuntime(automatic bool, restart bool) error {
+	return m.installRuntime(automatic, restart, "")
+}
+
+// InstallRuntimeVersion installs a public Runtime release by explicit request.
+// It preserves the component channel and leaves any running instance alone.
+func (m *Manager) InstallRuntimeVersion(version string) error {
+	if !validVersion(version) {
+		return errors.New("无效的 Runtime 版本")
+	}
+	return m.installRuntime(false, false, version)
+}
+
+func (m *Manager) installRuntime(automatic, restart bool, version string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
 	defer cancel()
 	lock, err := m.lockRuntime(ctx)
@@ -268,7 +281,13 @@ func (m *Manager) InstallRuntime(automatic bool, restart bool) error {
 	}
 	defer lock.Close()
 
-	release, meta, err := m.LatestRuntime(ctx)
+	var release ReleaseInfo
+	var meta RuntimeMetadata
+	if version == "" {
+		release, meta, err = m.LatestRuntime(ctx)
+	} else {
+		release, meta, err = m.runtimeReleaseVersion(ctx, version)
+	}
 	if err != nil {
 		return err
 	}
@@ -300,6 +319,9 @@ func (m *Manager) InstallRuntime(automatic bool, restart bool) error {
 			if newerSelection {
 				if automatic {
 					return errRuntimeUpdateDeferred
+				}
+				if version != "" {
+					return fmt.Errorf("已暂存 Runtime %s，当前已选择较新版本 %s", version, previous.Version)
 				}
 				selected = previous
 			}

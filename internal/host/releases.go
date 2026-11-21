@@ -325,10 +325,6 @@ func (m *Manager) fetchReleaseList(ctx context.Context, repo, channel string) ([
 // independent of the CLI release train.
 func (m *Manager) LatestRuntime(ctx context.Context) (ReleaseInfo, RuntimeMetadata, error) {
 	channel := m.Preferences().RuntimeChannel
-	target, err := runtimeTarget()
-	if err != nil {
-		return ReleaseInfo{}, RuntimeMetadata{}, err
-	}
 	list, err := m.fetchReleaseList(ctx, runtimeRepo, channel)
 	if err != nil {
 		return ReleaseInfo{}, RuntimeMetadata{}, err
@@ -340,22 +336,43 @@ func (m *Manager) LatestRuntime(ctx context.Context) (ReleaseInfo, RuntimeMetada
 	if err != nil {
 		return ReleaseInfo{}, RuntimeMetadata{}, errors.New("no published Runtime release")
 	}
-	var raw json.RawMessage
-	url, err := ReleaseAssetURL(latest, runtimeRepo, "runtime-build-"+target+".json")
+	return m.runtimeReleaseMetadata(ctx, latest)
+}
+
+func (m *Manager) runtimeReleaseVersion(ctx context.Context, version string) (ReleaseInfo, RuntimeMetadata, error) {
+	tag := "v" + version
+	var release ReleaseInfo
+	url := "https://api.github.com/repos/risense-ai/" + runtimeRepo + "/releases/tags/" + tag
+	if err := m.fetchJSON(ctx, url, &release); err != nil {
+		return ReleaseInfo{}, RuntimeMetadata{}, err
+	}
+	if release.Draft || release.Tag != tag {
+		return ReleaseInfo{}, RuntimeMetadata{}, errors.New("Runtime 发布版本不匹配或尚未公开")
+	}
+	return m.runtimeReleaseMetadata(ctx, release)
+}
+
+func (m *Manager) runtimeReleaseMetadata(ctx context.Context, release ReleaseInfo) (ReleaseInfo, RuntimeMetadata, error) {
+	target, err := runtimeTarget()
 	if err != nil {
-		return latest, RuntimeMetadata{}, err
+		return release, RuntimeMetadata{}, err
+	}
+	var raw json.RawMessage
+	url, err := ReleaseAssetURL(release, runtimeRepo, "runtime-build-"+target+".json")
+	if err != nil {
+		return release, RuntimeMetadata{}, err
 	}
 	if err = m.fetchJSON(ctx, url, &raw); err != nil {
-		return latest, RuntimeMetadata{}, err
+		return release, RuntimeMetadata{}, err
 	}
 	meta, err := NormalizeRuntimeMetadata(raw)
 	if err != nil {
-		return latest, RuntimeMetadata{}, err
+		return release, RuntimeMetadata{}, err
 	}
-	if err = CheckRuntimeMetadata(meta, latest.Tag, target); err != nil {
-		return latest, meta, err
+	if err = CheckRuntimeMetadata(meta, release.Tag, target); err != nil {
+		return release, meta, err
 	}
-	return latest, meta, nil
+	return release, meta, nil
 }
 
 // LatestCLIBuild reads CLI install metadata (cli-build-<triple>.json) from
