@@ -111,7 +111,7 @@ jobs:
         if: runner.os == 'Linux'
         env:
           GH_TOKEN: ${{ github.token }}
-          INSTALL_EXACT_RUNTIME: 'true'
+          INSTALL_EXACT_RUNTIME: ${{ inputs.install_exact_runtime }}
           SEED_CLI_SHA256: ${{ matrix.seed_digest }}
           OLDER_CLI_SHA256: ${{ matrix.older_digest }}
         run: |
