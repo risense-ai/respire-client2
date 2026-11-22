@@ -6,7 +6,8 @@ const stamp = async () => {
   const status = summary(await execute("status"));
   return raw([status.data_dir, summary(await execute("memory_revision"))]);
 };
-export async function recordUndo({ kind, id, before, importance, action }) {
+export async function recordUndo({ kind, id, before, importance, action }, current = () => true) {
+  if (!current()) return;
   if (
     (kind === "create" && (importance !== "important" || action !== "created")) ||
     (kind === "edit" && (before?.importance !== "important" || importance !== "important"))
@@ -16,8 +17,10 @@ export async function recordUndo({ kind, id, before, importance, action }) {
     return;
   }
   try {
-    lastUndo = { kind, id, before, revision: await stamp() };
+    const revision = await stamp();
+    if (current()) lastUndo = { kind, id, before, revision };
   } catch (error) {
+    if (!current()) return;
     lastUndo = null;
     notify(
       `操作已保存，但未能记录撤销：${error.message}。请刷新核对，不要重复保存。`,

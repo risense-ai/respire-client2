@@ -98,10 +98,11 @@ async function savePreferences(patch) {
   // preferences, so a stale local mirror can never rewrite fields the
   // caller did not touch (this un-did checkbox toggles).
   await api("preferences", patch);
-  ctx.desktop.preferences = { ...ctx.desktop.preferences, ...patch };
+  if (ctx.desktop)
+    ctx.desktop.preferences = { ...ctx.desktop.preferences, ...patch };
   if (patch.theme) localStorage.setItem("respire-theme", patch.theme);
   if (patch.language) languageDropdown.set(patch.language);
-  appearance();
+  if (ctx.desktop || patch.theme) appearance();
 }
 async function changeLanguage(value) {
   await savePreferences({ language: value });
@@ -233,7 +234,28 @@ function renderRefresh() {
       : currentLanguage() === "zh"
         ? `同步 ${sync.phase || "—"} · 待处理 ${number(sync.pending)} · 冲突 ${number(sync.conflicts)}`
         : `Sync ${sync.phase || "—"} · pending ${number(sync.pending)} · conflicts ${number(sync.conflicts)}`);
-  view?.update?.();
+  // A page can fail to render independently of the verified snapshot.
+  // Observe both synchronous throws and asynchronous rejection without
+  // letting an unrelated page hold up the Runtime polling cadence.
+  try {
+    Promise.resolve(view?.update?.()).catch(reportRefreshError);
+  } catch (error) {
+    reportRefreshError(error);
+  }
+}
+
+function reportRefreshError(error) {
+  console.error("Client refresh failed", error);
+}
+
+function failRefresh(error) {
+  reportRefreshError(error);
+  stagedStatus = null;
+  try {
+    publishStatus(null, { error: t("暂时无法读取本机状态，请点击刷新。"), invalidate: true });
+  } catch (renderError) {
+    reportRefreshError(renderError);
+  }
 }
 
 function publishStatus(desktop, { checking = false, error = "", invalidate = false } = {}) {
@@ -242,28 +264,33 @@ function publishStatus(desktop, { checking = false, error = "", invalidate = fal
     verifiedStatus = null;
   ctx.desktop = desktop;
   const scope = invalidate ? null : healthScope(desktop);
-  if (scope !== ctx.statusScope || desktop?.health?.credential_state === "required") {
-    navCounts.at = 0;
-    setRefreshText($("#nav-diary-count"), "");
-  }
+  const clearDiary = scope !== ctx.statusScope || desktop?.health?.credential_state === "required";
   ctx.statusScope = scope;
   ctx.displayStatus = verifiedStatus?.status || null;
   ctx.status = checking || error ? null : ctx.displayStatus;
   ctx.statusPending = checking;
   ctx.statusError = error;
+  if (clearDiary) {
+    navCounts.at = 0;
+    setRefreshText($("#nav-diary-count"), "");
+  }
   renderRefresh();
 }
 
 function refresh({ immediate = true, initial } = {}) {
   flushStatus ||= immediate;
-  if (immediate && ctx.status) publishStatus(ctx.desktop, { checking: true });
+  if (immediate && ctx.status) {
+    try { publishStatus(ctx.desktop, { checking: true }); }
+    catch (error) { failRefresh(error); }
+  }
   if (refreshPromise) return refreshPromise;
   refreshPromise = refreshStatus(initial).finally(() => {
     refreshPromise = null;
     flushStatus = false;
-    refreshNavCounts();
+  }).then(() => {
+    Promise.resolve(refreshNavCounts()).catch(reportRefreshError);
     maybeShowFirstRun();
-  });
+  }).catch(failRefresh);
   return refreshPromise;
 }
 
@@ -313,17 +340,19 @@ async function refreshStatus(initial) {
   }
   // On first load, an identity change, transport recovery or a user retry,
   // flush now. A manual request arriving during a poll upgrades that poll.
+  let end;
   try {
-    const end = await api("state");
-    if (healthObservation(end) !== observation) {
-      publishStatus(end, { error: t("Runtime 身份尚未确认，请点击刷新。"), invalidate: true });
-      return;
-    }
-    verifiedStatus = { observation, status };
-    publishStatus(end);
+    end = await api("state");
   } catch (error) {
     publishStatus(null, { error: error.message, invalidate: true });
+    return;
   }
+  if (healthObservation(end) !== observation) {
+    publishStatus(end, { error: t("Runtime 身份尚未确认，请点击刷新。"), invalidate: true });
+    return;
+  }
+  verifiedStatus = { observation, status };
+  publishStatus(end);
 }
 
 all("nav [data-page]").forEach((button) =>
@@ -490,8 +519,13 @@ function maybeShowFirstRun() {
   wizard.show(); // A clean install may need the wizard to install/start Runtime.
 }
 async function poll(initial) {
-  await refresh({ immediate: false, initial });
-  setTimeout(poll, document.hidden ? 15000 : 3000);
+  try {
+    await refresh({ immediate: false, initial });
+  } catch (error) {
+    reportRefreshError(error);
+  } finally {
+    setTimeout(poll, document.hidden ? 15000 : 3000);
+  }
 }
 (async () => {
   let initial;
@@ -524,4 +558,4 @@ async function poll(initial) {
   await firstPoll;
   checkFirstRun = true;
   maybeShowFirstRun();
-})();
+})().catch(reportRefreshError);

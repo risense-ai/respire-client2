@@ -37,7 +37,6 @@ export function memoryTools(reader, memory, { changed, requireCurrent, keepDialo
             if (value.id.trim() !== memory.id)
               throw Error("ID 不匹配，未执行清除");
             await execute("memory_purge", { id: memory.id });
-            requireCurrent();
             notify("密文清除请求已完成");
             await changed();
           },
@@ -56,8 +55,9 @@ export function memoryTools(reader, memory, { changed, requireCurrent, keepDialo
           return;
         requireCurrent();
         await execute("memory_promote", { id: memory.id });
-        requireCurrent();
-        await recordUndo({ kind: "move", id: memory.id, before: memory });
+        notify("提升请求已完成");
+        if (!requireCurrent.current()) return;
+        await recordUndo({ kind: "move", id: memory.id, before: memory }, requireCurrent.current);
         await changed();
         return;
       }

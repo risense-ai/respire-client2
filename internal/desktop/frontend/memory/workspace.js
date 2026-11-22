@@ -265,12 +265,20 @@ export function memoryWorkspace(root, ctx) {
         ctx.desktop.health?.credential_state === "required") return null;
     return ctx.statusScope;
   }
-  function requireReadable() {
+  function readableGuard() {
     const library = readableLibrary(), epoch = actionEpoch;
-    const guard = () => {
-      if (!library || !root.isConnected || epoch !== actionEpoch || library !== readableLibrary())
-        throw new Error("当前记忆或账户状态尚未确认，请刷新后重试。");
-    };
+    return scopedGuard(
+      () => Boolean(library && root.isConnected && epoch === actionEpoch && library === readableLibrary()),
+      "当前记忆或账户状态尚未确认，请刷新后重试。",
+    );
+  }
+  function scopedGuard(current, message) {
+    const guard = () => { if (!current()) throw new Error(message); };
+    guard.current = current;
+    return guard;
+  }
+  function requireReadable() {
+    const guard = readableGuard();
     guard();
     return guard;
   }
@@ -280,11 +288,23 @@ export function memoryWorkspace(root, ctx) {
   }
   function requireCurrentReader(memory) {
     const token = readerToken, requireLibrary = requireReadable();
-    return () => {
+    const current = () => Boolean(token && token === readerToken && activeReaderEntry()?.id === memory.id);
+    const guard = () => {
       requireLibrary();
-      if (!token || token !== readerToken || activeReaderEntry()?.id !== memory.id)
-        throw new Error("当前记忆或账户已变化，请重新选择后操作。");
+      if (!current()) throw new Error("当前记忆或账户已变化，请重新选择后操作。");
     };
+    guard.current = () => requireLibrary.current() && current();
+    return guard;
+  }
+  // A guard failure BEFORE a request prevents it. After a confirmed write
+  // the same observation can only veto local UI work, not the success receipt.
+  async function afterCommit(guard, update) {
+    if (!guard.current()) return;
+    try {
+      await update();
+    } catch (error) {
+      console.error("Committed memory action: view refresh failed", error);
+    }
   }
   function discardReader() {
     selectedEntry = null;
@@ -326,6 +346,7 @@ export function memoryWorkspace(root, ctx) {
       selected = "";
       loaded = false;
       catalogContext = null;
+      metadataCap = null;
       discardReader();
       closeMemoryDialogs();
       renderTree();
@@ -364,12 +385,14 @@ export function memoryWorkspace(root, ctx) {
     let succeeded = false;
     count.textContent = "正在读取记忆目录…";
     try {
+      const current = () => root.isConnected && version === catalogEpoch && library === readableLibrary();
       if (metadataCap === null) {
         try {
-          metadataCap =
-            summary(await execute("capabilities")).capabilities
-              ?.memory_list_metadata === true;
+          const capabilities = summary(await execute("capabilities")).capabilities;
+          if (!current()) return;
+          metadataCap = capabilities?.memory_list_metadata === true;
         } catch (error) {
+          if (!current()) return;
           if (error.envelope?.summary?.reason !== "invalid_input")
             throw error;
           metadataCap = false;
@@ -378,12 +401,12 @@ export function memoryWorkspace(root, ctx) {
           );
         }
       }
-      if (version !== catalogEpoch || library !== readableLibrary()) return;
+      if (!current()) return;
       const data = await execute("memory_list", {
         limit,
         ...(metadataCap ? { metadata: true } : {}),
       });
-      if (!root.isConnected || version !== catalogEpoch || showUnavailable() || library !== readableLibrary()) return;
+      if (!current() || showUnavailable()) return;
       // The compact catalog omits bodies; the paginated catalog provides them
       // and they feed card excerpts and text matching until the next reload.
       let nextRecords = list(data).map((row) =>
@@ -407,7 +430,7 @@ export function memoryWorkspace(root, ctx) {
             limit: fetched,
             metadata: true,
           });
-          if (!root.isConnected || version !== catalogEpoch || showUnavailable() || library !== readableLibrary()) return;
+          if (!current() || showUnavailable()) return;
           const rows = list(more);
           if (rows.length <= nextRecords.length) break; // server has no more
           nextRecords = rows.map((row) => ({ ...row, content: undefined }));
@@ -525,17 +548,18 @@ export function memoryWorkspace(root, ctx) {
           "beforeend",
           `<span>召回 ${h(listed?.recall_count ?? "—")} 次</span><span>${h(memory.project || "未指定项目")}</span><span>${h((memory.tags || []).join(" · "))}</span>`,
         );
+        const requireCurrent = requireCurrentReader(memory);
         memoryTools(reader, memory, {
-          requireCurrent: requireCurrentReader(memory),
+          requireCurrent,
           keepDialog,
-          changed: async () => {
+          changed: () => afterCommit(requireCurrent, async () => {
             selected = "";
             discardReader();
             reader.innerHTML =
               '<div class="empty">操作已完成，请重新选择记忆。</div>';
             await load();
             await ctx.refresh();
-          },
+          }),
         });
         if (scroll) reader.scrollTop = 0;
       }
@@ -592,16 +616,17 @@ export function memoryWorkspace(root, ctx) {
   async function undo() {
     const guard = requireReadable();
     const id = await undoLast(guard);
-    guard();
-    selected = id;
-    selectedEntry = null;
-    selectionVersion++;
-    if (!selected)
-      reader.innerHTML =
-        '<div class="empty">新建记忆已撤销，请重新选择记忆。</div>';
-    await load();
-    await ctx.refresh();
     notify("已撤销");
+    await afterCommit(guard, async () => {
+      selected = id;
+      selectedEntry = null;
+      selectionVersion++;
+      if (!selected)
+        reader.innerHTML =
+          '<div class="empty">新建记忆已撤销，请重新选择记忆。</div>';
+      await load();
+      if (guard.current()) await ctx.refresh();
+    });
   }
   function edit(options = {}) {
     const guard = options.requireCurrent || requireReadable();
@@ -610,14 +635,13 @@ export function memoryWorkspace(root, ctx) {
       ...options,
       requireCurrent: guard,
       keepDialog,
-      onSaved: async (id, undo) => {
-        guard();
-        if (undo) await recordUndo({ ...undo, id });
-        guard();
+      onSaved: (id, undo) => afterCommit(guard, async () => {
+        if (undo) await recordUndo({ ...undo, id }, guard.current);
+        if (!guard.current()) return;
         if (id) selected = id;
         await load();
-        await ctx.refresh();
-      },
+        if (guard.current()) await ctx.refresh();
+      }),
     }));
   }
   root.addEventListener("input", (event) => {
@@ -833,19 +857,26 @@ export function memoryWorkspace(root, ctx) {
             id: memory.id,
             parent: value.parent.trim(),
           });
-          requireCurrent();
-          await recordUndo({ kind: "move", id: memory.id, before: memory });
           notify("已移动");
-          await load();
+          await afterCommit(requireCurrent, async () => {
+            await recordUndo({ kind: "move", id: memory.id, before: memory }, requireCurrent.current);
+            if (requireCurrent.current()) await load();
+          });
         },
       }));
     if (button.hasAttribute("data-share"))
       await action(button, async () => {
         const result = await execute("memory_share", { root: memory.id });
-        requireCurrent();
+        if (!requireCurrent.current()) {
+          notify("分享请求已完成。账户或选择已变化，未显示分享材料。");
+          return;
+        }
         const text = result.details?.payload;
-        if (!text) throw new Error("Runtime 未返回分享材料");
-        keepDialog(showText("分享子树", text));
+        if (!text) {
+          notify("分享请求已完成，但 Runtime 未返回分享材料，请检查操作记录。");
+          return;
+        }
+        await afterCommit(requireCurrent, () => keepDialog(showText("分享子树", text)));
       });
     if (button.hasAttribute("data-chain"))
       await action(button, async () => {
@@ -883,25 +914,31 @@ export function memoryWorkspace(root, ctx) {
         requireCurrent();
         const restoreGuard = requireReadable();
         await execute("memory_delete", { id: memory.id });
-        requireCurrent();
-        await recordUndo({ kind: "delete", id: memory.id, before: memory });
-        selected = "";
-        discardReader();
-        checked.delete(memory.id);
-        reader.innerHTML = `<div class="empty"><strong>记忆已删除</strong><button data-restore="${h(memory.id)}">恢复刚才删除的记忆</button></div>`;
-        $("[data-restore]", reader).addEventListener("click", (event) =>
-          action(event.currentTarget, async () => {
-            restoreGuard();
-            if (selected)
-              throw new Error("当前记忆或账户已变化，请重新选择后操作。");
-            await execute("memory_restore", { id: memory.id });
-            selected = memory.id;
-            await load();
-            await ctx.refresh();
-          }),
-        );
-        await load();
-        await ctx.refresh();
+        notify("记忆已删除");
+        await afterCommit(requireCurrent, async () => {
+          await recordUndo({ kind: "delete", id: memory.id, before: memory }, requireCurrent.current);
+          if (!requireCurrent.current()) return;
+          selected = "";
+          discardReader();
+          checked.delete(memory.id);
+          reader.innerHTML = `<div class="empty"><strong>记忆已删除</strong><button data-restore="${h(memory.id)}">恢复刚才删除的记忆</button></div>`;
+          $("[data-restore]", reader).addEventListener("click", (event) =>
+            action(event.currentTarget, async () => {
+              restoreGuard();
+              if (selected)
+                throw new Error("当前记忆或账户已变化，请重新选择后操作。");
+              await execute("memory_restore", { id: memory.id });
+              notify("记忆已恢复");
+              await afterCommit(restoreGuard, async () => {
+                selected = memory.id;
+                await load();
+                if (restoreGuard.current()) await ctx.refresh();
+              });
+            }),
+          );
+          await load();
+          if (restoreGuard.current()) await ctx.refresh();
+        });
       });
   });
   root.addEventListener("keydown", (event) => {
@@ -954,12 +991,15 @@ export function memoryWorkspace(root, ctx) {
     },
     remove: () => $("[data-delete]", reader)?.click(),
     undo,
-    moved: async (before) => {
-      await recordUndo({ kind: "move", id: before.id, before });
-      selected = before.id;
-      await load();
-      await ctx.refresh();
+    moved: (before, guard) => {
       notify("已移动");
+      return afterCommit(guard, async () => {
+        await recordUndo({ kind: "move", id: before.id, before }, guard.current);
+        if (!guard.current()) return;
+        selected = before.id;
+        await load();
+        if (guard.current()) await ctx.refresh();
+      });
     },
   });
   return {

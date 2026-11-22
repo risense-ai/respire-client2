@@ -128,8 +128,7 @@ export function memoryInteractions(
         return;
       guard();
       await execute("memory_attach", { id, parent });
-      guard();
-      await moved(before);
+      await moved(before, guard);
     } catch (error) {
       notify(error.message, true);
     }

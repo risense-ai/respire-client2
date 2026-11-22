@@ -26,7 +26,8 @@ const core = new Function(read('ui/core.js').replace(/^export /gm, '') + '\nretu
 let desktop, status, failure, stateFailure, stateWait, statusWait;
 const events = [], notices = [];
 const ctx = { statusScope: null, statusPending: true };
-let published;
+let published, renderRejection;
+const logged = [];
 const bindings = {
   ctx, $: selector => elements[selector], ...i18n, ...core,
   async api(name) {
@@ -40,10 +41,12 @@ const bindings = {
   appearance() { events.push('appearance'); },
   view: { update() {
     events.push('view.update'); published?.(ctx);
+    if (renderRejection) return Promise.reject(renderRejection);
   } },
   refreshNavCounts() { events.push('nav'); },
   maybeShowFirstRun() {},
   notify(...args) { notices.push(args); },
+  console: {error(...args) { logged.push(args); }},
 };
 const { refresh: startRefresh, setRefreshText } = new Function(...Object.keys(bindings),
   'let refreshPromise, flushStatus, verifiedStatus, stagedStatus; const navCounts = {at:0};\n' +
@@ -128,6 +131,17 @@ async function test(name, fn) { await fn(); console.log(`PASS ${++count}: ${name
     assert.equal(elements['#nav-memory-count'].textContent, '13');
     assert.match(elements['#sync-summary'].textContent, /last verified/);
     failure = false; await refresh(); assert.equal(ctx.statusError, '');
+    assert.equal(ctx.status.summary.local_alive, 13);
+  });
+  await test('rejected view update is observed without undoing a verified snapshot or stopping updates', async () => {
+    renderRejection = Error('async view failed');
+    await refresh();
+    assert.equal(logged.at(-1)[1], renderRejection);
+    assert.equal(ctx.status.summary.local_alive, 13);
+    renderRejection = null;
+    const before = logged.length;
+    await refresh();
+    assert.equal(logged.length, before);
     assert.equal(ctx.status.summary.local_alive, 13);
   });
   await test('disconnect skips status and clears private data; reconnect brackets before restoring it', async () => {
@@ -335,17 +349,19 @@ async function test(name, fn) { await fn(); console.log(`PASS ${++count}: ${name
   // Reuse the real workspace module for memory readback and refresh rules.
   const workspace = read('memory/workspace.js');
   const segment = (from, to) => workspace.slice(workspace.indexOf(from), workspace.indexOf(to));
-  const build = new Function('ctx', 'execute', `
+  const build = new Function('ctx', 'execute', 'metadataCap', `
   const root = { isConnected: true }, checked = new Set(), expanded = new Set();
   const reader = { innerHTML: 'old reader', querySelector: () => true };
   const tree = { innerHTML: 'old tree' }, count = { textContent: '' };
-  let loaded = true, revision = 'loaded', busy = false, limit = 4, metadataCap = true,
+  metadataCap = metadataCap === undefined ? true : metadataCap;
+  let loaded = true, revision = 'loaded', busy = false, limit = 4,
     catalogContext = ctx.statusScope, selectionAnchor = null, lastFoldClick, filter = '', actionEpoch = 0, statusUnavailable = false;
   let records = [{id:'old'}], selected = 'old', selectionVersion = 0;
   let renderedEntry = {id:'old', updated_at:'before', content:'prior body'}, selectedEntry = renderedEntry, searchCaption;
   let renderedContext = readableLibrary(), readerToken = {};
   function renderTree() { tree.innerHTML = records.map(row => row.id).join(','); }
   const h = String, t = String, number = String, list = value => value, entry = value => value;
+  const summary = value => value?.summary || {}, notify = () => {};
   const inventory = rows => ({byId: new Map(rows.map(row => [row.id, row]))});
   const $ = () => ({addEventListener() {}, insertAdjacentHTML() {}});
   const all = () => [];
@@ -383,6 +399,29 @@ async function test(name, fn) { await fn(); console.log(`PASS ${++count}: ${name
     settle([{id:'stale'}]);
     await loading;
     assert.deepEqual(pending.ids(), []);
+  });
+  await test('a late capabilities read cannot set the catalog mode for the next scope', async () => {
+    const ctx = fixtureContext();
+    let release, probes = 0, calls = [];
+    const reading = build(ctx, async (name, args) => {
+      if (name === 'capabilities') {
+        if (++probes === 1) return new Promise(resolve => {release = resolve;});
+        return {summary:{capabilities:{memory_list_metadata:false}}};
+      }
+      calls.push(args);
+      return [{id:'new'}];
+    }, null);
+    const old = reading.load();
+    ctx.statusScope = 'verified-b'; ctx.status = null;
+    assert.equal(reading.showUnavailable(), true);
+    release({summary:{capabilities:{memory_list_metadata:true}}});
+    await old;
+    assert.deepEqual(calls, []);
+    ctx.status = fixtureContext().status;
+    await reading.load();
+    assert.equal(probes, 2);
+    assert.deepEqual(calls, [{limit:4}]);
+    assert.deepEqual(reading.ids(), ['new']);
   });
   await test('reader preserves content on transport failure but renders definite rejection', async () => {
     const ctx = fixtureContext();
@@ -985,6 +1024,7 @@ async function test(name, fn) { await fn(); console.log(`PASS ${++count}: ${name
       path.join(__dirname, 'fixtures/client-refresh-dom.cjs'),
     ], {encoding:'utf8'});
     assert.match(output, /initial retry, same-scope display only, delayed same-root ABA, fresh reader, real lock passed/);
+    assert.match(output, /timed recovery and late committed writes passed/);
   });
   console.log(`${count} focused refresh tests passed; browser/native UIA not exercised.`);
 })().catch(error => { console.error(error); process.exitCode = 1; });
