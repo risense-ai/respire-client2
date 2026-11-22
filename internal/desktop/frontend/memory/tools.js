@@ -12,7 +12,7 @@ import {
 import { recordUndo } from "./undo.js";
 import { inspectGrants } from "../pages/grants.js";
 
-export function memoryTools(reader, memory, { changed, requireCurrent }) {
+export function memoryTools(reader, memory, { changed, requireCurrent, keepDialog }) {
   const area = document.createElement("div");
   area.className = "panel-body actions";
   area.innerHTML =
@@ -24,9 +24,9 @@ export function memoryTools(reader, memory, { changed, requireCurrent }) {
     action(button, async () => {
       requireCurrent();
       const kind = button.dataset.tool;
-      if (kind === "access") return inspectGrants(memory);
+      if (kind === "access") return inspectGrants(memory, requireCurrent, keepDialog);
       if (kind === "purge") {
-        dialog({
+        keepDialog(dialog({
           title: "永久清除记忆密文",
           body:
             '<p class="warning-text">此操作不可撤销。会清除当前版本的记忆密文；Runtime 会按同步与冲突规则决定是否保留待处理修订。</p>' +
@@ -37,10 +37,11 @@ export function memoryTools(reader, memory, { changed, requireCurrent }) {
             if (value.id.trim() !== memory.id)
               throw Error("ID 不匹配，未执行清除");
             await execute("memory_purge", { id: memory.id });
+            requireCurrent();
             notify("密文清除请求已完成");
             await changed();
           },
-        });
+        }));
         return;
       }
       if (kind === "promote") {
@@ -49,11 +50,13 @@ export function memoryTools(reader, memory, { changed, requireCurrent }) {
             "提升记忆",
             "将此记忆连同子节点提升到上一级祖先之下。",
             "提升",
+            keepDialog,
           ))
         )
           return;
         requireCurrent();
         await execute("memory_promote", { id: memory.id });
+        requireCurrent();
         await recordUndo({ kind: "move", id: memory.id, before: memory });
         await changed();
         return;
@@ -68,12 +71,12 @@ export function memoryTools(reader, memory, { changed, requireCurrent }) {
         kind === "portrait" ? { limit: 40 } : { root: memory.id },
       );
       requireCurrent();
-      showText(
+      keepDialog(showText(
         { book: "成书材料", portrait: "画像材料", material: "子树安装材料" }[
           kind
         ],
         raw(result.details || result.summary),
-      );
+      ));
     });
   };
 }

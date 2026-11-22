@@ -6,6 +6,8 @@ export function memoryInteractions(
   {
     getRecords,
     getSelected,
+    requireReadable,
+    keepDialog,
     select,
     newMemory,
     edit,
@@ -102,6 +104,7 @@ export function memoryInteractions(
     if (!target || !id) return;
     event.preventDefault();
     try {
+      const guard = requireReadable();
       const parent = target.dataset.id,
         tree = inventory(getRecords()),
         seen = new Set();
@@ -112,16 +115,20 @@ export function memoryInteractions(
         cursor = tree.byId.get(cursor)?.parent_id;
       }
       const before = entry(await execute("memory_show", { id }));
+      guard();
       if (before.parent_id === parent) return;
       if (
         !(await confirm(
           "移动记忆",
           `将「${before.title}」移动到「${tree.byId.get(parent)?.title || parent}」之下。`,
           "移动",
+          keepDialog,
         ))
       )
         return;
+      guard();
       await execute("memory_attach", { id, parent });
+      guard();
       await moved(before);
     } catch (error) {
       notify(error.message, true);

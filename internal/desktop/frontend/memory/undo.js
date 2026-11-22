@@ -25,7 +25,7 @@ export async function recordUndo({ kind, id, before, importance, action }) {
     );
   }
 }
-export async function undoLast() {
+export async function undoLast(requireCurrent = () => {}) {
   if (running) throw new Error("撤销正在执行");
   const item = lastUndo;
   if (!item) throw new Error("没有可撤销的操作");
@@ -35,6 +35,7 @@ export async function undoLast() {
       throw new Error(
         "记忆库已在其他操作中改变，此次撤销已失效。请读取当前数据后手动调整。",
       );
+    requireCurrent();
     lastUndo = null;
     // Consume before submitting: an unknown write outcome must never be replayed.
     if (item.kind === "create") await execute("memory_delete", { id: item.id });

@@ -13,7 +13,7 @@ import {
 } from "../ui/core.js";
 import { entry, kindNames } from "./model.js";
 
-export function editor({ memory = null, parent = "", merge = [], onSaved, requireCurrent }) {
+export function editor({ memory = null, parent = "", merge = [], onSaved, requireCurrent, keepDialog = (element) => element }) {
   const isEdit = Boolean(memory?.id);
   const element = dialog({
     title: merge.length ? "合并记忆" : isEdit ? "编辑记忆" : "记录一条记忆",
@@ -66,6 +66,7 @@ export function editor({ memory = null, parent = "", merge = [], onSaved, requir
               "确认合并",
               `将用当前正文合并 ${merge.length} 条记忆；请确认需要保留的内容都已写入。未选中的子节点会提升到仍存在的祖先。`,
               "确认合并",
+              keepDialog,
             ))
           )
             return false;
@@ -144,16 +145,18 @@ export function editor({ memory = null, parent = "", merge = [], onSaved, requir
       all("[data-read]", area).forEach((control) =>
         control.addEventListener("click", async () => {
           try {
+            requireCurrent?.();
             const item = entry(
               await execute("memory_show", { id: control.dataset.read }),
             );
-            dialog({
+            requireCurrent?.();
+            keepDialog(dialog({
               title: item.title,
               body: `<div class="reading-content">${h(item.content)}</div>`,
               submit: "关闭",
               onSubmit: () => {},
               wide: true,
-            });
+            }));
           } catch (error) {
             notify(error.message, true);
           }

@@ -75,7 +75,7 @@ export function overview(root, ctx) {
   function update() {
     statsView.update();
     const state = ctx.desktop || {},
-      s = ctx.status?.summary || {},
+      s = ctx.displayStatus?.summary || {},
       health = state.health || {},
       sync = s.sync_live || {},
       index = s.retrieval_index || {},
@@ -83,6 +83,7 @@ export function overview(root, ctx) {
       op = s.model_operation || {},
       session = s.session || {};
     const nowTask = state.task || {};
+    const canSync = ctx.status?.summary?.unlocked === true && !isPending("sync");
     if (promptsReady === null && state.connected)
       ctx
         .api("inject-targets")
@@ -137,7 +138,7 @@ export function overview(root, ctx) {
           ["账户", session.user || "本机离线"],
           ["服务地址", s.server_addr],
         ]) +
-          `<div class="panel-body"><button data-command="sync" ${isPending("sync") ? "disabled" : ""}>${isPending("sync") ? "同步中…" : "立即同步"}</button>${sync.error ? `<p class="form-error section-gap">${h(sync.error)}</p>` : ""}</div>`,
+          `<div class="panel-body"><button data-command="sync" ${canSync ? "" : "disabled"}>${isPending("sync") ? "同步中…" : "立即同步"}</button>${sync.error ? `<p class="form-error section-gap">${h(sync.error)}</p>` : ""}</div>`,
       )}
       ${panel(
         "模型与索引",
@@ -243,18 +244,23 @@ export function overview(root, ctx) {
           )
           .join("")}</div></div>`
       : "";
-    if (ctx.statusError)
+    if (ctx.statusError || ctx.statusPending) {
+      const message = ctx.displayStatus ? "正在重连，显示上次状态。"
+        : ctx.statusError ? "暂时无法读取本机状态，请点击刷新。" : "正在读取本机状态";
       onboarding.insertAdjacentHTML(
         "beforeend",
-        `<p class="form-error section-gap">状态读取失败：${h(ctx.statusError)}</p>`,
+        `<p class="hint section-gap" role="status">${h(message)} ${ctx.statusError ? '<button data-retry-status>刷新</button>' : ""}</p>`,
       );
+    }
   }
   root.addEventListener("click", (event) => {
     const button = event.target.closest("button");
     if (!button) return;
     if (button.dataset.go) ctx.navigate(button.dataset.go);
+    if (button.hasAttribute("data-retry-status")) action(button, ctx.refresh);
     if (button.dataset.command)
       action(button, async () => {
+        if (ctx.status?.summary?.unlocked !== true) return;
         await execute(button.dataset.command);
         notify("同步完成");
         await ctx.refresh();

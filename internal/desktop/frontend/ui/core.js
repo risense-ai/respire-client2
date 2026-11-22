@@ -194,7 +194,7 @@ export function dialog({
   element.showModal();
   return element;
 }
-export async function confirm(title, message, label = "确认执行") {
+export async function confirm(title, message, label = "确认执行", keepDialog) {
   return new Promise((resolve) => {
     let accepted = false;
     const element = dialog({
@@ -206,6 +206,7 @@ export async function confirm(title, message, label = "确认执行") {
         resolve(true);
       },
     });
+    keepDialog?.(element);
     element.addEventListener(
       "close",
       () => {

@@ -43,9 +43,9 @@ const definitions = {
   diagnostics: ["诊断", diagnostics],
 };
 const settingsPages = ["settings", "updates", "operations", "diagnostics"];
-let current,
-  view,
-  refreshing = false;
+let current, view;
+let refreshPromise, flushStatus = false, verifiedStatus, stagedStatus;
+let checkFirstRun = false;
 // Set once the topbar dropdowns are wired; appearance() runs earlier, so it
 // only syncs the theme value when the dropdown already exists.
 let themeDropdown = null;
@@ -53,6 +53,9 @@ const ctx = {
   desktop: null,
   status: null,
   statusError: "",
+  statusPending: true,
+  statusScope: null,
+  displayStatus: null,
   api,
   execute,
   notify,
@@ -161,19 +164,21 @@ function route() {
 // Organize suggestions are fetched by the Organize page, not by this timer.
 const navCounts = { at: 0, running: false };
 async function refreshNavCounts() {
-  if (!ctx.desktop?.connected || navCounts.running) return;
+  if (ctx.status?.summary?.unlocked !== true || !ctx.statusScope || navCounts.running) return;
+  const scope = ctx.statusScope;
   if (Date.now() - navCounts.at < 60000) return;
   navCounts.running = true;
   navCounts.at = Date.now();
   try {
     const day = new Date().toISOString().slice(0, 10);
     const diaryEnv = await execute("diary_list", { from: day, to: day });
-    if (!document.isConnected) return;
+    if (!document.isConnected || ctx.statusScope !== scope || ctx.status?.summary?.unlocked !== true) return;
     $("#nav-diary-count").textContent = number(rows(diaryEnv).length);
   } catch {
-    $("#nav-diary-count").textContent = "";
+    if (ctx.statusScope === scope) $("#nav-diary-count").textContent = "";
+  } finally {
+    navCounts.running = false;
   }
-  navCounts.running = false;
 }
 // Keep unchanged refresh labels' text nodes intact, including for accessibility.
 // Compare the live DOM rather than cached values so external changes are repaired.
@@ -181,51 +186,146 @@ function setRefreshText(element, value) {
   const text = value == null ? "" : `${value}`;
   if (element.textContent !== text) element.textContent = text;
 }
-async function refresh() {
-  if (refreshing) return;
-  refreshing = true;
-  try {
-    ctx.desktop = await api("state");
-    appearance();
-    $("#connection-dot").classList.toggle("online", ctx.desktop.connected);
-    setRefreshText($("#connection-label"), ctx.desktop.connected
-      ? t("Runtime 已连接")
-      : t("Runtime 未连接"));
-    setRefreshText($("#client-version"), t("客户端") + " " + ctx.desktop.version);
-    setRefreshText($("#client-platform"), ctx.desktop.platform);
-    if (ctx.desktop.connected) {
-      try {
-        ctx.status = await api("runtime-status");
-        ctx.statusError = "";
-      } catch (error) {
-        ctx.status = null;
-        ctx.statusError = error.message;
-      }
-    } else {
-      ctx.status = null;
-    ctx.statusError = ctx.desktop.connectionError || t("Runtime 未连接");
-    }
-    const s = ctx.status?.summary || {};
-    setRefreshText($("#nav-memory-count"), number(s.local_alive));
-    setRefreshText($("#status-summary"), ctx.desktop.connected
-      ? currentLanguage() === "zh"
-        ? `${number(s.local_alive)} 条记忆 · ${s.workspace || "normal"} · Runtime ${ctx.desktop.health?.bin || "—"}`
-        : `${number(s.local_alive)} memories · ${s.workspace || "normal"} · Runtime ${ctx.desktop.health?.bin || "—"}`
-      : t("Runtime 未连接"));
-    const sync = s.sync_live || {};
-    setRefreshText($("#sync-summary"), ctx.statusError
-      ? "状态读取失败"
+// Status carries a directory but not the Runtime RPC scope that produced it.
+function healthScope(desktop) {
+  const health = desktop?.health;
+  if (!desktop?.connected || !health?.account_id || !health.instance_id ||
+      !Number.isSafeInteger(health.generation) || health.generation < 1 || !health.data_dir)
+    return null;
+  return JSON.stringify([health.account_id, health.instance_id, health.generation, health.data_dir]);
+}
+
+function healthObservation(desktop) {
+  const scope = healthScope(desktop);
+  if (!scope) return null;
+  const health = desktop.health;
+  return JSON.stringify([scope, health.credential_state, health.store_ready]);
+}
+
+function statusMatchesDesktop(status, desktop) {
+  const summary = status?.summary;
+  return status?.command === "status" && summary?.data_dir === desktop.health.data_dir &&
+    typeof summary.unlocked === "boolean" &&
+    !(desktop.health.credential_state === "required" && summary.unlocked);
+}
+
+function renderRefresh() {
+  const desktop = ctx.desktop;
+  if (desktop) appearance();
+  $("#connection-dot").classList.toggle("online", Boolean(desktop?.connected));
+  setRefreshText($("#connection-label"), desktop?.connected ? t("Runtime 已连接") : t("Runtime 未连接"));
+  setRefreshText($("#client-version"), desktop ? t("客户端") + " " + desktop.version : "");
+  setRefreshText($("#client-platform"), desktop?.platform);
+  const s = ctx.displayStatus?.summary || {};
+  const count = s.local_alive == null ? "" : number(s.local_alive);
+  setRefreshText($("#nav-memory-count"), count);
+  setRefreshText($("#status-summary"), !desktop?.connected
+    ? t("Runtime 未连接")
+    : count === ""
+      ? t(ctx.statusError ? "暂时无法读取本机状态，请点击刷新。" : "正在读取本机状态")
+      : currentLanguage() === "zh"
+        ? `${count} 条记忆 · ${s.workspace || "normal"} · Runtime ${desktop.health?.bin || "—"}`
+        : `${count} memories · ${s.workspace || "normal"} · Runtime ${desktop.health?.bin || "—"}`);
+  const sync = s.sync_live;
+  setRefreshText($("#sync-summary"), ctx.statusError
+    ? t(ctx.displayStatus ? "正在重连，显示上次状态。" : "同步状态待确认")
+    : !sync ? t("同步状态待确认")
       : currentLanguage() === "zh"
         ? `同步 ${sync.phase || "—"} · 待处理 ${number(sync.pending)} · 冲突 ${number(sync.conflicts)}`
         : `Sync ${sync.phase || "—"} · pending ${number(sync.pending)} · conflicts ${number(sync.conflicts)}`);
-    view?.update?.();
-  } catch (error) {
-    notify(error.message, true);
-  } finally {
-    refreshing = false;
-  }
-  refreshNavCounts();
+  view?.update?.();
 }
+
+function publishStatus(desktop, { checking = false, error = "", invalidate = false } = {}) {
+  const observation = healthObservation(desktop);
+  if (invalidate || !observation || observation !== verifiedStatus?.observation)
+    verifiedStatus = null;
+  ctx.desktop = desktop;
+  const scope = invalidate ? null : healthScope(desktop);
+  if (scope !== ctx.statusScope || desktop?.health?.credential_state === "required") {
+    navCounts.at = 0;
+    setRefreshText($("#nav-diary-count"), "");
+  }
+  ctx.statusScope = scope;
+  ctx.displayStatus = verifiedStatus?.status || null;
+  ctx.status = checking || error ? null : ctx.displayStatus;
+  ctx.statusPending = checking;
+  ctx.statusError = error;
+  renderRefresh();
+}
+
+function refresh({ immediate = true, initial } = {}) {
+  flushStatus ||= immediate;
+  if (immediate && ctx.status) publishStatus(ctx.desktop, { checking: true });
+  if (refreshPromise) return refreshPromise;
+  refreshPromise = refreshStatus(initial).finally(() => {
+    refreshPromise = null;
+    flushStatus = false;
+    refreshNavCounts();
+    maybeShowFirstRun();
+  });
+  return refreshPromise;
+}
+
+async function refreshStatus(initial) {
+  let desktop;
+  try {
+    desktop = initial || await api("state");
+  } catch (error) {
+    stagedStatus = null;
+    publishStatus(null, { error: error.message, invalidate: true });
+    return;
+  }
+  const observation = healthObservation(desktop);
+  if (!observation) {
+    stagedStatus = null;
+    publishStatus(desktop, { error: desktop.connectionError ||
+      t(desktop.connected ? "Runtime 身份尚未确认，请点击刷新。" : "Runtime 未连接"), invalidate: true });
+    return;
+  }
+  // The regular next Health observation closes the preceding sample. This
+  // brackets Status without a second expensive Desktop-state read per poll.
+  if (stagedStatus?.observation === observation)
+    verifiedStatus = stagedStatus;
+  stagedStatus = null;
+  const hadVerified = verifiedStatus?.observation === observation;
+  if (!hadVerified || flushStatus || ctx.statusError)
+    publishStatus(desktop, { checking: true });
+  else
+    publishStatus(desktop); // Ordinary polling retains its last *verified* pair.
+  let status;
+  try {
+    status = await api("runtime-status");
+  } catch (error) {
+    publishStatus(desktop, { error: error.message });
+    return;
+  }
+  if (!statusMatchesDesktop(status, desktop)) {
+    publishStatus(desktop, { error: t("Runtime 身份尚未确认，请点击刷新。"), invalidate: true });
+    return;
+  }
+  const lockChanged = hadVerified &&
+    verifiedStatus.status.summary.unlocked !== status.summary.unlocked;
+  if (lockChanged) publishStatus(desktop, { checking: true, invalidate: true });
+  if (hadVerified && !lockChanged && !flushStatus && !ctx.statusPending) {
+    stagedStatus = { observation, status };
+    return;
+  }
+  // On first load, an identity change, transport recovery or a user retry,
+  // flush now. A manual request arriving during a poll upgrades that poll.
+  try {
+    const end = await api("state");
+    if (healthObservation(end) !== observation) {
+      publishStatus(end, { error: t("Runtime 身份尚未确认，请点击刷新。"), invalidate: true });
+      return;
+    }
+    verifiedStatus = { observation, status };
+    publishStatus(end);
+  } catch (error) {
+    publishStatus(null, { error: error.message, invalidate: true });
+  }
+}
+
 all("nav [data-page]").forEach((button) =>
   button.addEventListener("click", () => navigate(button.dataset.page)),
 );
@@ -364,7 +464,7 @@ window.addEventListener("hashchange", () => {
   }
   route();
 });
-document.addEventListener("respire-operation", () => refresh());
+document.addEventListener("respire-operation", () => refresh({ immediate: false }));
 let translationScheduled = false;
 new MutationObserver(() => {
   if (translationScheduled) return;
@@ -380,15 +480,26 @@ new MutationObserver(() => {
   attributes: true,
   attributeFilter: ["title", "placeholder", "aria-label"],
 });
-async function poll() {
-  await refresh();
+function maybeShowFirstRun() {
+  if (!checkFirstRun || !ctx.desktop) return;
+  if (!ctx.desktop.preferences?.onboardingCompleted && ctx.desktop.connected && !ctx.status)
+    return; // A transient status failure does not establish a new account.
+  checkFirstRun = false;
+  if (ctx.desktop.preferences?.onboardingCompleted || ctx.desktop.localSessionHasToken ||
+      ctx.status?.summary?.session?.has_token) return;
+  wizard.show(); // A clean install may need the wizard to install/start Runtime.
+}
+async function poll(initial) {
+  await refresh({ immediate: false, initial });
   setTimeout(poll, document.hidden ? 15000 : 3000);
 }
 (async () => {
+  let initial;
   try {
-    ctx.desktop = await api("state");
+    initial = await api("state");
+    ctx.desktop = initial; // The first route needs host preferences even before Status.
     const preferred =
-      ctx.desktop.preferences?.language ||
+      initial.preferences?.language ||
       localStorage.getItem("respire-language") ||
       "";
     if (preferred) {
@@ -404,14 +515,13 @@ async function poll() {
   // every step from language to model enablement. The auto-show waits for
   // the first status read and never opens when this machine already has a
   // local account; the entry in Settings → About still opens a full re-run.
-  const firstPoll = poll();
+  const firstPoll = poll(initial);
   try {
     await restorePendingRecoveryMaterials();
   } catch (error) {
     notify(error.message, true);
   }
-  if (!ctx.desktop || ctx.desktop.preferences?.onboardingCompleted) return;
   await firstPoll;
-  if (ctx.status?.summary?.session?.has_token) return;
-  wizard.show();
+  checkFirstRun = true;
+  maybeShowFirstRun();
 })();

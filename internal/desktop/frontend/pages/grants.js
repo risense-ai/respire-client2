@@ -15,24 +15,27 @@ import {
 import { heading } from "./overview.js";
 import { entry } from "../memory/model.js";
 
-export async function inspectGrants(memory) {
+export async function inspectGrants(memory, requireCurrent = () => {}, keepDialog = (element) => element) {
   const ancestors = new Set(), seen = new Set([memory.id]);
   let parent = memory.parent_id;
   while (parent && !seen.has(parent)) {
     if (seen.size >= 256) throw Error("祖先链超过检查限制，请先检查树结构");
     seen.add(parent);
     ancestors.add(parent);
+    requireCurrent();
     parent = entry(await execute("memory_show", { id: parent })).parent_id;
   }
+  requireCurrent();
   const grants = rows(await execute("grant_list"), "grants");
+  requireCurrent();
   const relevant = grants.filter((grant) => !grant.revoked &&
     (grant.root_id === memory.id || ancestors.has(grant.root_id)));
-  showText("当前节点的只读授权", raw({
+  keepDialog(showText("当前节点的只读授权", raw({
     node: memory.id,
     note: "按当前祖先链与有效授权计算；移动节点后范围可能改变。",
     grants: relevant.map((grant) => ({ ...grant,
       relationship: grant.root_id === memory.id ? "直接授权" : "继承自祖先" })),
-  }));
+  })));
 }
 
 export function grants(root, ctx) {
