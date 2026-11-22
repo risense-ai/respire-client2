@@ -222,8 +222,6 @@ export function organize(root, ctx) {
     suggestions = [];
     displayedSuggestions = null;
     area.innerHTML = '<div class="panel empty">正在读取检查结果…</div>';
-    await revision();
-    if (!isCurrent(scope, epoch)) return;
     const result = await execute(names[kind],
       kind === "duplicates" ? { min: 0.8, top: 30 } : {});
     if (!isCurrent(scope, epoch)) return;
@@ -320,7 +318,6 @@ export function organize(root, ctx) {
         return;
       args.auto = true;
     }
-    await revision();
     const result = await execute("organize_classify", args, {
       onProgress: (job) => {
         if (root.isConnected)

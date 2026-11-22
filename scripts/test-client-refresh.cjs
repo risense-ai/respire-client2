@@ -457,7 +457,7 @@ async function test(name, fn) { await fn(); console.log(`PASS ${++count}: ${name
     const errors = [];
     const source = read('pages/organize.js');
     const organizers = new Function('$', 'h', 'heading','panel','select','input','api','report','execute','summary',
-      'action','raw','resultView','confirm','notify',
+      'action','raw','resultView','confirm','notify','FormData',
       source.slice(source.indexOf('export function organize')).replace(/^export /,'') + '\nreturn organize;'
     )($, String, () => '', (_name, html) => html, () => '', () => '',
       async (path) => {
@@ -479,6 +479,7 @@ async function test(name, fn) { await fn(); console.log(`PASS ${++count}: ${name
           {summary:{profile:'library-a', revision:fixture.revision}};
         if (name === 'organize_resort_preview') return fixture.onPreview?.() ?? {};
         if (name === 'organize_resort_apply') return fixture.onApply?.() ?? {};
+        if (name === 'organize_plan' || name === 'organize_classify') return {summary:{ops:[]}};
         return {};
       },
       (x) => x.summary || {},
@@ -492,11 +493,14 @@ async function test(name, fn) { await fn(); console.log(`PASS ${++count}: ${name
       (heading) => heading,
       async () => fixture.onConfirm ? await fixture.onConfirm() : true,
       () => {},
+      function FormData() { return Object.entries({backend:'ds',limit:'50',root:'',all:false}); },
     );
     const flush = () => new Promise(resolve => setImmediate(resolve));
     return {ctx, root, calls, reads, model, fixture, flush, listeners, errors, report: $('[data-report]'),
       field: $('[name=spec]'), apply: $('[data-plan-apply]'),
       click(name) { listeners.click({target:{closest:() => $(`[${name}]`)}}); },
+      analyze(kind) { listeners.click({target:{closest:() => ({dataset:{analyze:kind},hasAttribute:()=>false})}}); },
+      aiPreview() { $('[data-ai]').submit({target:$('[data-ai]'),preventDefault(){}}); },
       mount: () => organizers(root,ctx), suggestions: () => calls.filter(([name]) => name === 'organize_suggestions')};
   }
 
@@ -782,6 +786,32 @@ async function test(name, fn) { await fn(); console.log(`PASS ${++count}: ${name
     await f.flush();
     assert.equal(f.calls.filter(([name]) => name === 'organize_resort_apply').length,0);
     assert.equal(f.apply.disabled,true);
+  });
+  await test('independent Organize actions use their own Runtime calls with no unused memory revision probe', async () => {
+    const {f} = await shownSuggestion();
+    f.calls.length = 0;
+    f.fixture.onRevision = () => { throw new Error('unexpected revision probe'); };
+    for (const kind of ['duplicates', 'audit', 'plan']) {
+      f.analyze(kind);
+      await f.flush();
+    }
+    f.aiPreview();
+    await f.flush();
+    let finish;
+    f.fixture.onConfirm = () => new Promise(resolve => {finish = resolve;});
+    f.click('data-ai-apply');
+    await f.flush();
+    assert.equal(f.calls.filter(([name]) => name === 'organize_classify').length,1);
+    finish(true);
+    await f.flush();
+    assert.deepEqual(f.calls, [
+      ['organize_duplicates',{min:0.8,top:30}],
+      ['organize_audit',{}],
+      ['organize_plan',{}],
+      ['organize_classify',{backend:'ds',limit:50,causal:true}],
+      ['organize_classify',{backend:'ds',limit:50,causal:true,auto:true}],
+    ]);
+    assert.deepEqual(f.errors,[]);
   });
   console.log(`${count} focused refresh tests passed; browser/native UIA not exercised.`);
 })().catch(error => { console.error(error); process.exitCode = 1; });
