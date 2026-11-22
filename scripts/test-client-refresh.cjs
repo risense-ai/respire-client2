@@ -440,41 +440,63 @@ async function test(name, fn) { await fn(); console.log(`PASS ${++count}: ${name
     const bySelector = new Map();
     const $ = (selector) => {
       if (!bySelector.has(selector))
-        bySelector.set(selector, {innerHTML:'', textContent:'', addEventListener() {}});
+        bySelector.set(selector, {innerHTML:'', textContent:'', value:'',
+          disabled: selector === '[data-plan-apply]',
+          addEventListener(name, callback) { this[name] = callback; },
+          dataset: {}, hasAttribute(name) { return selector === `[${name}]`; },
+        });
       return bySelector.get(selector);
     };
     const listeners = {};
     const root = {isConnected:true, addEventListener(name, callback) { listeners[name] = callback; }};
     const ctx = {desktop:{connected:true,health:{account_id:'acct-a', instance_id:'runtime-a', generation:1,
-      data_dir:'library-a', inference:{worker_generation:4}}},status:{summary:{unlocked:true,data_dir:'library-a'}}};
+      data_dir:'library-a', inference:{worker_generation:4}}},status:{summary:{unlocked:true,data_dir:'library-a'}},refresh:async () => {}};
     const calls = [], reads = [];
     const model = {generation:'initial'};
-    const fixture = {desktop: null};
+    const fixture = {desktop:null, revision:"current"};
+    const errors = [];
     const source = read('pages/organize.js');
     const organizers = new Function('$', 'h', 'heading','panel','select','input','api','report','execute','summary',
-      'action','raw','resultView',
+      'action','raw','resultView','confirm','notify',
       source.slice(source.indexOf('export function organize')).replace(/^export /,'') + '\nreturn organize;'
     )($, String, () => '', (_name, html) => html, () => '', () => '',
       async (path) => {
         reads.push(path);
         if (path === "state") return fixture.desktop || ctx.desktop;
         await onModel?.();
-        return {catalog:{summary:{active:{model:'m3',generation:model.generation},switch:model.switch}},progress:{summary:{}}};
+        const active = model.legacy ? null : {model:'m3',engine:'cpu',variant:'quantized',generation:model.generation};
+        const task = model.switch ?? null;
+        return {
+          catalog:{summary:{registry:{},active,switch:task}},
+          progress:{summary:{switch:task,operation:{},pending_selection:model.pending ?? null,pending_task:null}},
+        };
       },
-      (value) => ({...(value?.summary ?? value), ...value?.details}),
+      (value) => ({...value?.summary, ...value?.details}),
       async (name, args) => {
         calls.push([name,args]);
-        if (name === 'organize_suggestions') return onSuggestions();
-        if (name === 'memory_revision') return {summary:{revision:'current'}};
+        if (name === 'organize_suggestions') return {summary:await onSuggestions()};
+        if (name === 'memory_revision') return fixture.onRevision?.() ??
+          {summary:{profile:'library-a', revision:fixture.revision}};
+        if (name === 'organize_resort_preview') return fixture.onPreview?.() ?? {};
+        if (name === 'organize_resort_apply') return fixture.onApply?.() ?? {};
         return {};
       },
       (x) => x.summary || {},
-      (_button, handler) => handler(),
+      async (button, handler) => {
+        if (button.disabled) return;
+        button.disabled = true;
+        try { await handler(); } catch (error) { errors.push(error.message); }
+        finally { button.disabled = false; }
+      },
       JSON.stringify,
       (heading) => heading,
+      async () => fixture.onConfirm ? await fixture.onConfirm() : true,
+      () => {},
     );
     const flush = () => new Promise(resolve => setImmediate(resolve));
-    return {ctx, root, calls, reads, model, fixture, flush, listeners, report: $('[data-report]'),
+    return {ctx, root, calls, reads, model, fixture, flush, listeners, errors, report: $('[data-report]'),
+      field: $('[name=spec]'), apply: $('[data-plan-apply]'),
+      click(name) { listeners.click({target:{closest:() => $(`[${name}]`)}}); },
       mount: () => organizers(root,ctx), suggestions: () => calls.filter(([name]) => name === 'organize_suggestions')};
   }
 
@@ -609,6 +631,157 @@ async function test(name, fn) { await fn(); console.log(`PASS ${++count}: ${name
     assert.equal(f.suggestions().length,0);
     await view.refresh();
     assert.equal(f.suggestions().length,1);
+  });
+  async function shownSuggestion() {
+    const f = organizeFixture(async () => ({suggests:[{orphan:{id:'child'},target:{id:'parent'}}]}));
+    const view = f.mount();
+    await view.refresh();
+    assert.match(f.report.innerHTML,/预览全部建议/);
+    return {f, view};
+  }
+  await test('Organize refuses suggestions when memory changes during analysis', async () => {
+    let finish;
+    const f = organizeFixture(() => new Promise(resolve => {finish = resolve;}));
+    const view = f.mount();
+    const pending = view.refresh();
+    await f.flush();
+    f.fixture.revision = 'new-memory';
+    finish({suggests:[{orphan:{id:'old',title:'STALE'},target:{id:'parent'}}]});
+    await pending;
+    assert.match(f.report.innerHTML,/记忆库已变化/);
+    assert.doesNotMatch(f.report.innerHTML,/STALE/);
+  });
+  await test('suggestion preview checks the original revision before submitting even after suggestion display', async () => {
+    const {f} = await shownSuggestion();
+    f.fixture.revision = 'new-memory';
+    f.click('data-suggestions-all');
+    await f.flush();
+    assert.equal(f.calls.filter(([name]) => name === 'organize_resort_preview').length,0);
+    assert.equal(f.field.value,'');
+    assert.equal(f.apply.disabled,true);
+    assert.match(f.errors.at(-1),/记忆库已变化/);
+  });
+  await test('late suggestion preview cannot retain a plan after revision, model, remote account or observed account ABA', async () => {
+    for (const drift of [
+      (f) => {f.fixture.revision = 'new-memory';},
+      (f) => {f.model.generation = 'new-model';},
+      (f) => {f.fixture.desktop = {connected:true,health:{...f.ctx.desktop.health,account_id:'acct-b'}};},
+      (f, view) => {
+        f.ctx.desktop.health.account_id = 'acct-b'; view.update();
+        f.ctx.desktop.health.account_id = 'acct-a'; view.update();
+      },
+    ]) {
+      const {f,view} = await shownSuggestion();
+      let finish;
+      f.fixture.onPreview = () => new Promise(resolve => {finish = resolve;});
+      f.click('data-suggestions-all');
+      await f.flush();
+      assert.equal(f.apply.disabled,true);
+      assert.equal(typeof finish,'function');
+      drift(f,view);
+      finish({});
+      await f.flush();
+      assert.equal(f.apply.disabled,true);
+      assert.equal(f.field.value,'');
+      assert.doesNotMatch(f.report.innerHTML,/^方案预览$/);
+      f.click('data-plan-apply');
+      await f.flush();
+      assert.equal(f.calls.filter(([name]) => name === 'organize_resort_apply').length,0);
+    }
+  });
+  await test('suggestion apply rechecks after confirmation for revision, model, fresh account and edited-and-reverted text', async () => {
+    for (const drift of [
+      (f) => {f.fixture.revision = 'new-memory';},
+      (f) => {f.model.generation = 'new-model';},
+      (f) => {f.fixture.desktop = {connected:true,health:{...f.ctx.desktop.health,account_id:'acct-b'}};},
+      (f) => {f.field.input();},
+    ]) {
+      const {f} = await shownSuggestion();
+      f.click('data-suggestions-all');
+      await f.flush();
+      assert.equal(f.report.innerHTML,'方案预览');
+      assert.equal(f.apply.disabled,false);
+      let finish;
+      f.fixture.onConfirm = () => new Promise(resolve => {finish = resolve;});
+      f.click('data-plan-apply');
+      await f.flush();
+      assert.equal(typeof finish,'function');
+      drift(f);
+      finish(true);
+      await f.flush();
+      assert.equal(f.calls.filter(([name]) => name === 'organize_resort_apply').length,0);
+      assert.equal(f.apply.disabled,true);
+    }
+  });
+  await test('unchanged suggestion confirmation submits the existing spec once and consumes the preview', async () => {
+    const {f} = await shownSuggestion();
+    f.click('data-suggestions-all');
+    await f.flush();
+    assert.equal(f.apply.disabled,false);
+    f.click('data-plan-apply');
+    f.click('data-plan-apply');
+    await f.flush();
+    f.click('data-plan-apply');
+    await f.flush();
+    assert.deepEqual(f.calls.filter(([name]) => name === 'organize_resort_apply'),[
+      ['organize_resort_apply',{spec:'{"ops":[{"id":"child","parent":"parent"}]}'}],
+    ]);
+    assert.equal(f.report.innerHTML,'整理结果');
+    assert.equal(f.apply.disabled,true);
+  });
+  await test('manual JSON preview/apply still uses the existing revision and wire with no model dependency', async () => {
+    const {f} = await shownSuggestion();
+    f.fixture.desktop = {connected:false};
+    f.model.switch = {state:'running'};
+    const reads = f.reads.length;
+    f.field.value = '{"ops":[{"id":"manual","parent":"any"}]}';
+    f.field.input();
+    f.click('data-plan-preview');
+    await f.flush();
+    assert.equal(f.apply.disabled,false);
+    f.click('data-plan-apply');
+    await f.flush();
+    assert.deepEqual(f.calls.filter(([name]) => name === 'organize_resort_apply'),[
+      ['organize_resort_apply',{spec:f.field.value}],
+    ]);
+    assert.equal(f.reads.length,reads);
+    assert.equal(f.apply.disabled,true);
+  });
+  await test('published dev.28 and dev.31 admit legacy null active and configured model catalog/Health', async () => {
+    for (const legacy of [false, true]) {
+      const f = organizeFixture(async () => ({suggests:[{orphan:{id:'child'},target:{id:'parent'}}]}));
+      f.model.legacy = legacy;
+      const {health} = f.ctx.desktop;
+      health.generation = 1;
+      health.credential_state = 'available';
+      // The published Health inference error/legacy status can omit the
+      // optional worker generation; account and Runtime generation still bind.
+      health.inference = {state:'ready'};
+      const view = f.mount();
+      await view.refresh();
+      assert.equal(f.suggestions().length,1);
+      f.click('data-suggestions-all');
+      await f.flush();
+      assert.equal(f.apply.disabled,false);
+    }
+  });
+  await test('suggestion is not applied across an account move while waiting on final revision read', async () => {
+    const {f} = await shownSuggestion();
+    f.click('data-suggestions-all');
+    await f.flush();
+    let finishConfirmation;
+    f.fixture.onConfirm = () => new Promise(resolve => {finishConfirmation = resolve;});
+    f.click('data-plan-apply');
+    await f.flush();
+    let finishRevision;
+    f.fixture.onRevision = () => new Promise(resolve => {finishRevision = resolve;});
+    finishConfirmation(true);
+    await f.flush();
+    f.fixture.desktop = {connected:true,health:{...f.ctx.desktop.health,account_id:'acct-b'}};
+    finishRevision({summary:{profile:'library-a',revision:'current'}});
+    await f.flush();
+    assert.equal(f.calls.filter(([name]) => name === 'organize_resort_apply').length,0);
+    assert.equal(f.apply.disabled,true);
   });
   console.log(`${count} focused refresh tests passed; browser/native UIA not exercised.`);
 })().catch(error => { console.error(error); process.exitCode = 1; });

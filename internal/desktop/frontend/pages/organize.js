@@ -20,8 +20,7 @@ import { heading } from "./overview.js";
 import { report, entry } from "../memory/model.js";
 
 export function organize(root, ctx) {
-  let plan = null,
-    planRevision = "",
+  let suggestionSource = null, previewedPlan = null, specEpoch = 0, applyingPlan = false,
     suggestions = [],
     backend = "ds";
   let initialStarted = false, disposed = false, observedScope = null;
@@ -51,15 +50,30 @@ export function organize(root, ctx) {
     ) +
     `<div data-ai-result class="section-gap"></div>`;
   const area = $("[data-report]", root),
-    specField = $("[name=spec]", root);
-  async function revision() {
-    return raw(summary(await execute("memory_revision")));
+    specField = $("[name=spec]", root),
+    applyButton = $("[data-plan-apply]", root);
+  async function revision(requireIdentity = false) {
+    const value = summary(await execute("memory_revision"));
+    if (requireIdentity && (typeof value.profile !== "string" || !value.profile ||
+        typeof value.revision !== "string" || !value.revision))
+      throw new Error("Runtime 未提供有效的记忆库版本，请稍后重试。");
+    return raw(value);
   }
-  function setPlan(value, stamp) {
-    plan = value;
-    planRevision = stamp;
-    specField.value = raw(value);
-    $("[data-plan-apply]", root).disabled = true;
+  function invalidatePreview() {
+    ++specEpoch;
+    previewedPlan = null;
+    applyButton.disabled = true;
+  }
+  function setPlan(value, source = null) {
+    invalidatePreview();
+    suggestionSource = source;
+    specField.value = value === null ? "" : raw(value);
+  }
+  function invalidateSuggestionPlan(source = suggestionSource, showInvalidation = true) {
+    if (!source || suggestionSource !== source) return;
+    if (showInvalidation && previewedPlan)
+      area.innerHTML = '<div class="panel empty">整理方案已失效，请重新读取归纲建议。</div>';
+    setPlan(null);
   }
   function organizeScope(desktop = ctx.desktop) {
     const health = desktop?.health;
@@ -76,6 +90,7 @@ export function organize(root, ctx) {
     if (scope !== observedScope) {
       observedScope = scope;
       ++reportEpoch;
+      invalidateSuggestionPlan();
       suggestions = [];
       if (displayedSuggestions || pendingSuggestions)
         area.innerHTML = '<div class="panel empty">运行环境已变化，请重新读取归纲建议。</div>';
@@ -102,6 +117,28 @@ export function organize(root, ctx) {
     const active = catalog.active;
     return JSON.stringify([active?.model, active?.engine, active?.variant,
       active?.generation, catalog.switch?.id, progress.switch?.id]);
+  }
+  async function verifySuggestionContext(source, stillCurrent) {
+    const scope = source.scope;
+    const verifyCurrent = () => {
+      if (observeScope() !== scope || !stillCurrent())
+        throw new Error("运行环境或整理方案已变化，请重新读取归纲建议。");
+    };
+    verifyCurrent();
+    const model = await suggestionModel();
+    verifyCurrent();
+    if (model !== source.model)
+      throw new Error("模型已变化，请重新读取归纲建议。");
+    const stamp = await revision(true);
+    verifyCurrent();
+    if (stamp !== source.revision)
+      throw new Error("记忆库已变化，请重新读取归纲建议。");
+    // The last read before showing/dispatching must also check the server's
+    // current account, not only the app's previous status poll.
+    const desktop = await api("state");
+    verifyCurrent();
+    if (organizeScope(desktop) !== scope)
+      throw new Error("运行环境已变化，请重新读取归纲建议。");
   }
   function renderSuggestions(value) {
     if (!Array.isArray(value.suggests))
@@ -137,6 +174,7 @@ export function organize(root, ctx) {
       return promise;
     }
     const request = { scope, epoch: ++reportEpoch };
+    invalidateSuggestionPlan();
     suggestions = [];
     displayedSuggestions = null;
     area.innerHTML = '<div class="panel empty">正在读取归纲建议…</div>';
@@ -144,20 +182,15 @@ export function organize(root, ctx) {
       try {
         const model = await suggestionModel();
         if (!isCurrent(scope, request.epoch)) return;
+        const stamp = await revision(true);
+        if (!isCurrent(scope, request.epoch)) return;
         const result = await execute("organize_suggestions", { top: 50 });
         if (!isCurrent(scope, request.epoch)) return;
-        const checkedModel = await suggestionModel();
+        const source = { scope, model, revision: stamp };
+        await verifySuggestionContext(source, () => isCurrent(scope, request.epoch));
         if (!isCurrent(scope, request.epoch)) return;
-        if (model !== checkedModel)
-          throw new Error("模型已变化，请重新读取归纲建议。");
-        // Do not wait for the app's next state poll to observe an account,
-        // instance or worker change made by another client during this read.
-        const freshDesktop = await api("state");
-        if (!isCurrent(scope, request.epoch)) return;
-        if (!freshDesktop || organizeScope(freshDesktop) !== scope)
-          throw new Error("运行环境已变化，请重新读取归纲建议。");
         renderSuggestions(report(result));
-        displayedSuggestions = { scope, model };
+        displayedSuggestions = source;
       } catch (error) {
         if (isCurrent(scope, request.epoch))
           area.innerHTML = `<div class="panel empty danger-text">${h(error.message)}</div>`;
@@ -185,10 +218,11 @@ export function organize(root, ctx) {
     if (!scope) return;
     initialStarted = true;
     const epoch = ++reportEpoch;
+    invalidateSuggestionPlan();
     suggestions = [];
     displayedSuggestions = null;
     area.innerHTML = '<div class="panel empty">正在读取检查结果…</div>';
-    const stamp = await revision();
+    await revision();
     if (!isCurrent(scope, epoch)) return;
     const result = await execute(names[kind],
       kind === "duplicates" ? { min: 0.8, top: 30 } : {});
@@ -197,7 +231,7 @@ export function organize(root, ctx) {
     if (kind === "plan") {
       if (!Array.isArray(value.ops))
         throw new Error("Runtime 未返回有效的修复方案");
-      setPlan({ ops: value.ops }, stamp);
+      setPlan({ ops: value.ops });
       area.innerHTML = resultView("本地结构修复预览", result);
       notify("方案已生成，尚未修改记忆");
     } else
@@ -209,15 +243,62 @@ export function organize(root, ctx) {
   async function preview() {
     const parsed = JSON.parse(specField.value);
     if (!Array.isArray(parsed.ops)) throw new Error("方案需要包含 ops 数组");
-    const stamp = await revision();
-    const result = await execute("organize_resort_preview", {
-      spec: raw(parsed),
+    invalidatePreview();
+    const epoch = specEpoch;
+    const source = suggestionSource;
+    const stillCurrent = () => specEpoch === epoch && suggestionSource === source;
+    try {
+      const stamp = source ? source.revision : await revision();
+      if (source) await verifySuggestionContext(source, stillCurrent);
+      if (!stillCurrent()) return;
+      const result = await execute("organize_resort_preview", {
+        spec: raw(parsed),
+      });
+      if (source) await verifySuggestionContext(source, stillCurrent);
+      if (!stillCurrent()) return;
+      previewedPlan = { value: parsed, revision: stamp, source };
+      area.innerHTML = resultView("方案预览", result);
+      applyButton.disabled = applyingPlan;
+      notify("预览已完成，确认后可应用。");
+    } catch (error) {
+      if (stillCurrent()) invalidateSuggestionPlan(source);
+      throw error;
+    }
+  }
+  async function applyPlan() {
+    const approved = previewedPlan;
+    const stillCurrent = () => previewedPlan === approved && approved &&
+      raw(JSON.parse(specField.value)) === raw(approved.value);
+    if (!stillCurrent()) throw new Error("方案已改变，请重新预览");
+    try {
+      if (approved.source) await verifySuggestionContext(approved.source, stillCurrent);
+      else if ((await revision()) !== approved.revision)
+        throw new Error("记忆库已变化，请重新生成或校验方案");
+      if (!stillCurrent()) return;
+      if (!(await confirm(
+        "应用整理方案",
+        `将应用 ${approved.value.ops.length} 项变更。请核对上面的预览结果。`,
+        "应用方案",
+      ))) return;
+      if (approved.source) await verifySuggestionContext(approved.source, stillCurrent);
+      if (!stillCurrent()) return;
+    } catch (error) {
+      if (previewedPlan === approved) invalidateSuggestionPlan(approved.source);
+      throw error;
+    }
+    // Consume the suggestion preview before dispatch. Only Runtime may write;
+    // its existing request format and transaction/admission checks are unchanged.
+    if (approved.source) invalidateSuggestionPlan(approved.source, false);
+    const appliedSpecEpoch = specEpoch, appliedReportEpoch = reportEpoch;
+    const result = await execute("organize_resort_apply", {
+      spec: raw(approved.value),
     });
-    plan = parsed;
-    planRevision = stamp;
-    area.innerHTML = resultView("方案预览", result);
-    $("[data-plan-apply]", root).disabled = false;
-    notify("预览已完成，确认后可应用。");
+    if (approved.source && (observeScope() !== approved.source.scope ||
+        specEpoch !== appliedSpecEpoch || reportEpoch !== appliedReportEpoch)) return;
+    if (previewedPlan === approved) invalidatePreview();
+    area.innerHTML = resultView("整理结果", result);
+    notify("方案已应用");
+    await ctx.refresh();
   }
   async function ai(apply) {
     const value = Object.fromEntries(new FormData($("[data-ai]", root)));
@@ -239,7 +320,7 @@ export function organize(root, ctx) {
         return;
       args.auto = true;
     }
-    const stamp = await revision();
+    await revision();
     const result = await execute("organize_classify", args, {
       onProgress: (job) => {
         if (root.isConnected)
@@ -256,7 +337,7 @@ export function organize(root, ctx) {
     );
     if (!apply) {
       const value = report(result);
-      if (Array.isArray(value.ops)) setPlan({ ops: value.ops }, stamp);
+      if (Array.isArray(value.ops)) setPlan({ ops: value.ops });
     }
     if (apply) await ctx.refresh();
   }
@@ -265,18 +346,9 @@ export function organize(root, ctx) {
     const scope = observeScope();
     if (!rendered || rendered !== displayedSuggestions || rendered.scope !== scope)
       throw new Error("运行环境已变化，请重新读取归纲建议。");
-    const epoch = reportEpoch;
-    const model = await suggestionModel();
-    if (!isCurrent(scope, epoch) || displayedSuggestions !== rendered || model !== rendered.model)
-      throw new Error("模型已变化，请重新读取归纲建议。");
     const items = index === undefined ? suggestions : [suggestions[index]];
     if (!items.length || items.some((item) => !item)) return;
-    const stamp = await revision();
-    const freshDesktop = await api("state");
-    if (!isCurrent(scope, epoch) || displayedSuggestions !== rendered ||
-        !freshDesktop || organizeScope(freshDesktop) !== scope)
-      return;
-    setPlan({ ops: items.map((item) => ({ id: item.orphan.id, parent: item.target.id })) }, stamp);
+    setPlan({ ops: items.map((item) => ({ id: item.orphan.id, parent: item.target.id })) }, rendered);
     await preview();
   }
   root.addEventListener("click", (event) => {
@@ -294,28 +366,14 @@ export function organize(root, ctx) {
         await navigator.clipboard.writeText(specField.value);
         notify("方案已复制");
       });
-    if (button.hasAttribute("data-plan-apply"))
-      action(button, async () => {
-        if (!plan || raw(JSON.parse(specField.value)) !== raw(plan))
-          throw new Error("方案已改变，请重新预览");
-        if ((await revision()) !== planRevision)
-          throw new Error("记忆库已变化，请重新生成或校验方案");
-        if (
-          !(await confirm(
-            "应用整理方案",
-            `将应用 ${plan.ops.length} 项变更。请核对上面的预览结果。`,
-            "应用方案",
-          ))
-        )
-          return;
-        const result = await execute("organize_resort_apply", {
-          spec: raw(plan),
-        });
-        area.innerHTML = resultView("整理结果", result);
-        $("[data-plan-apply]", root).disabled = true;
-        notify("方案已应用");
-        await ctx.refresh();
+    if (button.hasAttribute("data-plan-apply") && !button.disabled && !applyingPlan) {
+      applyingPlan = true;
+      void action(button, applyPlan).finally(() => {
+        applyingPlan = false;
+        // action() restores the button; invalid/consumed previews stay disabled.
+        applyButton.disabled = !previewedPlan;
       });
+    }
     if (button.hasAttribute("data-ai-apply")) action(button, () => ai(true));
     if (button.hasAttribute("data-provider"))
       action(button, async () => {
@@ -349,9 +407,7 @@ export function organize(root, ctx) {
         });
       });
   });
-  specField.addEventListener("input", () => {
-    $("[data-plan-apply]", root).disabled = true;
-  });
+  specField.addEventListener("input", invalidatePreview);
   $("[data-ai]", root).addEventListener("submit", (event) => {
     event.preventDefault();
     action($("[type=submit]", event.target), () => ai(false));
@@ -377,6 +433,7 @@ export function organize(root, ctx) {
     refresh: loadSuggestions,
     dispose() {
       disposed = true;
+      invalidateSuggestionPlan();
       ++reportEpoch;
       pendingSuggestions = displayedSuggestions = null;
       suggestions = [];
