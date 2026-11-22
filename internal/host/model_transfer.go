@@ -40,6 +40,12 @@ func (e *modelHTTPError) retryable() bool {
 	return e.status == http.StatusRequestTimeout || e.status == http.StatusTooManyRequests || e.status >= 500
 }
 
+type modelIntegrityError struct{ file string }
+
+func (e *modelIntegrityError) Error() string {
+	return fmt.Sprintf("下载的 %s 大小或校验和不匹配", e.file)
+}
+
 // downloadModelFrom retains independently resumable Range chunks or a single
 // stream, never treating one layout's partial file as the other layout.
 func (m *Manager) downloadModelFrom(ctx context.Context, url, dest string, spec modelFileSpec) error {
@@ -113,7 +119,7 @@ func (m *Manager) mergeModelParts(ctx context.Context, tmp, dest string, parts [
 		return err
 	}
 	if merged != spec.size || hex.EncodeToString(hasher.Sum(nil)) != spec.sha256 {
-		verifyErr := fmt.Errorf("下载的 %s 大小或校验和不匹配", filepath.Base(dest))
+		verifyErr := &modelIntegrityError{file: filepath.Base(dest)}
 		var cleanupErr error
 		for _, part := range parts {
 			cleanupErr = errors.Join(cleanupErr, os.Remove(part))
