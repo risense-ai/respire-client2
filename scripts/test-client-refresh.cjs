@@ -436,5 +436,448 @@ async function test(name, fn) { await fn(); console.log(`PASS ${++count}: ${name
     await assert.rejects(tools.cancelDisplayedModelWork(null, runtime, {read:async () => ({}), currentOperation:() => ({active:true,id:'replacement'})}), /已变化/);
     assert.equal(calls.length, 1);
   });
+  function organizeFixture(onSuggestions = async () => ({suggests: []}), onModel) {
+    const bySelector = new Map();
+    const $ = (selector) => {
+      if (!bySelector.has(selector))
+        bySelector.set(selector, {innerHTML:'', textContent:'', value:'',
+          disabled: selector === '[data-plan-apply]',
+          addEventListener(name, callback) { this[name] = callback; },
+          dataset: {}, hasAttribute(name) { return selector === `[${name}]`; },
+        });
+      return bySelector.get(selector);
+    };
+    const listeners = {};
+    const root = {isConnected:true, addEventListener(name, callback) { listeners[name] = callback; }};
+    const ctx = {desktop:{connected:true,health:{account_id:'acct-a', instance_id:'runtime-a', generation:1,
+      data_dir:'library-a', inference:{worker_generation:4}}},status:{summary:{unlocked:true,data_dir:'library-a'}},refresh:async () => {}};
+    const calls = [], reads = [];
+    const model = {generation:'initial'};
+    const fixture = {desktop:null, revision:"current"};
+    const errors = [];
+    const source = read('pages/organize.js');
+    const organizers = new Function('$', 'h', 'heading','panel','select','input','api','report','execute','summary',
+      'action','raw','resultView','confirm','notify','FormData',
+      source.slice(source.indexOf('export function organize')).replace(/^export /,'') + '\nreturn organize;'
+    )($, String, () => '', (_name, html) => html, () => '', () => '',
+      async (path) => {
+        reads.push(path);
+        if (path === "state") return fixture.desktop || ctx.desktop;
+        await onModel?.();
+        const active = model.legacy ? null : {model:'m3',engine:'cpu',variant:'quantized',generation:model.generation};
+        const task = model.switch ?? null;
+        return {
+          catalog:{summary:{registry:{},active,switch:task}},
+          progress:{summary:{switch:task,operation:{},pending_selection:model.pending ?? null,pending_task:null}},
+        };
+      },
+      (value) => ({...value?.summary, ...value?.details}),
+      async (name, args) => {
+        calls.push([name,args]);
+        if (name === 'organize_suggestions') return {summary:await onSuggestions()};
+        if (name === 'memory_revision') return fixture.onRevision?.() ??
+          {summary:{profile:'library-a', revision:fixture.revision}};
+        if (name === 'organize_resort_preview') return fixture.onPreview?.() ?? {};
+        if (name === 'organize_resort_apply') return fixture.onApply?.() ?? {};
+        if (name === 'organize_plan' || name === 'organize_classify') return {summary:{ops:[]}};
+        return {};
+      },
+      (x) => x.summary || {},
+      async (button, handler) => {
+        if (button.disabled) return;
+        button.disabled = true;
+        try { await handler(); } catch (error) { errors.push(error.message); }
+        finally { button.disabled = false; }
+      },
+      JSON.stringify,
+      (heading) => heading,
+      async () => fixture.onConfirm ? await fixture.onConfirm() : true,
+      () => {},
+      function FormData() { return Object.entries({backend:'ds',limit:'50',root:'',all:false}); },
+    );
+    const flush = () => new Promise(resolve => setImmediate(resolve));
+    return {ctx, root, calls, reads, model, fixture, flush, listeners, errors, report: $('[data-report]'),
+      field: $('[name=spec]'), apply: $('[data-plan-apply]'),
+      click(name) { listeners.click({target:{closest:() => $(`[${name}]`)}}); },
+      analyze(kind) { listeners.click({target:{closest:() => ({dataset:{analyze:kind},hasAttribute:()=>false})}}); },
+      aiPreview() { $('[data-ai]').submit({target:$('[data-ai]'),preventDefault(){}}); },
+      mount: () => organizers(root,ctx), suggestions: () => calls.filter(([name]) => name === 'organize_suggestions')};
+  }
+
+  await test('Organize mount starts one suggestion read, simultaneous refresh joins, and explicit refresh still works', async () => {
+    let complete;
+    const f = organizeFixture(() => new Promise(resolve => {complete = resolve;}));
+    const view = f.mount();
+    const refreshing = view.refresh();
+    assert.equal(view.refresh(), refreshing);
+    await f.flush();
+    assert.deepEqual(f.suggestions(), [['organize_suggestions',{top:50}]]);
+    complete({suggests: []});
+    await refreshing;
+    assert.match(f.report.innerHTML, /当前没有归纲建议/);
+    assert.deepEqual(f.reads, ['model-profile-state','model-profile-state','state']);
+    for (let i = 0; i < 100; ++i) view.update();
+    assert.equal(f.suggestions().length, 1);
+    const again = view.refresh();
+    await f.flush();
+    assert.equal(f.suggestions().length, 2);
+    complete({suggests: []});
+    await again;
+    view.dispose();
+  });
+  await test('loading Organize before account status waits once; regular app refresh never repeats suggestions', async () => {
+    const f = organizeFixture();
+    f.ctx.status = null;
+    const view = f.mount();
+    await f.flush();
+    assert.equal(f.suggestions().length, 0);
+    f.ctx.status = {summary:{unlocked:true, data_dir:'library-a'}};
+    view.update();
+    view.update();
+    await f.flush();
+    assert.equal(f.suggestions().length,1);
+    view.update();
+    await f.flush();
+    assert.equal(f.suggestions().length,1);
+  });
+  await test('Organize drops stale late results after account, Runtime generation, model worker, lock, or disposal', async () => {
+    for (const change of [
+      (f) => {f.ctx.desktop.health.account_id = 'acct-b';},
+      (f) => {f.ctx.desktop.health.generation += 1;},
+      (f) => {f.ctx.desktop.health.inference.worker_generation += 1;},
+      (f) => {f.ctx.status.summary.unlocked = false;},
+      (_f, view) => view.dispose(),
+    ]) {
+      let complete;
+      const f = organizeFixture(() => new Promise(resolve => {complete = resolve;}));
+      const view = f.mount();
+      const pending = view.refresh();
+      await f.flush();
+      change(f, view);
+      view.update();
+      complete({suggests:[{orphan:{id:'old',title:'STALE'},target:{id:'target'}}]});
+      await pending;
+      assert.doesNotMatch(f.report.innerHTML, /STALE/);
+      assert.equal(f.suggestions().length, 1);
+    }
+  });
+  await test('Organize does not start analysis if scope changes during the first model read', async () => {
+    let finish;
+    const f = organizeFixture(undefined, () => new Promise(resolve => {finish = resolve;}));
+    const view = f.mount();
+    const pending = view.refresh();
+    f.ctx.desktop.health.account_id = 'acct-b';
+    finish();
+    await pending;
+    assert.equal(f.suggestions().length, 0);
+    view.update();
+    await f.flush();
+    assert.equal(f.suggestions().length, 0);
+  });
+  await test('a requested audit wins over the initial suggestions, and a later refresh does not overlap it', async () => {
+    const responses = [];
+    const f = organizeFixture(() => new Promise(resolve => {responses.push(resolve);}));
+    const view = f.mount();
+    const first = view.refresh();
+    await f.flush();
+    const audit = {dataset:{analyze:'audit'},hasAttribute:()=>false};
+    f.listeners.click({target:{closest:()=>audit}});
+    await f.flush();
+    assert.equal(f.report.innerHTML, '结构检查');
+    const queued = view.refresh();
+    await f.flush();
+    assert.equal(f.suggestions().length,1);
+    responses[0]({suggests:[{orphan:{id:'old',title:'STALE'},target:{id:'target'}}]});
+    await first;
+    await f.flush();
+    assert.doesNotMatch(f.report.innerHTML,/STALE/);
+    assert.equal(f.suggestions().length,2);
+    responses[1]({suggests: []});
+    await queued;
+    assert.match(f.report.innerHTML,/当前没有归纲建议/);
+  });
+  await test('Organize rejects changes to catalog generation even when global Health has not refreshed', async () => {
+    let complete;
+    const f = organizeFixture(() => new Promise(resolve => {complete = resolve;}));
+    const view = f.mount();
+    const pending = view.refresh();
+    await f.flush();
+    f.model.generation = 'different-profile-generation';
+    complete({suggests:[{orphan:{id:'old',title:'STALE'},target:{id:'target'}}]});
+    await pending;
+    assert.match(f.report.innerHTML,/模型已变化/);
+    assert.doesNotMatch(f.report.innerHTML,/STALE/);
+    assert.equal(f.suggestions().length,1);
+  });
+  await test('Organize rechecks the real current account before showing results, even before app refresh', async () => {
+    let finish;
+    const f = organizeFixture(() => new Promise(resolve => {finish = resolve;}));
+    const view = f.mount();
+    const pending = view.refresh();
+    await f.flush();
+    f.fixture.desktop = {connected:true, health:{...f.ctx.desktop.health, account_id:'acct-b'}};
+    finish({suggests:[{orphan:{id:'old',title:'STALE'},target:{id:'target'}}]});
+    await pending;
+    assert.doesNotMatch(f.report.innerHTML,/STALE/);
+    assert.match(f.report.innerHTML,/运行环境已变化/);
+    assert.equal(f.suggestions().length,1);
+  });
+  await test('Organize defers suggestion requests while Runtime reports an active model switch', async () => {
+    const f = organizeFixture();
+    f.model.switch = {state:'pending',id:'switch-task'};
+    const view = f.mount();
+    await view.refresh();
+    assert.match(f.report.innerHTML, /模型正在切换/);
+    assert.equal(f.suggestions().length, 0);
+    f.model.switch = {state:'ready',id:'switch-task'};
+    view.update();
+    await f.flush();
+    assert.equal(f.suggestions().length,0);
+    await view.refresh();
+    assert.equal(f.suggestions().length,1);
+  });
+  async function shownSuggestion() {
+    const f = organizeFixture(async () => ({suggests:[{orphan:{id:'child'},target:{id:'parent'}}]}));
+    const view = f.mount();
+    await view.refresh();
+    assert.match(f.report.innerHTML,/预览全部建议/);
+    return {f, view};
+  }
+  await test('Organize refuses suggestions when memory changes during analysis', async () => {
+    let finish;
+    const f = organizeFixture(() => new Promise(resolve => {finish = resolve;}));
+    const view = f.mount();
+    const pending = view.refresh();
+    await f.flush();
+    f.fixture.revision = 'new-memory';
+    finish({suggests:[{orphan:{id:'old',title:'STALE'},target:{id:'parent'}}]});
+    await pending;
+    assert.match(f.report.innerHTML,/记忆库已变化/);
+    assert.doesNotMatch(f.report.innerHTML,/STALE/);
+  });
+  await test('suggestion preview checks the original revision before submitting even after suggestion display', async () => {
+    const {f} = await shownSuggestion();
+    f.fixture.revision = 'new-memory';
+    f.click('data-suggestions-all');
+    await f.flush();
+    assert.equal(f.calls.filter(([name]) => name === 'organize_resort_preview').length,0);
+    assert.equal(f.field.value,'');
+    assert.equal(f.apply.disabled,true);
+    assert.match(f.errors.at(-1),/记忆库已变化/);
+  });
+  await test('late suggestion preview cannot retain a plan after revision, model, remote account or observed account ABA', async () => {
+    for (const drift of [
+      (f) => {f.fixture.revision = 'new-memory';},
+      (f) => {f.model.generation = 'new-model';},
+      (f) => {f.fixture.desktop = {connected:true,health:{...f.ctx.desktop.health,account_id:'acct-b'}};},
+      (f, view) => {
+        f.ctx.desktop.health.account_id = 'acct-b'; view.update();
+        f.ctx.desktop.health.account_id = 'acct-a'; view.update();
+      },
+    ]) {
+      const {f,view} = await shownSuggestion();
+      let finish;
+      f.fixture.onPreview = () => new Promise(resolve => {finish = resolve;});
+      f.click('data-suggestions-all');
+      await f.flush();
+      assert.equal(f.apply.disabled,true);
+      assert.equal(typeof finish,'function');
+      drift(f,view);
+      finish({});
+      await f.flush();
+      assert.equal(f.apply.disabled,true);
+      assert.equal(f.field.value,'');
+      assert.doesNotMatch(f.report.innerHTML,/^方案预览$/);
+      f.click('data-plan-apply');
+      await f.flush();
+      assert.equal(f.calls.filter(([name]) => name === 'organize_resort_apply').length,0);
+    }
+  });
+  await test('suggestion apply rechecks after confirmation for revision, model, fresh account and edited-and-reverted text', async () => {
+    for (const drift of [
+      (f) => {f.fixture.revision = 'new-memory';},
+      (f) => {f.model.generation = 'new-model';},
+      (f) => {f.fixture.desktop = {connected:true,health:{...f.ctx.desktop.health,account_id:'acct-b'}};},
+      (f) => {f.field.input();},
+    ]) {
+      const {f} = await shownSuggestion();
+      f.click('data-suggestions-all');
+      await f.flush();
+      assert.equal(f.report.innerHTML,'方案预览');
+      assert.equal(f.apply.disabled,false);
+      let finish;
+      f.fixture.onConfirm = () => new Promise(resolve => {finish = resolve;});
+      f.click('data-plan-apply');
+      await f.flush();
+      assert.equal(typeof finish,'function');
+      drift(f);
+      finish(true);
+      await f.flush();
+      assert.equal(f.calls.filter(([name]) => name === 'organize_resort_apply').length,0);
+      assert.equal(f.apply.disabled,true);
+    }
+  });
+  await test('unchanged suggestion confirmation submits the existing spec once and consumes the preview', async () => {
+    const {f} = await shownSuggestion();
+    f.click('data-suggestions-all');
+    await f.flush();
+    assert.equal(f.apply.disabled,false);
+    f.click('data-plan-apply');
+    f.click('data-plan-apply');
+    await f.flush();
+    f.click('data-plan-apply');
+    await f.flush();
+    assert.deepEqual(f.calls.filter(([name]) => name === 'organize_resort_apply'),[
+      ['organize_resort_apply',{spec:'{"ops":[{"id":"child","parent":"parent"}]}'}],
+    ]);
+    assert.equal(f.report.innerHTML,'整理结果');
+    assert.equal(f.apply.disabled,true);
+  });
+  await test('manual JSON preview/apply still uses the existing revision and wire with no model dependency', async () => {
+    const {f} = await shownSuggestion();
+    f.fixture.desktop = {connected:false};
+    f.model.switch = {state:'running'};
+    const reads = f.reads.length;
+    f.field.value = '{"ops":[{"id":"manual","parent":"any"}]}';
+    f.field.input();
+    f.click('data-plan-preview');
+    await f.flush();
+    assert.equal(f.apply.disabled,false);
+    f.click('data-plan-apply');
+    await f.flush();
+    assert.deepEqual(f.calls.filter(([name]) => name === 'organize_resort_apply'),[
+      ['organize_resort_apply',{spec:f.field.value}],
+    ]);
+    assert.equal(f.reads.length,reads);
+    assert.equal(f.apply.disabled,true);
+  });
+  await test('published dev.28 and dev.31 admit legacy null active and configured model catalog/Health', async () => {
+    for (const legacy of [false, true]) {
+      const f = organizeFixture(async () => ({suggests:[{orphan:{id:'child'},target:{id:'parent'}}]}));
+      f.model.legacy = legacy;
+      const {health} = f.ctx.desktop;
+      health.generation = 1;
+      health.credential_state = 'available';
+      // The published Health inference error/legacy status can omit the
+      // optional worker generation; account and Runtime generation still bind.
+      health.inference = {state:'ready'};
+      const view = f.mount();
+      await view.refresh();
+      assert.equal(f.suggestions().length,1);
+      f.click('data-suggestions-all');
+      await f.flush();
+      assert.equal(f.apply.disabled,false);
+    }
+  });
+  await test('suggestion is not applied across an account move while waiting on final revision read', async () => {
+    const {f} = await shownSuggestion();
+    f.click('data-suggestions-all');
+    await f.flush();
+    let finishConfirmation;
+    f.fixture.onConfirm = () => new Promise(resolve => {finishConfirmation = resolve;});
+    f.click('data-plan-apply');
+    await f.flush();
+    let finishRevision;
+    f.fixture.onRevision = () => new Promise(resolve => {finishRevision = resolve;});
+    finishConfirmation(true);
+    await f.flush();
+    f.fixture.desktop = {connected:true,health:{...f.ctx.desktop.health,account_id:'acct-b'}};
+    finishRevision({summary:{profile:'library-a',revision:'current'}});
+    await f.flush();
+    assert.equal(f.calls.filter(([name]) => name === 'organize_resort_apply').length,0);
+    assert.equal(f.apply.disabled,true);
+  });
+  await test('independent Organize actions use their own Runtime calls with no unused memory revision probe', async () => {
+    const {f} = await shownSuggestion();
+    f.calls.length = 0;
+    f.fixture.onRevision = () => { throw new Error('unexpected revision probe'); };
+    for (const kind of ['duplicates', 'audit', 'plan']) {
+      f.analyze(kind);
+      await f.flush();
+    }
+    f.aiPreview();
+    await f.flush();
+    let finish;
+    f.fixture.onConfirm = () => new Promise(resolve => {finish = resolve;});
+    f.click('data-ai-apply');
+    await f.flush();
+    assert.equal(f.calls.filter(([name]) => name === 'organize_classify').length,1);
+    finish(true);
+    await f.flush();
+    assert.deepEqual(f.calls, [
+      ['organize_duplicates',{min:0.8,top:30}],
+      ['organize_audit',{}],
+      ['organize_plan',{}],
+      ['organize_classify',{backend:'ds',limit:50,causal:true}],
+      ['organize_classify',{backend:'ds',limit:50,causal:true,auto:true}],
+    ]);
+    assert.deepEqual(f.errors,[]);
+  });
+  await test('manual preview keeps the report and matching Apply when late mount suggestions succeed or fail', async () => {
+    for (const fail of [false, true]) {
+      let complete;
+      const f = organizeFixture(() => new Promise((resolve, reject) => {
+        complete = () => fail ? reject(new Error('stale failure')) :
+          resolve({suggests:[{orphan:{id:'stale',title:'STALE'},target:{id:'other'}}]});
+      }));
+      const view = f.mount();
+      const initial = view.refresh();
+      await f.flush();
+      const spec = '{"ops":[{"id":"manual","parent":"target"}]}';
+      f.field.value = spec;
+      f.field.input();
+      f.click('data-plan-preview');
+      await f.flush();
+      assert.equal(f.report.innerHTML,'方案预览');
+      assert.equal(f.apply.disabled,false);
+      complete();
+      await initial;
+      assert.equal(f.report.innerHTML,'方案预览');
+      assert.equal(f.apply.disabled,false);
+      assert.equal(f.suggestions().length,1);
+      f.click('data-plan-apply');
+      await f.flush();
+      assert.deepEqual(f.calls.filter(([name]) => name === 'organize_resort_preview' || name === 'organize_resort_apply'),[
+        ['organize_resort_preview',{spec}],
+        ['organize_resort_apply',{spec}],
+      ]);
+    }
+  });
+  await test('a newer audit owns the report and ignores a manual preview that resolves later', async () => {
+    const {f} = await shownSuggestion();
+    let finish;
+    f.fixture.onPreview = () => new Promise(resolve => {finish = resolve;});
+    f.field.value = '{"ops":[{"id":"manual","parent":"target"}]}';
+    f.field.input();
+    f.click('data-plan-preview');
+    await f.flush();
+    assert.equal(typeof finish,'function');
+    f.analyze('audit');
+    await f.flush();
+    assert.equal(f.report.innerHTML,'结构检查');
+    finish({});
+    await f.flush();
+    assert.equal(f.report.innerHTML,'结构检查');
+    assert.equal(f.apply.disabled,true);
+  });
+  await test('manual Apply confirmation cannot submit when explicit suggestions replace its visible preview', async () => {
+    const {f,view} = await shownSuggestion();
+    f.field.value = '{"ops":[{"id":"manual","parent":"target"}]}';
+    f.field.input();
+    f.click('data-plan-preview');
+    await f.flush();
+    let finish;
+    f.fixture.onConfirm = () => new Promise(resolve => {finish = resolve;});
+    f.click('data-plan-apply');
+    await f.flush();
+    assert.equal(typeof finish,'function');
+    await view.refresh();
+    assert.match(f.report.innerHTML,/预览全部建议/);
+    assert.equal(f.apply.disabled,true);
+    finish(true);
+    await f.flush();
+    assert.equal(f.calls.filter(([name]) => name === 'organize_resort_apply').length,0);
+    assert.equal(f.apply.disabled,true);
+  });
   console.log(`${count} focused refresh tests passed; browser/native UIA not exercised.`);
 })().catch(error => { console.error(error); process.exitCode = 1; });
