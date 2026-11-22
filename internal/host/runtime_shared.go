@@ -165,11 +165,7 @@ func copyReleaseTree(source, dest string, receipt sharedRuntimeReceipt) error {
 		if err != nil {
 			return err
 		}
-		hash, err := fileHash(input)
-		if err != nil {
-			return err
-		}
-		if info.Size() != file.Size || !strings.EqualFold(hash, file.Hash) {
+		if info.Size() != file.Size {
 			return fmt.Errorf("Runtime 发布文件校验失败: %s", file.Path)
 		}
 		output := filepath.Join(dest, filepath.FromSlash(file.Path))
@@ -185,21 +181,27 @@ func copyReleaseTree(source, dest string, receipt sharedRuntimeReceipt) error {
 			in.Close()
 			return err
 		}
-		_, copyErr := io.Copy(out, in)
+		_, copyErr := io.CopyN(out, in, file.Size)
 		err = errors.Join(copyErr, out.Sync(), out.Close(), in.Close())
 		if err != nil {
 			return err
 		}
 	}
-	return verifyReleaseTree(dest, receipt)
+	// Notices may be excluded from the managed output, but if supplied their
+	// source bytes still have to match the verified Core manifest.
+	return verifyReleaseTreeWithHasher(dest, source, receipt, fileHash)
 }
 
 func verifyReleaseTree(dir string, receipt sharedRuntimeReceipt) error {
+	return verifyReleaseTreeWithHasher(dir, dir, receipt, fileHash)
+}
+
+func verifyReleaseTreeWithHasher(dir, noticeDir string, receipt sharedRuntimeReceipt, hashFile func(string) (string, error)) error {
 	files, meta, err := receiptFiles(receipt)
 	if err != nil {
 		return err
 	}
-	expected := map[string]bool{}
+	digests := map[string]string{}
 	for _, file := range files {
 		if strings.HasPrefix(file.Path, "core-notices/") {
 			if _, err := os.Lstat(filepath.Join(dir, filepath.FromSlash(file.Path))); errors.Is(err, os.ErrNotExist) {
@@ -216,27 +218,40 @@ func verifyReleaseTree(dir string, receipt sharedRuntimeReceipt) error {
 		if err != nil {
 			return err
 		}
-		hash, err := fileHash(path)
+		hash, err := hashFile(path)
 		if err != nil {
 			return err
 		}
 		if info.Size() != file.Size || !strings.EqualFold(hash, file.Hash) {
 			return fmt.Errorf("Runtime 发布文件校验失败: %s", file.Path)
 		}
-		expected[path] = true
+		digests[path] = hash
 	}
 	if err = filepath.WalkDir(dir, func(path string, entry os.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
-		if !entry.IsDir() && !expected[path] {
+		if !entry.IsDir() && digests[path] == "" {
 			return fmt.Errorf("Runtime 存在未认证文件: %s", path)
 		}
 		return nil
 	}); err != nil {
 		return err
 	}
-	return verifyRuntime(dir, receipt.SHA256, meta.Target)
+	return verifyRuntimeWithHashes(dir, noticeDir, receipt.SHA256, meta.Target, func(name string) (string, error) {
+		if dir != noticeDir && strings.HasPrefix(name, "core-notices/") {
+			path, err := regularRuntimeFile(noticeDir, name)
+			if err != nil {
+				return "", err
+			}
+			return hashFile(path)
+		}
+		hash := digests[filepath.Join(dir, filepath.FromSlash(name))]
+		if hash == "" {
+			return "", fmt.Errorf("Runtime 依赖不在已验证文件清单中: %s", name)
+		}
+		return hash, nil
+	})
 }
 
 func (m *Manager) selectRuntime(info InstalledRuntime) error {

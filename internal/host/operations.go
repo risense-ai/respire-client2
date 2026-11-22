@@ -48,12 +48,28 @@ type operationRecord struct {
 	CoreChange    *coreConfigChange `json:"coreConfig,omitempty"`
 }
 
+type runtimeEnvelopeState struct {
+	Status string   `json:"status"`
+	Error  string   `json:"error"`
+	Errors []string `json:"errors"`
+}
+
+func runtimeModelError(fallback, message string, details []string, envelope runtimeEnvelopeState) error {
+	for _, message := range append(append([]string{message, envelope.Error}, details...), envelope.Errors...) {
+		if strings.TrimSpace(message) != "" {
+			return errors.New(message)
+		}
+	}
+	return errors.New(fallback)
+}
+
 type rpcResponse struct {
 	V           int             `json:"v"`
 	ID          string          `json:"id"`
 	OK          bool            `json:"ok"`
 	Exit        int             `json:"exit"`
 	Error       string          `json:"error"`
+	Errors      []string        `json:"errors"`
 	Code        string          `json:"code"`
 	Envelope    json.RawMessage `json:"envelope"`
 	Scope       *runtimeScope   `json:"scope,omitempty"`
@@ -441,10 +457,7 @@ func (e *unconfirmedError) Error() string {
 func (e *unconfirmedError) Unwrap() error { return e.cause }
 
 func envelopeError(raw json.RawMessage) error {
-	var result struct {
-		Status string   `json:"status"`
-		Errors []string `json:"errors"`
-	}
+	var result runtimeEnvelopeState
 	if err := json.Unmarshal(raw, &result); err != nil {
 		return err
 	}
@@ -455,16 +468,17 @@ func envelopeError(raw json.RawMessage) error {
 		return &unconfirmedError{cause: errors.New("操作仍在执行，请查询原请求，未自动重放")}
 	}
 	if result.Status == "fail" {
-		if len(result.Errors) > 0 {
-			return errors.New(result.Errors[0])
-		}
-		return errors.New("Runtime 报告操作失败")
+		return runtimeModelError("Runtime 报告操作失败", "", nil, result)
 	}
 	return nil
 }
 
 func (m *Manager) rpcResponse(ctx context.Context, method string, args []string, id string, scope *runtimeScope) (rpcResponse, error) {
-	raw, err := m.localRequest(ctx, "POST", "/api/rpc", map[string]any{"v": 1, "id": id, "method": method, "args": args, "scope": scope})
+	request := map[string]any{"v": 1, "id": id, "method": method, "args": args}
+	if scope != nil {
+		request["scope"] = scope
+	}
+	raw, err := m.localRequest(ctx, "POST", "/api/rpc", request)
 	var reply rpcResponse
 	if err != nil {
 		return reply, err
@@ -479,6 +493,13 @@ func (m *Manager) rpcResponse(ctx context.Context, method string, args []string,
 }
 
 func (m *Manager) executeRPC(ctx context.Context, method string, args []string, id string) (json.RawMessage, error) {
+	if runtimeScopeExempt(method) {
+		reply, err := m.rpcResponse(ctx, method, args, id, nil)
+		if err != nil {
+			return nil, err
+		}
+		return reply.Envelope, responseError(reply)
+	}
 	scope, err := m.requestScope(ctx)
 	if err != nil {
 		return nil, err
@@ -510,12 +531,25 @@ func (m *Manager) executeRPCScoped(ctx context.Context, method string, args []st
 			return nil, &unconfirmedError{id, errors.New("Runtime 业务回复作用域或操作 ID 与原请求不匹配，请查询原请求")}
 		}
 	}
-	return reply.Envelope, responseError(reply)
+	return reply.Envelope, responseErrorForMethod(method, reply)
+}
+
+func responseErrorForMethod(method string, reply rpcResponse) error {
+	switch method {
+	case "model.prepare", "index.prepare", "model.switch":
+		var state runtimeEnvelopeState
+		if reply.OK && reply.Exit == 0 && json.Unmarshal(reply.Envelope, &state) == nil && state.Status == "pending" {
+			return nil
+		}
+	}
+	return responseError(reply)
 }
 
 func responseError(reply rpcResponse) error {
-	if !reply.OK && reply.Error != "" {
-		return errors.New(reply.Error)
+	if !reply.OK && (reply.Error != "" || len(reply.Errors) != 0) {
+		var envelope runtimeEnvelopeState
+		_ = json.Unmarshal(reply.Envelope, &envelope)
+		return runtimeModelError("Runtime 拒绝请求", reply.Error, reply.Errors, envelope)
 	}
 	if err := envelopeError(reply.Envelope); err != nil {
 		return err

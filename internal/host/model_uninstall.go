@@ -16,7 +16,7 @@ const m3UninstallStage = ".bge-m3-uninstall"
 
 func (m *Manager) uninstallM3(ctx context.Context) (json.RawMessage, error) {
 	var result json.RawMessage
-	err := m.RunTask("卸载 BGE-M3", func() error {
+	err := m.runExclusiveModelMaintenance("卸载 BGE-M3", func() error {
 		var err error
 		result, err = m.uninstallM3Locked(ctx)
 		return err

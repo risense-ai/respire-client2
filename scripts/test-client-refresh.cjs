@@ -212,7 +212,7 @@ async function test(name, fn) { await fn(); console.log(`PASS ${++count}: ${name
     const ctx = {desktop: {connected: false}, status: null, statusError: ''};
     const reader = {innerHTML: ''}, counter = {textContent: ''};
     const showUnavailable = new Function('ctx', 'reader', 'count', '$', 't', 'h',
-      'let loaded = false, revision = "", renderedEntry, selectedEntry, selectionVersion = 0;\n' +
+      'const checked = new Set(), expanded = new Set(); function renderTree() {} let records = [], selected, searchCaption, loaded = false, revision = "", renderedEntry, selectedEntry, selectionVersion = 0;\n' +
       workspace.slice(start, end) +
       '\nreturn (alreadyLoaded = false) => { loaded = alreadyLoaded; return showUnavailable(); };'
     )(ctx, reader, counter, () => ({addEventListener() {}}), text => text, text => text);
@@ -226,7 +226,7 @@ async function test(name, fn) { await fn(); console.log(`PASS ${++count}: ${name
     reader.innerHTML = 'previously loaded entry';
     ctx.statusError = 'status failed';
     assert.equal(showUnavailable(true), true);
-    assert.equal(counter.textContent, '状态读取失败');
+    assert.equal(counter.textContent, '暂时无法读取记忆状态，请稍后刷新。');
     assert.equal(reader.innerHTML, 'previously loaded entry');
 
     ctx.status = {summary: {unlocked: false}};
@@ -235,6 +235,62 @@ async function test(name, fn) { await fn(); console.log(`PASS ${++count}: ${name
     assert.match(reader.innerHTML, /data-accounts/);
     ctx.status = {summary: {unlocked: true}};
     assert.equal(showUnavailable(true), false);
+  });
+  // Reuse the real workspace module for memory readback and refresh rules.
+  const workspace = read('memory/workspace.js');
+  const segment = (from, to) => workspace.slice(workspace.indexOf(from), workspace.indexOf(to));
+  const build = new Function('ctx', 'execute', `
+  const root = { isConnected: true }, checked = new Set(), expanded = new Set();
+  const reader = { innerHTML: 'old reader', querySelector: () => true };
+  const tree = { innerHTML: 'old tree' }, count = { textContent: '' };
+  let loaded = true, revision = 'loaded', busy = false, limit = 4, metadataCap = true;
+  let records = [{id:'old'}], selected = '', selectedEntry, selectionVersion = 0;
+  let renderedEntry = {id:'old', updated_at:'before'}, searchCaption;
+  function renderTree() { tree.innerHTML = records.map(row => row.id).join(','); }
+  const h = String, t = String, number = String, list = value => value, entry = value => value;
+  const inventory = rows => ({byId: new Map(rows.map(row => [row.id, row]))});
+  const $ = () => ({addEventListener() {}});
+  ${segment('  function unavailableMessage()', '  // Body records')}
+  ${segment('  async function choose(', '  async function search()')}
+  return {load, choose, showUnavailable, tree, reader, count, ids: () => records.map(row => row.id)};
+  `);
+  const fixtureContext = () => ({desktop: {connected:true}, status:{summary:{unlocked:true, local_alive:10}}});
+  await test('failed later memory catalog page preserves the reader and prior catalog', async () => {
+    const ctx = fixtureContext();
+    const failure = build(ctx, async (name, {limit}) => {
+      assert.equal(name, 'memory_list');
+      if (limit === 4) return [{id:'new1'}, {id:'new2'}];
+      throw new Error('transport unavailable');
+    });
+    await failure.load();
+    assert.deepEqual(failure.ids(), ['old']);
+    assert.equal(failure.tree.innerHTML, 'old tree');
+    assert.equal(failure.reader.innerHTML, 'old reader');
+    assert.match(failure.count.textContent, /稍后重试/);
+  });
+  await test('confirmed lock invalidates an in-flight memory catalog response', async () => {
+    const ctx = fixtureContext();
+    let settle;
+    const pending = build(ctx, () => new Promise(resolve => { settle = resolve; }));
+    const loading = pending.load();
+    ctx.status.summary.unlocked = false;
+    assert.equal(pending.showUnavailable(), true);
+    assert.deepEqual(pending.ids(), []);
+    assert.match(pending.reader.innerHTML, /data-accounts/);
+    ctx.status.summary.unlocked = true;
+    settle([{id:'stale'}]);
+    await loading;
+    assert.deepEqual(pending.ids(), []);
+  });
+  await test('reader preserves content on transport failure but renders definite rejection', async () => {
+    const ctx = fixtureContext();
+    let error = new Error('transport unavailable');
+    const reading = build(ctx, async () => { throw error; });
+    await reading.choose('old', false);
+    assert.equal(reading.reader.innerHTML, 'old reader');
+    error = Object.assign(new Error('not found'), {envelope:{summary:{reason:'not_found'}}});
+    await reading.choose('old', false);
+    assert.match(reading.reader.innerHTML, /not found/);
   });
   console.log(`${count} focused refresh tests passed; browser/native UIA not exercised.`);
 })().catch(error => { console.error(error); process.exitCode = 1; });

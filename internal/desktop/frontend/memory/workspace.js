@@ -249,17 +249,29 @@ export function memoryWorkspace(root, ctx) {
     const unlocked = ctx.status?.summary?.unlocked;
     if (unlocked === false) return "需要解锁记忆库";
     if (unlocked === true) return "";
-    return ctx.statusError ? "状态读取失败" : "正在读取记忆目录…";
+    return ctx.statusError ? "暂时无法读取记忆状态，请稍后刷新。" : "正在读取记忆目录…";
   }
+  let catalogEpoch = 0;
   function showUnavailable() {
     const message = unavailableMessage();
     if (!message) return false;
     revision = "";
     count.textContent = message;
     if (ctx.desktop?.connected && ctx.status?.summary?.unlocked === false) {
+      if (loaded) {
+        records = [];
+        checked.clear();
+        expanded.clear();
+        selected = "";
+        searchCaption = "";
+        loaded = false;
+        renderTree();
+      }
       renderedEntry = null;
       selectedEntry = null;
       ++selectionVersion;
+      ++catalogEpoch;
+      count.textContent = message;
       reader.innerHTML = `<div class="empty"><strong>本机记忆库尚未解锁</strong>登录账户，或初始化本机离线记忆库。<div class="actions"><button data-accounts>账户与本机密钥</button></div></div>`;
       $("[data-accounts]", reader).addEventListener("click", () =>
         ctx.navigate("accounts"),
@@ -271,6 +283,7 @@ export function memoryWorkspace(root, ctx) {
   }
   async function load() {
     if (busy || showUnavailable()) return;
+    const version = catalogEpoch;
     busy = true;
     let succeeded = false;
     count.textContent = "正在读取记忆目录…";
@@ -293,10 +306,10 @@ export function memoryWorkspace(root, ctx) {
         limit,
         ...(metadataCap ? { metadata: true } : {}),
       });
-      if (!root.isConnected) return;
+      if (!root.isConnected || version !== catalogEpoch || showUnavailable()) return;
       // The compact catalog omits bodies; the paginated catalog provides them
       // and they feed card excerpts and text matching until the next reload.
-      records = list(data).map((row) =>
+      let nextRecords = list(data).map((row) =>
         metadataCap ? { ...row, content: undefined } : row,
       );
       // A paginated catalog flattens subtrees whose parent is not loaded yet:
@@ -307,23 +320,24 @@ export function memoryWorkspace(root, ctx) {
         let fetched = limit;
         while (
           alive &&
-          records.length < alive &&
-          records.length >= fetched / 2 &&
+          nextRecords.length < alive &&
+          nextRecords.length >= fetched / 2 &&
           fetched < 100000
         ) {
-          count.textContent = `已载入 ${number(records.length)} / ${number(alive)} 条，正在补全目录…`;
+          count.textContent = `已载入 ${number(nextRecords.length)} / ${number(alive)} 条，正在补全目录…`;
           fetched = Math.min(fetched * 2, 100000);
           const more = await execute("memory_list", {
             limit: fetched,
             metadata: true,
           });
-          if (!root.isConnected) return;
+          if (!root.isConnected || version !== catalogEpoch || showUnavailable()) return;
           const rows = list(more);
-          if (rows.length <= records.length) break; // server has no more
-          records = rows.map((row) => ({ ...row, content: undefined }));
+          if (rows.length <= nextRecords.length) break; // server has no more
+          nextRecords = rows.map((row) => ({ ...row, content: undefined }));
         }
         limit = Math.max(limit, fetched);
       }
+      records = nextRecords;
       loaded = true;
       succeeded = true;
       // A reader still showing the pre-unlock lock screen resets to the idle hint.
@@ -338,9 +352,10 @@ export function memoryWorkspace(root, ctx) {
       renderTree();
       if (selected) await choose(selected, false);
     } catch (error) {
-      if (root.isConnected) {
-        count.textContent = "读取失败";
-        tree.innerHTML = `<div class="empty danger-text">${h(error.message)}</div>`;
+      if (root.isConnected && version === catalogEpoch && !showUnavailable()) {
+        revision = "";
+        count.textContent = t("暂时无法刷新记忆目录，请稍后重试。");
+        if (!loaded) tree.innerHTML = `<div class="empty danger-text">${h(error.message)}</div>`;
       }
     } finally {
       busy = false;
@@ -409,7 +424,7 @@ export function memoryWorkspace(root, ctx) {
       reader.innerHTML = '<div class="empty">正在读取完整内容…</div>';
     try {
       const memory = entry(await execute("memory_show", { id }));
-      if (!root.isConnected || version !== selectionVersion) return;
+      if (!root.isConnected || version !== selectionVersion || showUnavailable()) return;
       selectedEntry = memory;
       if (!(viewing && previous.updated_at === memory.updated_at)) {
         renderReader(memory);
@@ -433,8 +448,15 @@ export function memoryWorkspace(root, ctx) {
       }
       renderedEntry = memory;
     } catch (error) {
-      if (root.isConnected && version === selectionVersion)
-        reader.innerHTML = `<div class="empty danger-text">${h(error.message)}</div>`;
+      if (!root.isConnected || version !== selectionVersion || showUnavailable()) return;
+      // Keep the body on a background transport error, not when Runtime
+      // definitively denied the read (for example, the record was deleted).
+      if (viewing && !scroll && !error.envelope) {
+        revision = "";
+        return;
+      }
+      renderedEntry = null;
+      reader.innerHTML = `<div class="empty danger-text">${h(error.message)}</div>`;
     }
   }
   async function search() {
@@ -446,10 +468,12 @@ export function memoryWorkspace(root, ctx) {
       renderTree();
       return;
     }
+    if (showUnavailable()) return;
+    const version = catalogEpoch;
     count.textContent = "正在检索整库…";
     try {
       const result = await execute("memory_search", { query, limit: 50 });
-      if (!root.isConnected) return;
+      if (!root.isConnected || version !== catalogEpoch || showUnavailable()) return;
       const matches = rows(result)
         .map((value) => {
           try {

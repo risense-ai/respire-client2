@@ -43,6 +43,8 @@ func (d *desktop) businessRoute(w http.ResponseWriter, r *http.Request) bool {
 		_, metadata, releaseErr := d.m.LatestRuntime(ctx)
 		err = releaseErr
 		result = map[string]any{"version": metadata.RuntimeVersion, "channel": d.m.Preferences().RuntimeChannel}
+	case r.Method == "GET" && r.URL.Path == "/api/models/progress":
+		result = map[string]any{"task": d.m.ModelDownloadSnapshot()}
 	case r.Method == "GET" && r.URL.Path == "/api/model-variants":
 		ctx, cancel := context.WithTimeout(r.Context(), 4*time.Second)
 		defer cancel()
@@ -84,6 +86,7 @@ func (d *desktop) businessRoute(w http.ResponseWriter, r *http.Request) bool {
 			Model   string `json:"model"`
 			Engine  string `json:"engine"`
 			Variant string `json:"variant"`
+			Receipt bool   `json:"receipt"`
 		}
 		if err = json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&body); err != nil {
 			break
@@ -93,8 +96,12 @@ func (d *desktop) businessRoute(w http.ResponseWriter, r *http.Request) bool {
 		}
 		ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 		defer cancel()
-		err = d.m.ModelSwitch(ctx, body.Model, body.Engine, body.Variant)
+		receipt, switchErr := d.m.ModelSwitchWithReceipt(ctx, body.Model, body.Engine, body.Variant)
+		err = switchErr
 		result = "切换任务已提交"
+		if body.Receipt {
+			result = receipt
+		}
 	case r.URL.Path == "/api/model-download":
 		if r.Method != "POST" || r.Header.Get("X-Respire-Client") != "1" {
 			w.WriteHeader(http.StatusForbidden)
@@ -104,6 +111,7 @@ func (d *desktop) businessRoute(w http.ResponseWriter, r *http.Request) bool {
 		var body struct {
 			Model   string `json:"model"`
 			Variant string `json:"variant"`
+			Engine  string `json:"engine"`
 			Mirror  string `json:"mirror"`
 		}
 		if err = json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&body); err != nil {
@@ -121,7 +129,7 @@ func (d *desktop) businessRoute(w http.ResponseWriter, r *http.Request) bool {
 		if !d.m.StartTaskCancellable("下载模型 "+variant, func(ctx context.Context) error {
 			ctx, cancel := context.WithTimeout(ctx, 60*time.Minute)
 			defer cancel()
-			return d.m.DownloadModel(ctx, model, variant, mirror)
+			return d.m.DownloadModelForEngine(ctx, model, variant, mirror, body.Engine)
 		}) {
 			w.WriteHeader(http.StatusConflict)
 			err = errors.New("已有下载任务正在执行")
@@ -137,7 +145,9 @@ func (d *desktop) businessRoute(w http.ResponseWriter, r *http.Request) bool {
 		var body struct {
 			Pause bool `json:"pause"`
 		}
-		_ = json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&body)
+		if err = json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&body); err != nil {
+			break
+		}
 		d.m.CancelTask(body.Pause)
 		result = "已停止下载"
 	case r.Method == "GET" && r.URL.Path == "/api/operation":
@@ -256,17 +266,9 @@ func (d *desktop) businessRoute(w http.ResponseWriter, r *http.Request) bool {
 			defer cancel()
 			result, err = d.InstallPlugin(ctx, input.Target, input.Mirror)
 		case "/api/open-model-dir":
-			// Reveal a model file in the OS file manager; only paths inside the
-			// model directory are accepted.
-			dir := d.m.ModelDir()
-			abs, absErr := filepath.Abs(input.Path)
-			if absErr != nil {
-				err = absErr
-				break
-			}
-			rel, relErr := filepath.Rel(dir, abs)
-			if relErr != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-				err = errors.New("路径不在模型目录内")
+			abs, revealErr := d.m.CheckModelRevealPath(input.Path)
+			if revealErr != nil {
+				err = revealErr
 				break
 			}
 			var cmd *exec.Cmd
@@ -276,7 +278,11 @@ func (d *desktop) businessRoute(w http.ResponseWriter, r *http.Request) bool {
 			case "darwin":
 				cmd = exec.Command("open", "-R", abs)
 			default:
-				cmd = exec.Command("xdg-open", filepath.Dir(abs))
+				directory := abs
+				if info, statErr := os.Stat(abs); statErr != nil || !info.IsDir() {
+					directory = filepath.Dir(abs)
+				}
+				cmd = exec.Command("xdg-open", directory)
 			}
 			if err = cmd.Start(); err == nil {
 				result = "已打开文件位置"
@@ -349,7 +355,7 @@ func (d *desktop) businessRoute(w http.ResponseWriter, r *http.Request) bool {
 // carries a matching JSON field for each, so the two lists cannot drift.
 var preferencePatchKeys = []string{
 	"autoRuntime", "autoUpdate", "runtimeChannel", "clientChannel", "cliChannel",
-	"layout", "theme", "language", "proxyMode", "clientUpdateInterval", "runtimeUpdateInterval",
+	"layout", "theme", "language", "proxyMode", "modelMirror", "clientUpdateInterval", "runtimeUpdateInterval",
 	"clientAutoUpdate", "clientAutoRestart", "runtimeAutoUpdate", "runtimeAutoRestart",
 	"sidebarWidth", "memoryIndexWidth",
 	"onboardingVersion", "onboardingCompleted", "onboardingStep", "onboardingSyncChoice",
@@ -368,6 +374,7 @@ func preferencePatchTargets(p *host.Preferences) map[string]any {
 		"theme":                 &p.Theme,
 		"language":              &p.Language,
 		"proxyMode":             &p.ProxyMode,
+		"modelMirror":           &p.ModelMirror,
 		"clientUpdateInterval":  &p.ClientUpdateInterval,
 		"runtimeUpdateInterval": &p.RuntimeUpdateInterval,
 		"clientAutoUpdate":      &p.ClientAutoUpdate,
@@ -400,6 +407,12 @@ func patchPreferences(base host.Preferences, body []byte) (host.Preferences, err
 		}
 		if err := json.Unmarshal(raw, targets[key]); err != nil {
 			return base, err
+		}
+	}
+	if _, exists := keys["modelMirror"]; exists {
+		p.ModelMirror = strings.TrimSpace(p.ModelMirror)
+		if !host.ValidModelMirror(p.ModelMirror) {
+			return base, errors.New("模型镜像地址无效")
 		}
 	}
 	return p, nil

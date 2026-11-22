@@ -41,7 +41,11 @@ func TestInstalledVariants(t *testing.T) {
 		t.Fatal(err)
 	}
 	full := modelVariantFiles[1]
-	if err := os.WriteFile(filepath.Join(dir, variantFileName(full.Name)), make([]byte, full.Size), 0o644); err != nil {
+	file, err := os.Create(filepath.Join(dir, variantFileName(full.Name)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := errors.Join(file.Truncate(full.Size), file.Close()); err != nil {
 		t.Fatal(err)
 	}
 	// Wrong size must not count as installed.
@@ -70,6 +74,7 @@ func TestModelDownloadDiscardsCorruptChunks(t *testing.T) {
 		if requests.Add(1) == 1 {
 			payload = bad
 		}
+		w.Header().Set("Content-Range", "bytes 0-15/16")
 		w.WriteHeader(http.StatusPartialContent)
 		if _, err := w.Write(payload); err != nil {
 			t.Errorf("write response: %v", err)
@@ -112,6 +117,7 @@ func TestModelDownloadResumesIncompleteChunk(t *testing.T) {
 	ranges := make(chan string, 1)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ranges <- r.Header.Get("Range")
+		w.Header().Set("Content-Range", "bytes 5-15/16")
 		w.WriteHeader(http.StatusPartialContent)
 		if _, err := w.Write(good[5:]); err != nil {
 			t.Errorf("write response: %v", err)
@@ -142,6 +148,7 @@ func TestDownloadModelSucceedsAfterOriginError(t *testing.T) {
 	defer first.Close()
 	second := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		secondRequests.Add(1)
+		w.Header().Set("Content-Range", "bytes 0-15/16")
 		w.WriteHeader(http.StatusPartialContent)
 		if _, err := w.Write(good); err != nil {
 			t.Errorf("write response: %v", err)
@@ -156,7 +163,20 @@ func TestDownloadModelSucceedsAfterOriginError(t *testing.T) {
 	})
 	modelMirrors = []string{first.URL, second.URL}
 	modelFileSpecs["quantized"] = spec
+	t.Setenv("RSRS_CPU_OWNED_ORT_EXPERIMENT", "0")
 	manager := &Manager{DataRoot: t.TempDir(), modelHTTPClient: second.Client()}
+	if err := os.MkdirAll(manager.ModelDir(), 0700); err != nil {
+		t.Fatal(err)
+	}
+	tokenizer := modelFileSpecs["tokenizer"]
+	modelFileSpecs["tokenizer"] = modelTransferSpec(good)
+	tmpTokenizer := modelFileSpecs["tokenizer"]
+	tmpTokenizer.rel = "tokenizer.json"
+	modelFileSpecs["tokenizer"] = tmpTokenizer
+	t.Cleanup(func() { modelFileSpecs["tokenizer"] = tokenizer })
+	if err := os.WriteFile(filepath.Join(manager.ModelDir(), "tokenizer.json"), good, 0600); err != nil {
+		t.Fatal(err)
+	}
 	if err := manager.DownloadModel(context.Background(), "m3", "quantized", "auto"); err != nil {
 		t.Fatalf("download from the second origin: %v", err)
 	}
@@ -173,7 +193,9 @@ func TestDownloadModelSucceedsAfterOriginError(t *testing.T) {
 	if err := manager.DownloadModel(context.Background(), "m3", "quantized", ""); err != nil {
 		t.Fatalf("download using Client2 preference: %v", err)
 	}
-	if firstRequests.Load() != 0 || secondRequests.Load() != 2 || !modelFileValid(filepath.Join(manager.ModelDir(), spec.rel), spec) {
+	if firstRequests.Load() != 0 || secondRequests.Load() != 3 ||
+		!modelFileValid(filepath.Join(manager.ModelDir(), spec.rel), spec) ||
+		!modelFileValid(filepath.Join(manager.ModelDir(), tmpTokenizer.rel), tmpTokenizer) {
 		t.Fatalf("unexpected requests using Client2 preference: first=%d second=%d", firstRequests.Load(), secondRequests.Load())
 	}
 }

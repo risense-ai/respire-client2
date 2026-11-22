@@ -28,10 +28,14 @@ import {
   graniteVariant,
   DEVICES,
   engineAvailable,
+  engineCapabilities,
+  fetchModelDownloadTask,
+  localModelDownload,
   fetchInventory,
   isProfileModel,
   openDownloadModal,
   applyEngineChoice,
+  switchProgressLabel,
 } from "../pages/model-kit.js";
 // First-run onboarding wizard: a resumable step machine over real runtime
 // state. Steps advance only on real receipts (auth envelopes, session
@@ -568,14 +572,17 @@ export function createWizard(ctx) {
       return;
     }
     const platform = ctx.desktop?.platform || "";
-    // OS-level entry gates from the shared kit; real capability is decided
-    // by the runtime's inference probe at enable time.
-    const gpuEntry = engineAvailable(platform, "gpu");
-    const npuEntry = engineAvailable(platform, "npu");
+    const capabilities = engineCapabilities(ctx);
+    const gpuEntry = engineAvailable(platform, "gpu", capabilities);
+    const npuEntry = engineAvailable(platform, "npu", capabilities);
+    if (!engineAvailable(platform, state.device, capabilities)) {
+      state.device = "cpu";
+      state.variantTouched = false;
+    }
     body.innerHTML = frame(
       "选择计算设备",
       "设备与权重的真实可用性以启用时的实际推理验证为准。",
-      `<div class="wizard-choices">${DEVICES.map((device) =>
+      `<div class="wizard-choices">${DEVICES.filter((device) => device.id !== "npu" || npuEntry).map((device) =>
         card(device.title, device.detail, device.id, {
           disabled:
             (Boolean(graniteVariant(state.model)) && device.id !== "cpu") ||
@@ -854,6 +861,7 @@ export function createWizard(ctx) {
     for (const [index, variant] of downloads.entries()) {
       const { element, done } = openDownloadModal({
         model: state.model,
+        engine: state.device,
         variant,
         label: modelLabel(state.model),
         getMirror: () => "auto",
@@ -891,9 +899,10 @@ export function createWizard(ctx) {
   async function trackRunningDownload() {
     for (let rounds = 0; rounds < 7200; rounds++) {
       if (!state) return false; // wizard closed by skip: stop tracking
-      await ctx.refresh();
-      const task = ctx.desktop?.task || {};
+      const task = await fetchModelDownloadTask().catch(() => null);
+      if (!task) return false;
       if (!task.busy) return task.stage === "完成";
+      if (!localModelDownload(task)) return false;
       executeStatus(
         `${task.stage || "下载中"}${task.total ? ` · ${bytes(task.done)} / ${bytes(task.total)}` : ""}`,
       );
@@ -903,6 +912,10 @@ export function createWizard(ctx) {
   }
 
   async function runEnableStage() {
+    if (!engineAvailable(ctx.desktop?.platform, state.device, engineCapabilities(ctx))) {
+      failure("load", "当前 Runtime 未确认所选计算设备，请返回选择其他设备。");
+      return false;
+    }
     setStage("load", "active");
     executeStatus("正在注册并加载模型…");
     let outcome;
@@ -911,6 +924,10 @@ export function createWizard(ctx) {
         model: state.model,
         engine: state.device,
         variant: state.variant,
+        onTick: (snapshot) => {
+          const label = switchProgressLabel(snapshot);
+          if (label && state?.step === "execute") executeStatus(label);
+        },
       });
     } catch (error) {
       failure("load", error.message);

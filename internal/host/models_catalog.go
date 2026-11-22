@@ -203,9 +203,10 @@ func (m *Manager) runtimeRPC(ctx context.Context, method string, args []string) 
 	if args == nil {
 		args = []string{}
 	}
+	id := fmt.Sprintf("client2-model-%d", time.Now().UnixNano())
 	body := map[string]any{
 		"v":      1,
-		"id":     fmt.Sprintf("client2-model-%d", time.Now().UnixNano()),
+		"id":     id,
 		"method": method,
 		"args":   args,
 	}
@@ -213,36 +214,29 @@ func (m *Manager) runtimeRPC(ctx context.Context, method string, args []string) 
 	if err != nil {
 		return nil, err
 	}
-	var reply struct {
-		OK       bool            `json:"ok"`
-		Exit     *int            `json:"exit"`
-		Envelope json.RawMessage `json:"envelope"`
-		Errors   []string        `json:"errors"`
-	}
+	var reply rpcResponse
 	if err := json.Unmarshal(raw, &reply); err != nil {
 		return nil, fmt.Errorf("runtime RPC 响应无法解析: %w", err)
 	}
 	if !reply.OK {
-		message := "runtime RPC 调用失败"
-		if len(reply.Errors) > 0 {
-			message = reply.Errors[0]
-		}
-		return nil, errors.New(message)
+		var envelope runtimeEnvelopeState
+		_ = json.Unmarshal(reply.Envelope, &envelope)
+		return nil, runtimeModelError("runtime RPC 调用失败", reply.Error, reply.Errors, envelope)
 	}
 	if len(reply.Envelope) == 0 {
 		return json.RawMessage("{}"), nil
 	}
-	var envelope struct {
-		Status string   `json:"status"`
-		Errors []string `json:"errors"`
-	}
+	var envelope runtimeEnvelopeState
 	_ = json.Unmarshal(reply.Envelope, &envelope)
 	if envelope.Status == "fail" {
-		message := "runtime 拒绝了模型操作"
-		if len(envelope.Errors) > 0 {
-			message = envelope.Errors[0]
+		return nil, runtimeModelError("runtime 拒绝了模型操作", reply.Error, reply.Errors, envelope)
+	}
+	if method == "model.switch" && switchReceiptID(reply.Envelope) != "" {
+		scope, _ := body["scope"].(*runtimeScope)
+		if scope == nil || reply.Scope == nil || *reply.Scope != *scope || reply.V != 1 ||
+			reply.ID != id || reply.OperationID != id {
+			return nil, &unconfirmedError{id, errors.New("切换任务回执不是原 Runtime 请求；请检查当前状态")}
 		}
-		return nil, errors.New(message)
 	}
 	return reply.Envelope, nil
 }
@@ -270,31 +264,57 @@ func (m *Manager) ModelConfigure(ctx context.Context, model, variant string) err
 	return err
 }
 
+// ModelSwitchReceipt is an additive desktop response. An absent ID is not
+// evidence that an old host accepted a particular asynchronous task.
+type ModelSwitchReceipt struct {
+	ID     string `json:"id,omitempty"`
+	Status string `json:"status,omitempty"`
+}
+
 // ModelSwitch activates a model profile with the chosen engine.
 func (m *Manager) ModelSwitch(ctx context.Context, model, engine, variant string) error {
+	_, err := m.ModelSwitchWithReceipt(ctx, model, engine, variant)
+	return err
+}
+
+func (m *Manager) ModelSwitchWithReceipt(ctx context.Context, model, engine, variant string) (ModelSwitchReceipt, error) {
 	definition, err := modelDefinitionByID(model)
 	if err != nil {
-		return err
+		return ModelSwitchReceipt{}, err
 	}
-	if variant == "" {
-		variant = definition.Variants[0].Name
+	choice := map[string]any{"model": model, "backend": "onnx", "engine": engine}
+	if definition.Legacy {
+		if variant == "" {
+			variant = defaultVariantFor(engine)
+		}
+		if _, err := definition.modelFileSpecFor(variant); err != nil {
+			return ModelSwitchReceipt{}, err
+		}
+		choice["variant"] = variant
 	}
-	if _, err := definition.modelFileSpecFor(variant); err != nil {
-		return err
-	}
-	choice := map[string]any{
-		"model": model, "backend": "onnx", "engine": engine, "variant": variant,
-	}
-	if definition.GraniteWeightsPath != "" {
-		// Runtime takes the exact weights path from the registered profile.
-		delete(choice, "variant")
-	}
+	// For a profile the registered weights are authoritative. In particular
+	// they need not match a legacy named variant; never send one with switch.
 	selection, err := json.Marshal(choice)
 	if err != nil {
-		return err
+		return ModelSwitchReceipt{}, err
 	}
-	_, err = m.runtimeRPC(ctx, "model.switch", []string{string(selection)})
-	return err
+	raw, err := m.runtimeRPC(ctx, "model.switch", []string{string(selection)})
+	if err != nil {
+		return ModelSwitchReceipt{}, err
+	}
+	var envelope runtimeEnvelopeState
+	_ = json.Unmarshal(raw, &envelope)
+	return ModelSwitchReceipt{ID: switchReceiptID(raw), Status: envelope.Status}, nil
+}
+
+func switchReceiptID(raw json.RawMessage) string {
+	var envelope struct {
+		Summary struct {
+			ID string `json:"id"`
+		} `json:"summary"`
+	}
+	_ = json.Unmarshal(raw, &envelope)
+	return envelope.Summary.ID
 }
 
 // ModelProgress reports the pending switch task and active selection.

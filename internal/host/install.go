@@ -85,7 +85,15 @@ func extractRuntime(archive, dir string) error {
 }
 
 func verifyRuntime(dir, binaryHash, target string) error {
-	hash, err := fileHash(filepath.Join(dir, runtimeBinary()))
+	return verifyRuntimeWithHashes(dir, dir, binaryHash, target, func(name string) (string, error) {
+		return fileHash(filepath.Join(dir, filepath.FromSlash(name)))
+	})
+}
+
+// verifyRuntimeWithHashes binds the signed release inventory to the nested
+// Core manifest. A caller may reuse digests only from this verification pass.
+func verifyRuntimeWithHashes(dir, noticeDir, binaryHash, target string, lookup func(string) (string, error)) error {
+	hash, err := lookup(runtimeBinary())
 	if err != nil {
 		return err
 	}
@@ -117,15 +125,15 @@ func verifyRuntime(dir, binaryHash, target string) error {
 		if strings.ContainsAny(file.Path, "\\:") || !filepath.IsLocal(filepath.FromSlash(file.Path)) || !validHash(file.Hash) {
 			return errors.New("unsafe runtime manifest file")
 		}
-		path := filepath.Join(dir, filepath.FromSlash(file.Path))
 		if strings.HasPrefix(file.Path, "core-notices/") {
+			path := filepath.Join(noticeDir, filepath.FromSlash(file.Path))
 			if _, err := os.Lstat(path); errors.Is(err, os.ErrNotExist) {
 				continue
 			} else if err != nil {
 				return err
 			}
 		}
-		hash, err := fileHash(path)
+		hash, err := lookup(file.Path)
 		if err != nil {
 			return err
 		}
@@ -171,9 +179,9 @@ func (m *Manager) publishRuntime(meta RuntimeMetadata, fill func(stage string) e
 	if reportProgress {
 		m.progress("校验并准备 Runtime", 0, 0)
 	}
-	if err = verifyRuntime(stage, meta.BinaryHash, meta.Target); err != nil {
-		return err
-	}
+	// Only the authenticated inventory is copied into the clean private tree.
+	// Verify those exact bytes once before publication rather than rehashing
+	// the discarded source tree and then rehashing the same dependencies.
 	clean, err := os.MkdirTemp(versions, ".verified-*")
 	if err != nil {
 		return err

@@ -51,24 +51,52 @@ func (m *Manager) requestScope(ctx context.Context) (*runtimeScope, error) {
 	return &runtimeScope{health.AccountID, health.InstanceID, health.Generation}, nil
 }
 
+// Only public, scope-exempt Runtime capabilities enter this list. A result
+// lookup must keep its original scope, and account/business reads are scoped.
+func runtimeScopeExempt(method string) bool {
+	switch method {
+	case "runtime.status", "assets.status", "model.catalog", "model.progress", "cli.progress":
+		return true
+	default:
+		return false
+	}
+}
+
+const defaultRuntimeHTTPTimeout = 30 * time.Second
+
+func (m *Manager) runtimeHTTPTransport(method string, args []string) *http.Client {
+	client := m.localClient
+	if method == "cli.exec" && len(args) >= 3 && args[0] == "--json" &&
+		args[1] == "model" && args[2] == "probe" && client.Timeout == defaultRuntimeHTTPTimeout {
+		// Legacy explicit inference can cold-load a model. Keep every
+		// other call's deadline and the transport identity unchanged.
+		probe := *client
+		probe.Timeout = 2 * time.Minute
+		return &probe
+	}
+	return client
+}
+
 func (m *Manager) localRequest(ctx context.Context, method, path string, body any) (json.RawMessage, error) {
 	var input io.Reader
+	transport := m.localClient
 	if method == http.MethodPost && path == "/api/rpc" {
 		request, ok := body.(map[string]any)
 		if !ok {
 			return nil, errors.New("Runtime RPC 请求格式无效")
 		}
-		if _, exists := request["scope"]; !exists {
+		rpcMethod, _ := request["method"].(string)
+		rpcArgs, _ := request["args"].([]string)
+		transport = m.runtimeHTTPTransport(rpcMethod, rpcArgs)
+		_, scoped := request["scope"]
+		if !scoped && !runtimeScopeExempt(rpcMethod) {
 			scope, err := m.requestScope(ctx)
 			if err != nil {
 				return nil, err
 			}
 			request["scope"] = scope
 		}
-		switch request["method"] {
-		case "runtime.status", "assets.status", "model.catalog", "model.progress", "cli.progress":
-		case "runtime.result":
-		default:
+		if !runtimeScopeExempt(rpcMethod) && rpcMethod != "runtime.result" {
 			request["operation_id"] = request["id"]
 			request["idempotency_key"] = request["id"]
 			if id, ok := request["id"].(string); ok {
@@ -93,7 +121,7 @@ func (m *Manager) localRequest(ctx context.Context, method, path string, body an
 	if method == http.MethodGet && path == "/api/health" {
 		req.Header.Set("X-Respire-Health", "runtime-v1")
 	}
-	res, err := m.localClient.Do(req)
+	res, err := transport.Do(req)
 	if err != nil {
 		return nil, err
 	}
