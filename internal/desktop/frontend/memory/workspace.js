@@ -46,6 +46,8 @@ export function memoryWorkspace(root, ctx) {
     selected = ctx.params?.get("node") || "",
     selectedEntry = null,
     renderedEntry = null,
+    renderedContext = null,
+    readerToken = null,
     expanded = new Set(),
     filter = "",
     mode = "tree",
@@ -244,20 +246,66 @@ export function memoryWorkspace(root, ctx) {
       busy ||
       records.length >= Number(ctx.status?.summary?.local_alive || Infinity);
   }
+  function readableLibrary() {
+    if (!ctx.desktop?.connected || ctx.status?.summary?.unlocked !== true) return null;
+    const health = ctx.desktop.health;
+    if (health?.credential_state === "required") return null;
+    const directory = ctx.status.summary.data_dir || health?.data_dir;
+    if (!directory && !health?.account_id) return null;
+    // Compare both observations: Desktop Health may already have switched
+    // directories while the independent status request is still pending.
+    return JSON.stringify([directory, health?.data_dir || directory,
+      health?.account_id, health?.instance_id, health?.generation]);
+  }
+  function activeReaderEntry() {
+    return selectedEntry?.id === selected && renderedContext !== null &&
+      renderedContext === readableLibrary() ? selectedEntry : null;
+  }
+  function requireCurrentReader(memory) {
+    const token = readerToken;
+    return () => {
+      if (!token || token !== readerToken || activeReaderEntry()?.id !== memory.id)
+        throw new Error("当前记忆或账户已变化，请重新选择后操作。");
+    };
+  }
+  function discardReader() {
+    selectedEntry = null;
+    renderedEntry = null;
+    renderedContext = null;
+    readerToken = null;
+    ++selectionVersion;
+  }
   function unavailableMessage() {
     if (!ctx.desktop?.connected) return "等待 Runtime 连接";
     const unlocked = ctx.status?.summary?.unlocked;
-    if (unlocked === false) return "需要解锁记忆库";
+    if (unlocked === false || ctx.desktop.health?.credential_state === "required") return "需要解锁记忆库";
     if (unlocked === true) return "";
     return ctx.statusError ? "暂时无法读取记忆状态，请稍后刷新。" : "正在读取记忆目录…";
   }
   let catalogEpoch = 0;
   function showUnavailable() {
     const message = unavailableMessage();
-    if (!message) return false;
+    if (!message) {
+      const library = readableLibrary();
+      if (renderedContext !== null && library !== null && renderedContext !== library) {
+        discardReader();
+        ++catalogEpoch;
+        revision = "";
+        records = [];
+        checked.clear();
+        expanded.clear();
+        searchCaption = "";
+        selected = "";
+        loaded = false;
+        renderTree();
+        reader.innerHTML = '<div class="empty">账户已变化，请重新选择记忆。</div>';
+      }
+      return false;
+    }
     revision = "";
     count.textContent = message;
-    if (ctx.desktop?.connected && ctx.status?.summary?.unlocked === false) {
+    if (ctx.desktop?.connected && (ctx.status?.summary?.unlocked === false ||
+        ctx.desktop.health?.credential_state === "required")) {
       if (loaded) {
         records = [];
         checked.clear();
@@ -267,9 +315,8 @@ export function memoryWorkspace(root, ctx) {
         loaded = false;
         renderTree();
       }
-      renderedEntry = null;
-      selectedEntry = null;
-      ++selectionVersion;
+      selected = "";
+      discardReader();
       ++catalogEpoch;
       count.textContent = message;
       reader.innerHTML = `<div class="empty"><strong>本机记忆库尚未解锁</strong>登录账户，或初始化本机离线记忆库。<div class="actions"><button data-accounts>账户与本机密钥</button></div></div>`;
@@ -412,20 +459,30 @@ export function memoryWorkspace(root, ctx) {
       expanded.add(ancestor.parent_id);
       ancestor = byId.get(ancestor.parent_id);
     }
+    const library = readableLibrary();
+    // Only the same record in the same verified library may carry its body
+    // and actions through a transient background read failure.
+    const viewing = library !== null && renderedContext === library && renderedEntry?.id === id;
+    const previous = viewing ? (selectedEntry || renderedEntry) : null;
+    if (!viewing) {
+      discardReader();
+      reader.innerHTML = '<div class="empty">正在读取完整内容…</div>';
+    } else if (scroll) {
+      selectedEntry = null;
+    }
     selected = id;
-    selectedEntry = null;
     const version = ++selectionVersion;
     renderTree();
-    // A background refresh of the visible record must not flash a loading
-    // placeholder: keep the current content until the fresh copy differs.
-    const viewing = renderedEntry?.id === id;
-    const previous = renderedEntry;
-    if (!viewing)
-      reader.innerHTML = '<div class="empty">正在读取完整内容…</div>';
+    const stillCurrent = () => root.isConnected && version === selectionVersion &&
+      !showUnavailable() && library === readableLibrary();
     try {
       const memory = entry(await execute("memory_show", { id }));
-      if (!root.isConnected || version !== selectionVersion || showUnavailable()) return;
+      if (!stillCurrent()) return;
+      if (!memory || memory.id !== id)
+        throw Object.assign(new Error("Runtime 返回的记忆与当前选择不一致。"), { envelope: {} });
       selectedEntry = memory;
+      renderedContext = library;
+      readerToken ||= {};
       if (!(viewing && previous.updated_at === memory.updated_at)) {
         renderReader(memory);
         const listed = byId.get(id);
@@ -434,10 +491,10 @@ export function memoryWorkspace(root, ctx) {
           `<span>召回 ${h(listed?.recall_count ?? "—")} 次</span><span>${h(memory.project || "未指定项目")}</span><span>${h((memory.tags || []).join(" · "))}</span>`,
         );
         memoryTools(reader, memory, {
+          requireCurrent: requireCurrentReader(memory),
           changed: async () => {
             selected = "";
-            selectedEntry = null;
-            selectionVersion++;
+            discardReader();
             reader.innerHTML =
               '<div class="empty">操作已完成，请重新选择记忆。</div>';
             await load();
@@ -448,14 +505,15 @@ export function memoryWorkspace(root, ctx) {
       }
       renderedEntry = memory;
     } catch (error) {
-      if (!root.isConnected || version !== selectionVersion || showUnavailable()) return;
+      if (!stillCurrent()) return;
       // Keep the body on a background transport error, not when Runtime
       // definitively denied the read (for example, the record was deleted).
       if (viewing && !scroll && !error.envelope) {
+        selectedEntry = previous;
         revision = "";
         return;
       }
-      renderedEntry = null;
+      discardReader();
       reader.innerHTML = `<div class="empty danger-text">${h(error.message)}</div>`;
     }
   }
@@ -691,10 +749,11 @@ export function memoryWorkspace(root, ctx) {
       });
       return;
     }
-    const memory = selectedEntry;
+    const memory = activeReaderEntry();
     if (!memory) return;
-    if (button.hasAttribute("data-edit")) edit({ memory });
-    if (button.hasAttribute("data-child")) edit({ parent: memory.id });
+    const requireCurrent = requireCurrentReader(memory);
+    if (button.hasAttribute("data-edit")) edit({ memory, requireCurrent });
+    if (button.hasAttribute("data-child")) edit({ parent: memory.id, requireCurrent });
     if (button.hasAttribute("data-copy"))
       await action(button, async () => {
         await navigator.clipboard.writeText(memory.content || "");
@@ -707,10 +766,12 @@ export function memoryWorkspace(root, ctx) {
           required: true,
         }),
         onSubmit: async (value) => {
+          requireCurrent();
           await execute("memory_attach", {
             id: memory.id,
             parent: value.parent.trim(),
           });
+          requireCurrent();
           await recordUndo({ kind: "move", id: memory.id, before: memory });
           notify("已移动");
           await load();
@@ -719,6 +780,7 @@ export function memoryWorkspace(root, ctx) {
     if (button.hasAttribute("data-share"))
       await action(button, async () => {
         const result = await execute("memory_share", { root: memory.id });
+        requireCurrent();
         const text = result.details?.payload;
         if (!text) throw new Error("Runtime 未返回分享材料");
         showText("分享子树", text);
@@ -729,6 +791,7 @@ export function memoryWorkspace(root, ctx) {
           id: memory.id,
           depth: 3,
         });
+        requireCurrent();
         const detail = result.details || {};
         const sequence = [
           ...(detail.ancestors || []),
@@ -754,15 +817,19 @@ export function memoryWorkspace(root, ctx) {
           ))
         )
           return;
+        requireCurrent();
+        const library = readableLibrary();
         await execute("memory_delete", { id: memory.id });
+        requireCurrent();
         await recordUndo({ kind: "delete", id: memory.id, before: memory });
         selected = "";
-        selectedEntry = null;
-        selectionVersion++;
+        discardReader();
         checked.delete(memory.id);
         reader.innerHTML = `<div class="empty"><strong>记忆已删除</strong><button data-restore="${h(memory.id)}">恢复刚才删除的记忆</button></div>`;
         $("[data-restore]", reader).addEventListener("click", (event) =>
           action(event.currentTarget, async () => {
+            if (!library || library !== readableLibrary() || selected)
+              throw new Error("当前记忆或账户已变化，请重新选择后操作。");
             await execute("memory_restore", { id: memory.id });
             selected = memory.id;
             await load();
@@ -816,7 +883,8 @@ export function memoryWorkspace(root, ctx) {
     search: () => $("[data-search]", root).focus(),
     newMemory: (subtree) => edit({ parent: subtree ? selected : "" }),
     edit: () => {
-      if (selectedEntry) edit({ memory: selectedEntry });
+      const memory = activeReaderEntry();
+      if (memory) edit({ memory, requireCurrent: requireCurrentReader(memory) });
     },
     remove: () => $("[data-delete]", reader)?.click(),
     undo,

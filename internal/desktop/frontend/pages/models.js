@@ -38,7 +38,9 @@ import {
   engineCapabilities,
   localModelDownload,
   modelActivity,
-  cancelModelWork,
+  cancelDisplayedModelWork,
+  fetchModelDownloadTask,
+  watchModelDownloadTask,
   waitForProfileSwitch,
   switchFailure,
   switchProgressLabel,
@@ -153,6 +155,7 @@ export function models(root, ctx) {
     baselinePrepared = false,
     modelID = localStorage.getItem("respire-model") || "m3",
     profileState = null,
+    modelTask = null,
     switchInFlight = false,
     switchingVariant = "",
     selectedMode = localStorage.getItem("respire-model-mode") === "performance" ? "performance" : "balanced",
@@ -162,6 +165,8 @@ export function models(root, ctx) {
     pageKey = "",
     lastProbe = null,
     fusion = { runtime: null, draft: null, checked: false, loadFailed: false, requestId: null };
+  const legacyTask = () => ctx.desktop?.task || {};
+  const currentModelTask = () => modelTask ?? legacyTask();
   root.innerHTML =
     heading("模型与索引", "选择运行模式，一键启用 AI 功能") +
     `<div data-live></div>` +
@@ -317,14 +322,14 @@ export function models(root, ctx) {
                 : "";
         const activeHere = activeModelID() === modelID && engineState.model === variant.name;
         const ops = variant.installed
-          ? `<div class="variant-ops">${engineChips(variant, modelActivity({ operation: op, task: ctx.desktop?.task, switching: switchInFlight }) === "switching" || localModelDownload(ctx.desktop?.task))}</div><button data-model="download" data-variant="${h(variant.name)}"${downloading === variant.name ? " disabled" : ""}>${activeHere ? "重新下载" : "下载"}</button>`
+          ? `<div class="variant-ops">${engineChips(variant, modelActivity({ operation: op, task: currentModelTask(), switching: switchInFlight }) === "switching" || localModelDownload(currentModelTask()))}</div><button data-model="download" data-variant="${h(variant.name)}"${downloading === variant.name ? " disabled" : ""}>${activeHere ? "重新下载" : "下载"}</button>`
           : `<button data-model="download" data-variant="${h(variant.name)}"${downloading === variant.name ? " disabled" : ""}>下载</button>`;
-        return `<tr><td><span class="variant-name"><strong>${h(variant.name)}</strong>${badge ? `<span class="hint">${badge}${variant.name === "fp16" ? '<span class="warn-tip" title="资源占用较大，谨慎选择">*</span>' : ""}</span>` : ""}</span></td><td>${h(bytes(variant.size))}</td><td data-status="${h(variant.name)}">${variantStatus(variant, op, downloading, ctx.desktop?.task)}</td><td><span class="path-cell"><code title="${h(variant.path)}">${h(variant.path)}</code><button class="link-btn" data-open-dir="${h(variant.path)}">打开</button></span></td><td>${ops}</td></tr>`;
+        return `<tr><td><span class="variant-name"><strong>${h(variant.name)}</strong>${badge ? `<span class="hint">${badge}${variant.name === "fp16" ? '<span class="warn-tip" title="资源占用较大，谨慎选择">*</span>' : ""}</span>` : ""}</span></td><td>${h(bytes(variant.size))}</td><td data-status="${h(variant.name)}">${variantStatus(variant, op, downloading, currentModelTask())}</td><td><span class="path-cell"><code title="${h(variant.path)}">${h(variant.path)}</code><button class="link-btn" data-open-dir="${h(variant.path)}">打开</button></span></td><td>${ops}</td></tr>`;
       })
       .join("")}</tbody></table>`;
     const cancelBtn = $("[data-model=cancel]", root);
     if (cancelBtn)
-      cancelBtn.disabled = !localModelDownload(ctx.desktop?.task) && !(op.active && op.id);
+      cancelBtn.disabled = !localModelDownload(currentModelTask()) && !(op.active && op.id);
     const providersBtn = $("[data-model=providers]", root);
     if (providersBtn)
       providersBtn.hidden = !engineAvailable(ctx.desktop?.platform, "npu", engineCapabilities(ctx));
@@ -333,7 +338,7 @@ export function models(root, ctx) {
   function renderBaseline() {
     const area = $("[data-baseline]", root);
     if (!area || !inventory) return;
-    const task = ctx.desktop?.task || {};
+    const task = currentModelTask();
     const baseBusy =
       task.busy &&
       /tokenizer[.]json|model_quantized[.]|下载模型 baseline/.test(task.stage || "");
@@ -371,7 +376,7 @@ export function models(root, ctx) {
   function computePageState() {
     const status = ctx.status?.summary;
     const activity = modelActivity({
-      task: ctx.desktop?.task, operation: status?.model_operation,
+      task: currentModelTask(), operation: status?.model_operation,
       index: status?.retrieval_index, switching: switchInFlight,
     });
     if (activity === "downloading") return PAGE_STATES.DOWNLOADING;
@@ -435,7 +440,7 @@ export function models(root, ctx) {
     const node = $("[data-mode-progress]", root);
     if (!node) return;
     const op = ctx.status?.summary?.model_operation || {};
-    const task = ctx.desktop?.task || {};
+    const task = currentModelTask();
     const switchLabel = switchInFlight ? switchProgressLabel(profileState) : "";
     if (switchLabel) {
       node.hidden = false;
@@ -681,9 +686,11 @@ export function models(root, ctx) {
   // Polling refreshes status cells in place; rebuilding the whole table would
   // replace buttons mid-click every 3 seconds.
   function updateVariantsProgress() {
-    if (!inventory) return;
     const op = ctx.status?.summary?.model_operation || {};
-    const task = ctx.desktop?.task || {};
+    const task = currentModelTask();
+    const cancel = $("[data-model=cancel]", root);
+    if (cancel) cancel.disabled = !localModelDownload(task) && !(op.active && op.id);
+    if (!inventory) return;
     const downloading = modelActivity({ operation: op }) === "downloading" ? variantFromItem(op.item, inventory.variants) : "";
     for (const variant of inventory.variants) {
       const cell = $(`[data-status="${CSS.escape(variant.name)}"]`, root);
@@ -707,11 +714,9 @@ export function models(root, ctx) {
           activeModelID() === modelID && engineState.engine === chip.dataset.engine &&
           engineState.model === variant.name;
         chip.classList.toggle("active", active);
-        chip.disabled = !engineEnabled(chip.dataset.engine, modelActivity({ operation: op, task: ctx.desktop?.task, switching: switchInFlight }) === "switching" || localModelDownload(ctx.desktop?.task));
+        chip.disabled = !engineEnabled(chip.dataset.engine, modelActivity({ operation: op, task: currentModelTask(), switching: switchInFlight }) === "switching" || localModelDownload(currentModelTask()));
       }
     }
-    const cancel = $("[data-model=cancel]", root);
-    if (cancel) cancel.disabled = !localModelDownload(task) && !(op.active && op.id);
     renderBaseline();
   }
   function update() {
@@ -961,7 +966,7 @@ export function models(root, ctx) {
       action(apply, async () => {
         const engine = apply.dataset.engine;
         const variant = apply.dataset.variant;
-        const activity = modelActivity({ task: ctx.desktop?.task, operation: ctx.status?.summary?.model_operation, switching: switchInFlight });
+        const activity = modelActivity({ task: currentModelTask(), operation: ctx.status?.summary?.model_operation, switching: switchInFlight });
         if (!engineEnabled(engine, activity === "switching" || activity === "downloading")) return;
         await applyEngineAfterDownload({ variant, title: `${engine.toUpperCase()} · ${variant}` }, engine);
       });
@@ -1024,7 +1029,15 @@ export function models(root, ctx) {
         });
         await ctx.refresh();
       } else if (operation === "cancel") {
-        result = await cancelModelWork(ctx.desktop?.task, ctx.status?.summary?.model_operation);
+        const operation = () => ctx.status?.summary?.model_operation;
+        result = await cancelDisplayedModelWork(currentModelTask(), operation(), {
+          read: () => fetchModelDownloadTask(legacyTask),
+          currentOperation: operation,
+          onTask(task) {
+            modelTask = task;
+            updateVariantsProgress();
+          },
+        });
       } else if (operation === "uninstall") {
         if (modelID !== "m3") throw new Error("此版本只支持卸载 BGE-M3；其他模型的文件不会被移除。");
         if (
@@ -1187,9 +1200,16 @@ export function models(root, ctx) {
   });
   update();
   const dispose = recallChecks(root);
+  const stopModelProgress = watchModelDownloadTask((task) => {
+    if (!root.isConnected) return;
+    modelTask = task;
+    updateVariantsProgress();
+    renderDynamic();
+  }, { read: () => fetchModelDownloadTask(legacyTask) });
   if (ctx.desktop?.connected) load();
   return {
     dispose() {
+      stopModelProgress();
       dispose();
     },
     update() {

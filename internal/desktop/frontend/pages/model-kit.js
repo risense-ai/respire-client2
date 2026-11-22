@@ -136,15 +136,15 @@ export function variantFromItem(item, variants = []) {
   return /model_([a-z0-9]+)(?:[.][a-z0-9-]+)?[.](?:onnx|ort)\b/.exec(name)?.[1] || "";
 }
 
-// A Windows OS label is not evidence that the NPU provider works.
+// The legacy GPU choice asks Runtime to probe; only explicit denial removes
+// that choice. An NPU, unlike GPU, is never inferred from the OS.
 export function engineAvailable(platform, engine, capabilities) {
   if (engine === "cpu") return true;
-  const windows = String(platform || "").startsWith("windows");
-  const available = (name) => capabilities?.[name] === true || capabilities?.[name]?.available === true;
-  if (engine === "gpu") return windows
-    ? available("gpu")
-    : Boolean(platform) && !String(platform).startsWith("linux");
-  if (engine === "npu") return windows && available("npu");
+  const os = String(platform || "");
+  const advertised = capabilities?.[engine];
+  const available = typeof advertised === "boolean" ? advertised : advertised?.available;
+  if (engine === "gpu") return Boolean(os) && !os.startsWith("linux") && available !== false;
+  if (engine === "npu") return os.startsWith("windows") && available === true;
   return false;
 }
 
@@ -170,13 +170,44 @@ export function modelActivity({ task, operation, index, switching } = {}) {
   return "idle";
 }
 
-export async function fetchModelDownloadTask() {
+export async function fetchModelDownloadTask(legacyTask) {
   try {
     return (await api("models/progress"))?.task || {};
-  } catch {
-    // Reads are safe to repeat against the older state-only desktop host.
-    return (await api("state"))?.task || {};
+  } catch (error) {
+    // The previous desktop host rejects unknown GET routes with this exact
+    // response. A transport error does not prove the isolated slot is absent.
+    const legacy = /^(?:desktop API request rejected|unknown desktop action|请求失败 \((?:404|405|501)\))$/i;
+    if (!legacy.test(error.message)) throw error;
+    return typeof legacyTask === "function" ? legacyTask() : (await api("state"))?.task || {};
   }
+}
+
+export function watchModelDownloadTask(onTask, {
+  read = fetchModelDownloadTask,
+  schedule = setTimeout,
+  cancel = clearTimeout,
+} = {}) {
+  let disposed = false, timer, last = {};
+  async function tick() {
+    let snapshot;
+    try {
+      snapshot = await read();
+    } catch {
+      // Keep the last isolated snapshot during a failed read. It is not
+      // replaced by unrelated desktop work from the legacy global slot.
+    }
+    if (disposed) return;
+    if (snapshot) {
+      last = snapshot;
+      onTask(snapshot);
+    }
+    timer = schedule(tick, localModelDownload(last) ? 700 : 3000);
+  }
+  void tick();
+  return () => {
+    disposed = true;
+    cancel(timer);
+  };
 }
 
 export async function cancelModelWork(task, operation) {
@@ -184,6 +215,26 @@ export async function cancelModelWork(task, operation) {
     return api("model-download-cancel", { pause: false });
   if (operation?.active && operation.id) return execute("model_cancel", { id: operation.id });
   throw new Error("没有正在运行的模型任务");
+}
+
+// Bind the click to what the page showed. If work changes while obtaining a
+// fresh snapshot, never reinterpret a local cancel as Runtime cancel (or the
+// reverse), and never cancel a replacement Runtime operation.
+export async function cancelDisplayedModelWork(displayedTask, displayedOperation, {
+  read = fetchModelDownloadTask, currentOperation, onTask,
+}) {
+  const local = localModelDownload(displayedTask);
+  const task = await read();
+  onTask?.(task);
+  if (local) {
+    if (localModelDownload(task)) return cancelModelWork(task);
+  } else {
+    const current = currentOperation();
+    if (!localModelDownload(task) && displayedOperation?.active && displayedOperation.id &&
+        current?.active && current.id === displayedOperation.id)
+      return cancelModelWork(null, current);
+  }
+  throw new Error("模型任务已变化，请重新确认后取消。");
 }
 
 export async function fetchInventory(model) {

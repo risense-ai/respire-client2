@@ -13,7 +13,7 @@ import {
 } from "../ui/core.js";
 import { entry, kindNames } from "./model.js";
 
-export function editor({ memory = null, parent = "", merge = [], onSaved }) {
+export function editor({ memory = null, parent = "", merge = [], onSaved, requireCurrent }) {
   const isEdit = Boolean(memory?.id);
   const element = dialog({
     title: merge.length ? "合并记忆" : isEdit ? "编辑记忆" : "记录一条记忆",
@@ -38,6 +38,7 @@ export function editor({ memory = null, parent = "", merge = [], onSaved }) {
         ? `<p class="warning-text">将合并 ${merge.length} 条记忆。旧条目会被替换，请核对完整正文。未选中的子节点会按 Runtime 规则提升到仍存在的祖先，不会自动挂到新条目。</p>`
         : ""),
     onSubmit: async (values) => {
+      requireCurrent?.();
       const args = {
         title: values.title.trim(),
         content: values.content,
@@ -48,6 +49,7 @@ export function editor({ memory = null, parent = "", merge = [], onSaved }) {
       let envelope;
       if (isEdit && !merge.length) {
         const current = entry(await execute("memory_show", { id: memory.id }));
+        requireCurrent?.();
         if (current.updated_at !== memory.updated_at)
           throw new Error("记忆已在其他入口修改，请重新读取后再编辑。");
         delete args.type;
@@ -69,6 +71,7 @@ export function editor({ memory = null, parent = "", merge = [], onSaved }) {
             return false;
           args.merge_ids = merge.join(",");
         }
+        requireCurrent?.();
         envelope = await execute("memory_create", args);
         const status = envelope?.status;
         if (status === "candidates" || !summary(envelope).id)
@@ -106,7 +109,9 @@ export function editor({ memory = null, parent = "", merge = [], onSaved }) {
     const area = $("[data-candidates-list]", element);
     area.innerHTML = '<p class="hint">正在查找相近记忆…</p>';
     try {
+      requireCurrent?.();
       const result = await execute("memory_candidates", { content });
+      requireCurrent?.();
       const report = result.details || {};
       const source = Array.isArray(result.details)
         ? result.details

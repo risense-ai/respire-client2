@@ -206,13 +206,13 @@ async function test(name, fn) { await fn(); console.log(`PASS ${++count}: ${name
   });
   await test('memory workspace keeps connection and status failures distinct from a confirmed lock', () => {
     const workspace = fs.readFileSync('internal/desktop/frontend/memory/workspace.js', 'utf8');
-    const start = workspace.indexOf('  function unavailableMessage()');
+    const start = workspace.indexOf('  function readableLibrary()');
     const end = workspace.indexOf('  async function load()', start);
     assert.ok(start >= 0 && end > start);
     const ctx = {desktop: {connected: false}, status: null, statusError: ''};
     const reader = {innerHTML: ''}, counter = {textContent: ''};
     const showUnavailable = new Function('ctx', 'reader', 'count', '$', 't', 'h',
-      'const checked = new Set(), expanded = new Set(); function renderTree() {} let records = [], selected, searchCaption, loaded = false, revision = "", renderedEntry, selectedEntry, selectionVersion = 0;\n' +
+      'const checked = new Set(), expanded = new Set(); function renderTree() {} let records = [], selected, searchCaption, loaded = false, revision = "", renderedEntry, selectedEntry, readerToken = null, renderedContext = null, selectionVersion = 0;\n' +
       workspace.slice(start, end) +
       '\nreturn (alreadyLoaded = false) => { loaded = alreadyLoaded; return showUnavailable(); };'
     )(ctx, reader, counter, () => ({addEventListener() {}}), text => text, text => text);
@@ -244,17 +244,20 @@ async function test(name, fn) { await fn(); console.log(`PASS ${++count}: ${name
   const reader = { innerHTML: 'old reader', querySelector: () => true };
   const tree = { innerHTML: 'old tree' }, count = { textContent: '' };
   let loaded = true, revision = 'loaded', busy = false, limit = 4, metadataCap = true;
-  let records = [{id:'old'}], selected = '', selectedEntry, selectionVersion = 0;
-  let renderedEntry = {id:'old', updated_at:'before'}, searchCaption;
+  let records = [{id:'old'}], selected = 'old', selectionVersion = 0;
+  let renderedEntry = {id:'old', updated_at:'before', content:'prior body'}, selectedEntry = renderedEntry, searchCaption;
+  let renderedContext = readableLibrary(), readerToken = {};
   function renderTree() { tree.innerHTML = records.map(row => row.id).join(','); }
   const h = String, t = String, number = String, list = value => value, entry = value => value;
   const inventory = rows => ({byId: new Map(rows.map(row => [row.id, row]))});
-  const $ = () => ({addEventListener() {}});
-  ${segment('  function unavailableMessage()', '  // Body records')}
+  const $ = () => ({addEventListener() {}, insertAdjacentHTML() {}});
+  const renderReader = (memory) => { reader.innerHTML = memory.content; };
+  const memoryTools = () => {};
+  ${segment('  function readableLibrary()', '  // Body records')}
   ${segment('  async function choose(', '  async function search()')}
-  return {load, choose, showUnavailable, tree, reader, count, ids: () => records.map(row => row.id)};
+  return {load, choose, showUnavailable, activeReaderEntry, requireCurrentReader, tree, reader, count, ids: () => records.map(row => row.id)};
   `);
-  const fixtureContext = () => ({desktop: {connected:true}, status:{summary:{unlocked:true, local_alive:10}}});
+  const fixtureContext = () => ({desktop: {connected:true, health:{account_id:'account-a', instance_id:'fixture-runtime', generation:1}}, status:{summary:{unlocked:true, local_alive:10, data_dir:'fixture-library'}}});
   await test('failed later memory catalog page preserves the reader and prior catalog', async () => {
     const ctx = fixtureContext();
     const failure = build(ctx, async (name, {limit}) => {
@@ -286,11 +289,152 @@ async function test(name, fn) { await fn(); console.log(`PASS ${++count}: ${name
     const ctx = fixtureContext();
     let error = new Error('transport unavailable');
     const reading = build(ctx, async () => { throw error; });
+    const before = reading.requireCurrentReader(reading.activeReaderEntry());
     await reading.choose('old', false);
     assert.equal(reading.reader.innerHTML, 'old reader');
+    assert.equal(reading.activeReaderEntry().content, 'prior body');
+    before();
     error = Object.assign(new Error('not found'), {envelope:{summary:{reason:'not_found'}}});
     await reading.choose('old', false);
     assert.match(reading.reader.innerHTML, /not found/);
+    assert.equal(reading.activeReaderEntry(), null);
+    assert.throws(before, /重新选择/);
+  });
+  await test('reader refuses in-flight old-account result even at the same library path', async () => {
+    const ctx = fixtureContext();
+    let finish;
+    const reading = build(ctx, () => new Promise(resolve => { finish = resolve; }));
+    const before = reading.requireCurrentReader(reading.activeReaderEntry());
+    const pending = reading.choose('old', false);
+    ctx.desktop.health.account_id = 'account-b';
+    assert.equal(reading.activeReaderEntry(), null);
+    assert.throws(before, /重新选择/);
+    finish({id:'old', updated_at:'new', content:'wrong account'});
+    await pending;
+    assert.match(reading.reader.innerHTML, /账户已变化/);
+    assert.doesNotMatch(reading.reader.innerHTML, /wrong account|old reader/);
+    assert.equal(reading.activeReaderEntry(), null);
+  });
+  await test('reader actions cannot revive after a confirmed lock or selecting away and back', async () => {
+    const ctx = fixtureContext();
+    const reading = build(ctx, async (_name, {id}) => ({id, updated_at:'fresh', content:'fresh body'}));
+    const before = reading.requireCurrentReader(reading.activeReaderEntry());
+    await reading.choose('second');
+    await reading.choose('old');
+    assert.equal(reading.activeReaderEntry().id, 'old');
+    assert.throws(before, /重新选择/);
+    const after = reading.requireCurrentReader(reading.activeReaderEntry());
+    ctx.status.summary.unlocked = false;
+    assert.equal(reading.activeReaderEntry(), null);
+    assert.throws(after, /重新选择/);
+    assert.equal(reading.showUnavailable(), true);
+    ctx.status.summary.unlocked = true;
+    await reading.choose('old');
+    assert.equal(reading.activeReaderEntry().id, 'old');
+    assert.throws(after, /重新选择/);
+  });
+  await test('reader blocks before slow status completes when Health sees a new library or confirmed lock', () => {
+    const ctx = fixtureContext();
+    ctx.desktop.health.data_dir = 'fixture-library';
+    ctx.desktop.health.credential_state = 'available';
+    const reading = build(ctx, () => {});
+    const before = reading.requireCurrentReader(reading.activeReaderEntry());
+    ctx.desktop.health.data_dir = 'new-library';
+    assert.equal(reading.activeReaderEntry(), null);
+    assert.throws(before, /重新选择/);
+    ctx.desktop.health.data_dir = 'fixture-library';
+    ctx.desktop.health.credential_state = 'required';
+    assert.equal(reading.activeReaderEntry(), null);
+    assert.equal(reading.showUnavailable(), true);
+    ctx.desktop.health.credential_state = 'available';
+    assert.throws(before, /重新选择/);
+  });
+  const loadModelPageTools = (api, execute) => new Function('api', 'execute',
+    read('pages/model-kit.js').replace(/^import \{[\s\S]+?;\n/, '').replace(/^export /gm, '') +
+    '\nreturn {engineAvailable, detectBestEngine, fetchModelDownloadTask, watchModelDownloadTask, cancelDisplayedModelWork, localModelDownload};'
+  )(api, execute);
+  await test('Windows GPU probe stays selectable without capabilities but explicit denies and NPU are respected', () => {
+    const {engineAvailable, detectBestEngine} = loadModelPageTools();
+    assert.equal(engineAvailable('windows/amd64', 'gpu'), true);
+    assert.equal(engineAvailable('windows/amd64', 'gpu', {gpu:false}), false);
+    assert.equal(engineAvailable('windows/amd64', 'gpu', {gpu:{available:false}}), false);
+    assert.equal(engineAvailable('windows/amd64', 'gpu', {gpu:{available:true}}), true);
+    assert.equal(engineAvailable('windows/amd64', 'npu'), false);
+    assert.equal(engineAvailable('windows/amd64', 'npu', {npu:{available:true}}), true);
+    assert.equal(detectBestEngine('windows/amd64', {gpu:false, npu:true}), 'cpu');
+    assert.equal(detectBestEngine('windows/amd64'), 'gpu');
+  });
+  await test('model page watches isolated download during unrelated update and never falls back on transport failure', async () => {
+    const downloading = {busy:true, stage:'下载模型 baseline', done:20, total:100};
+    const calls = [], samples = [], scheduled = [];
+    let error, task = downloading;
+    const tools = loadModelPageTools(async (route) => {
+      calls.push(route);
+      if (error) throw error;
+      return {task};
+    });
+    const flush = () => new Promise(resolve => setImmediate(resolve));
+    const stop = tools.watchModelDownloadTask((sample) => samples.push(sample), {
+      read: () => tools.fetchModelDownloadTask(() => ({busy:true, stage:'更新 Runtime'})),
+      schedule(callback, delay) { scheduled.push({callback, delay}); return callback; },
+      cancel(callback) { scheduled.splice(scheduled.findIndex(item => item.callback === callback), 1); },
+    });
+    await flush();
+    assert.deepEqual(samples, [downloading]);
+    assert.equal(scheduled[0].delay, 700);
+    error = new Error('network failure');
+    await scheduled.shift().callback();
+    assert.deepEqual(samples, [downloading]);
+    assert.deepEqual(calls, ['models/progress','models/progress']);
+    error = null;
+    task = {busy:false, stage:'完成'};
+    await scheduled.shift().callback();
+    assert.equal(samples.at(-1), task);
+    assert.equal(scheduled[0].delay, 3000);
+    stop();
+    assert.deepEqual(scheduled, []);
+    error = new Error('desktop API request rejected');
+    const old = {busy:true, stage:'下载模型 baseline'};
+    assert.equal(await tools.fetchModelDownloadTask(() => old), old);
+  });
+  await test('model page displays progress and enables cancel outside modal even without an inventory', () => {
+    const page = read('pages/models.js');
+    const section = (from, to) => page.slice(page.indexOf(from), page.indexOf(to, page.indexOf(from)));
+    const {localModelDownload} = loadModelPageTools();
+    const progress = {}, cancel = {disabled:true};
+    const find = (selector) => ({
+      '[data-mode-progress]': progress,
+      '[data-model=cancel]': cancel,
+    })[selector];
+    const ctx = {desktop:{task:{busy:true, stage:'更新 Runtime'}}};
+    let isolated = {busy:true, stage:'下载模型 baseline', done:25, total:100};
+    const drive = new Function('ctx', '$', 'currentModelTask', 'localModelDownload', 'h',
+      'const root = {}, inventory = null, switchInFlight = false;\n' +
+      section('  function updateModeProgress()', '  function renderAdvancedVisibility()') +
+      section('  function updateVariantsProgress()', '  function update()') +
+      '\nreturn () => { updateModeProgress(); updateVariantsProgress(); };'
+    )(ctx, find, () => isolated, localModelDownload, String);
+    drive();
+    assert.equal(progress.hidden, false);
+    assert.match(progress.innerHTML, /25%/);
+    assert.doesNotMatch(progress.innerHTML, /更新 Runtime/);
+    assert.equal(cancel.disabled, false);
+    isolated = {busy:false, stage:'完成'};
+    drive();
+    assert.equal(progress.hidden, true);
+    assert.equal(cancel.disabled, true);
+  });
+  await test('model page cancels the shown local download without redirecting to a Runtime task', async () => {
+    const calls = [];
+    const tools = loadModelPageTools(async (route, body) => { calls.push([route, body]); }, async (...request) => { calls.push(request); });
+    const local = {busy:true, stage:'下载模型 baseline'};
+    const runtime = {active:true, id:'runtime-task'};
+    await tools.cancelDisplayedModelWork(local, runtime, {read:async () => local, currentOperation:() => runtime});
+    assert.deepEqual(calls, [['model-download-cancel', {pause:false}]]);
+    await assert.rejects(tools.cancelDisplayedModelWork(local, runtime, {read:async () => ({busy:false}), currentOperation:() => runtime}), /已变化/);
+    await assert.rejects(tools.cancelDisplayedModelWork(null, runtime, {read:async () => local, currentOperation:() => runtime}), /已变化/);
+    await assert.rejects(tools.cancelDisplayedModelWork(null, runtime, {read:async () => ({}), currentOperation:() => ({active:true,id:'replacement'})}), /已变化/);
+    assert.equal(calls.length, 1);
   });
   console.log(`${count} focused refresh tests passed; browser/native UIA not exercised.`);
 })().catch(error => { console.error(error); process.exitCode = 1; });

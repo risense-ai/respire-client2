@@ -30,7 +30,7 @@ async function main() {
     assert.match(switchFailure({switchState:{rollback:{state:"unverified"}}}),/尚未确认/);
     assert.match(switchFailure({switchState:{recovery:"previous_ready"}}),/重新验证可用/);
     assert.equal(switchProgressLabel(S({},null,{phase:"switch-index",done:1,total:2})),"重建记忆索引 · 50%");
-    assert.equal(detectBestEngine("windows-amd64",{npu:{available:true}}),"cpu");
+    assert.equal(detectBestEngine("windows-amd64",{gpu:false,npu:{available:true}}),"cpu");
     assert.equal(detectBestEngine("windows-amd64",{gpu:{available:true},npu:{available:true}}),"gpu");
     assert.equal(engineAvailable("windows-amd64","npu"),false);
     assert.equal(modelActivity({index:{running:true},operation:{active:true,phase:"verify"}}),"indexing");
@@ -59,7 +59,7 @@ async function main() {
     responses=[ok(S()),new Error("connection lost")];
     await assert.rejects(applyEngineChoice({model:"m3",engine:"cpu",variant:"quantized"}),/connection lost/);
     assert.equal(calls.at(-1)[0],"/api/model-switch");
-    responses=[new Error("404"),ok({task:{busy:true,stage:"下载模型 quantized"}})];
+    responses=[new Error("desktop API request rejected"),ok({task:{busy:true,stage:"下载模型 quantized"}})];
     assert.equal((await fetchModelDownloadTask()).busy,true);
     assert.equal(calls.at(-1)[0],"/api/state");
     responses=[ok("cancelled")];
