@@ -7,6 +7,7 @@ import {
   select,
   dialog,
   execute,
+  api,
   action,
   confirm,
   notify,
@@ -23,6 +24,8 @@ export function organize(root, ctx) {
     planRevision = "",
     suggestions = [],
     backend = "ds";
+  let initialStarted = false, disposed = false, observedScope = null;
+  let reportEpoch = 0, pendingSuggestions = null, displayedSuggestions = null;
   root.innerHTML =
     heading(
       "让记忆各归其位。",
@@ -58,40 +61,140 @@ export function organize(root, ctx) {
     specField.value = raw(value);
     $("[data-plan-apply]", root).disabled = true;
   }
+  function organizeScope(desktop = ctx.desktop) {
+    const health = desktop?.health;
+    const status = ctx.status?.summary;
+    if (disposed || !root.isConnected || !desktop?.connected || status?.unlocked !== true ||
+        health?.credential_state === "required" || !health?.account_id || !health?.instance_id ||
+        !Number.isSafeInteger(health.generation) || health.generation <= 0 ||
+        (health.data_dir && status.data_dir && health.data_dir !== status.data_dir)) return null;
+    return JSON.stringify([health.account_id, health.instance_id, health.generation,
+      health.data_dir, status.data_dir, health.inference?.worker_generation]);
+  }
+  function observeScope() {
+    const scope = organizeScope();
+    if (scope !== observedScope) {
+      observedScope = scope;
+      ++reportEpoch;
+      suggestions = [];
+      if (displayedSuggestions || pendingSuggestions)
+        area.innerHTML = '<div class="panel empty">运行环境已变化，请重新读取归纲建议。</div>';
+      displayedSuggestions = null;
+      pendingSuggestions = null;
+    }
+    return scope;
+  }
+  function isCurrent(scope, epoch) {
+    return observeScope() === scope && epoch === reportEpoch;
+  }
+  async function suggestionModel() {
+    // This is the existing local desktop read, called only around on-demand
+    // suggestions. A worker counter alone does not identify a model profile.
+    const state = await api("model-profile-state");
+    const catalog = report(state?.catalog);
+    const progress = report(state?.progress);
+    if (!Object.hasOwn(catalog, "active"))
+      throw new Error("Runtime 未提供当前模型档案，请稍后重试。");
+    const switching = [catalog.switch, progress.switch].some((value) =>
+      ["pending", "running"].includes(value?.state ?? value?.status));
+    if (switching || progress.pending_selection)
+      throw new Error("模型正在切换，请在切换完成后重新读取归纲建议。");
+    const active = catalog.active;
+    return JSON.stringify([active?.model, active?.engine, active?.variant,
+      active?.generation, catalog.switch?.id, progress.switch?.id]);
+  }
+  function renderSuggestions(value) {
+    if (!Array.isArray(value.suggests))
+      throw new Error("Runtime 未返回归纲建议列表");
+    suggestions = value.suggests;
+    area.innerHTML = panel(
+      "归纲建议",
+      suggestions.length
+        ? '<div class="panel-body actions"><button data-suggestions-all>预览全部建议</button></div>' + suggestions
+            .map(
+              (item, index) =>
+                `<div class="suggestion-card"><div class="row-copy"><strong>${h(item.orphan?.title || item.orphan?.id)}</strong><p>→ ${h(item.target?.title || item.target?.id)}</p><small>${h(item.target_tree?.title || "")}</small></div><button data-suggestion="${index}">预览移动</button></div>`,
+            )
+            .join("")
+        : '<div class="empty">当前没有归纲建议</div>',
+    );
+  }
+  function loadSuggestions() {
+    const scope = observeScope();
+    if (!scope) return Promise.resolve();
+    initialStarted = true;
+    if (pendingSuggestions?.scope === scope) {
+      const current = pendingSuggestions;
+      if (current.epoch === reportEpoch) return current.promise;
+      // Another report superseded the old display, not its wire request.
+      // A later explicit refresh waits for that work rather than overlapping.
+      const queuedEpoch = reportEpoch;
+      if (current.next?.epoch === queuedEpoch) return current.next.promise;
+      const promise = current.promise.then(() => {
+        if (isCurrent(scope, queuedEpoch)) return loadSuggestions();
+      });
+      current.next = { epoch: queuedEpoch, promise };
+      return promise;
+    }
+    const request = { scope, epoch: ++reportEpoch };
+    suggestions = [];
+    displayedSuggestions = null;
+    area.innerHTML = '<div class="panel empty">正在读取归纲建议…</div>';
+    request.promise = (async () => {
+      try {
+        const model = await suggestionModel();
+        if (!isCurrent(scope, request.epoch)) return;
+        const result = await execute("organize_suggestions", { top: 50 });
+        if (!isCurrent(scope, request.epoch)) return;
+        const checkedModel = await suggestionModel();
+        if (!isCurrent(scope, request.epoch)) return;
+        if (model !== checkedModel)
+          throw new Error("模型已变化，请重新读取归纲建议。");
+        // Do not wait for the app's next state poll to observe an account,
+        // instance or worker change made by another client during this read.
+        const freshDesktop = await api("state");
+        if (!isCurrent(scope, request.epoch)) return;
+        if (!freshDesktop || organizeScope(freshDesktop) !== scope)
+          throw new Error("运行环境已变化，请重新读取归纲建议。");
+        renderSuggestions(report(result));
+        displayedSuggestions = { scope, model };
+      } catch (error) {
+        if (isCurrent(scope, request.epoch))
+          area.innerHTML = `<div class="panel empty danger-text">${h(error.message)}</div>`;
+      } finally {
+        if (pendingSuggestions === request) pendingSuggestions = null;
+      }
+    })();
+    pendingSuggestions = request;
+    return request.promise;
+  }
+  function update() {
+    const scope = observeScope();
+    // A mount that happens before the first status read gets one chance when
+    // the library becomes ready. The global refresh does not retry or poll.
+    if (!initialStarted && scope) void loadSuggestions();
+  }
   async function inspect(kind) {
+    if (kind === "suggestions") return loadSuggestions();
     const names = {
-      suggestions: "organize_suggestions",
       duplicates: "organize_duplicates",
       audit: "organize_audit",
       plan: "organize_plan",
     };
+    const scope = observeScope();
+    if (!scope) return;
+    initialStarted = true;
+    const epoch = ++reportEpoch;
+    suggestions = [];
+    displayedSuggestions = null;
+    area.innerHTML = '<div class="panel empty">正在读取检查结果…</div>';
     const stamp = await revision();
-    const result = await execute(
-      names[kind],
-      kind === "suggestions"
-        ? { top: 50 }
-        : kind === "duplicates"
-          ? { min: 0.8, top: 30 }
-          : {},
-    );
-    if (!root.isConnected) return;
+    if (!isCurrent(scope, epoch)) return;
+    const result = await execute(names[kind],
+      kind === "duplicates" ? { min: 0.8, top: 30 } : {});
+    if (!isCurrent(scope, epoch)) return;
     const value = report(result);
-    if (kind === "suggestions") {
-      if (!Array.isArray(value.suggests))
-        throw new Error("Runtime 未返回归纲建议列表");
-      suggestions = value.suggests;
-      area.innerHTML = panel(
-        "归纲建议",
-        suggestions.length
-          ? '<div class="panel-body actions"><button data-suggestions-all>预览全部建议</button></div>' + suggestions
-              .map(
-                (item, index) =>
-                  `<div class="suggestion-card"><div class="row-copy"><strong>${h(item.orphan?.title || item.orphan?.id)}</strong><p>→ ${h(item.target?.title || item.target?.id)}</p><small>${h(item.target_tree?.title || "")}</small></div><button data-suggestion="${index}">预览移动</button></div>`,
-              )
-              .join("")
-          : '<div class="empty">当前没有归纲建议</div>',
-      );
-    } else if (kind === "plan") {
+    if (kind === "plan") {
       if (!Array.isArray(value.ops))
         throw new Error("Runtime 未返回有效的修复方案");
       setPlan({ ops: value.ops }, stamp);
@@ -157,27 +260,34 @@ export function organize(root, ctx) {
     }
     if (apply) await ctx.refresh();
   }
+  async function previewSuggestions(index) {
+    const rendered = displayedSuggestions;
+    const scope = observeScope();
+    if (!rendered || rendered !== displayedSuggestions || rendered.scope !== scope)
+      throw new Error("运行环境已变化，请重新读取归纲建议。");
+    const epoch = reportEpoch;
+    const model = await suggestionModel();
+    if (!isCurrent(scope, epoch) || displayedSuggestions !== rendered || model !== rendered.model)
+      throw new Error("模型已变化，请重新读取归纲建议。");
+    const items = index === undefined ? suggestions : [suggestions[index]];
+    if (!items.length || items.some((item) => !item)) return;
+    const stamp = await revision();
+    const freshDesktop = await api("state");
+    if (!isCurrent(scope, epoch) || displayedSuggestions !== rendered ||
+        !freshDesktop || organizeScope(freshDesktop) !== scope)
+      return;
+    setPlan({ ops: items.map((item) => ({ id: item.orphan.id, parent: item.target.id })) }, stamp);
+    await preview();
+  }
   root.addEventListener("click", (event) => {
     const button = event.target.closest("button");
     if (!button) return;
     if (button.dataset.analyze)
       action(button, () => inspect(button.dataset.analyze));
     if (button.dataset.suggestion !== undefined)
-      action(button, async () => {
-        const item = suggestions[Number(button.dataset.suggestion)];
-        setPlan(
-          { ops: [{ id: item.orphan.id, parent: item.target.id }] },
-          await revision(),
-        );
-        await preview();
-      });
+      action(button, () => previewSuggestions(Number(button.dataset.suggestion)));
     if (button.hasAttribute("data-suggestions-all"))
-      action(button, async () => {
-        setPlan({ ops: suggestions.map((item) => ({
-          id: item.orphan.id, parent: item.target.id,
-        })) }, await revision());
-        await preview();
-      });
+      action(button, () => previewSuggestions());
     if (button.hasAttribute("data-plan-preview")) action(button, preview);
     if (button.hasAttribute("data-plan-copy"))
       action(button, async () => {
@@ -261,5 +371,15 @@ export function organize(root, ctx) {
     }
   }
   if (ctx.desktop?.connected) loadProvider();
-  return { refresh: () => inspect("suggestions") };
+  update();
+  return {
+    update,
+    refresh: loadSuggestions,
+    dispose() {
+      disposed = true;
+      ++reportEpoch;
+      pendingSuggestions = displayedSuggestions = null;
+      suggestions = [];
+    },
+  };
 }

@@ -436,5 +436,179 @@ async function test(name, fn) { await fn(); console.log(`PASS ${++count}: ${name
     await assert.rejects(tools.cancelDisplayedModelWork(null, runtime, {read:async () => ({}), currentOperation:() => ({active:true,id:'replacement'})}), /已变化/);
     assert.equal(calls.length, 1);
   });
+  function organizeFixture(onSuggestions = async () => ({suggests: []}), onModel) {
+    const bySelector = new Map();
+    const $ = (selector) => {
+      if (!bySelector.has(selector))
+        bySelector.set(selector, {innerHTML:'', textContent:'', addEventListener() {}});
+      return bySelector.get(selector);
+    };
+    const listeners = {};
+    const root = {isConnected:true, addEventListener(name, callback) { listeners[name] = callback; }};
+    const ctx = {desktop:{connected:true,health:{account_id:'acct-a', instance_id:'runtime-a', generation:1,
+      data_dir:'library-a', inference:{worker_generation:4}}},status:{summary:{unlocked:true,data_dir:'library-a'}}};
+    const calls = [], reads = [];
+    const model = {generation:'initial'};
+    const fixture = {desktop: null};
+    const source = read('pages/organize.js');
+    const organizers = new Function('$', 'h', 'heading','panel','select','input','api','report','execute','summary',
+      'action','raw','resultView',
+      source.slice(source.indexOf('export function organize')).replace(/^export /,'') + '\nreturn organize;'
+    )($, String, () => '', (_name, html) => html, () => '', () => '',
+      async (path) => {
+        reads.push(path);
+        if (path === "state") return fixture.desktop || ctx.desktop;
+        await onModel?.();
+        return {catalog:{summary:{active:{model:'m3',generation:model.generation},switch:model.switch}},progress:{summary:{}}};
+      },
+      (value) => ({...(value?.summary ?? value), ...value?.details}),
+      async (name, args) => {
+        calls.push([name,args]);
+        if (name === 'organize_suggestions') return onSuggestions();
+        if (name === 'memory_revision') return {summary:{revision:'current'}};
+        return {};
+      },
+      (x) => x.summary || {},
+      (_button, handler) => handler(),
+      JSON.stringify,
+      (heading) => heading,
+    );
+    const flush = () => new Promise(resolve => setImmediate(resolve));
+    return {ctx, root, calls, reads, model, fixture, flush, listeners, report: $('[data-report]'),
+      mount: () => organizers(root,ctx), suggestions: () => calls.filter(([name]) => name === 'organize_suggestions')};
+  }
+
+  await test('Organize mount starts one suggestion read, simultaneous refresh joins, and explicit refresh still works', async () => {
+    let complete;
+    const f = organizeFixture(() => new Promise(resolve => {complete = resolve;}));
+    const view = f.mount();
+    const refreshing = view.refresh();
+    assert.equal(view.refresh(), refreshing);
+    await f.flush();
+    assert.deepEqual(f.suggestions(), [['organize_suggestions',{top:50}]]);
+    complete({suggests: []});
+    await refreshing;
+    assert.match(f.report.innerHTML, /当前没有归纲建议/);
+    assert.deepEqual(f.reads, ['model-profile-state','model-profile-state','state']);
+    for (let i = 0; i < 100; ++i) view.update();
+    assert.equal(f.suggestions().length, 1);
+    const again = view.refresh();
+    await f.flush();
+    assert.equal(f.suggestions().length, 2);
+    complete({suggests: []});
+    await again;
+    view.dispose();
+  });
+  await test('loading Organize before account status waits once; regular app refresh never repeats suggestions', async () => {
+    const f = organizeFixture();
+    f.ctx.status = null;
+    const view = f.mount();
+    await f.flush();
+    assert.equal(f.suggestions().length, 0);
+    f.ctx.status = {summary:{unlocked:true, data_dir:'library-a'}};
+    view.update();
+    view.update();
+    await f.flush();
+    assert.equal(f.suggestions().length,1);
+    view.update();
+    await f.flush();
+    assert.equal(f.suggestions().length,1);
+  });
+  await test('Organize drops stale late results after account, Runtime generation, model worker, lock, or disposal', async () => {
+    for (const change of [
+      (f) => {f.ctx.desktop.health.account_id = 'acct-b';},
+      (f) => {f.ctx.desktop.health.generation += 1;},
+      (f) => {f.ctx.desktop.health.inference.worker_generation += 1;},
+      (f) => {f.ctx.status.summary.unlocked = false;},
+      (_f, view) => view.dispose(),
+    ]) {
+      let complete;
+      const f = organizeFixture(() => new Promise(resolve => {complete = resolve;}));
+      const view = f.mount();
+      const pending = view.refresh();
+      await f.flush();
+      change(f, view);
+      view.update();
+      complete({suggests:[{orphan:{id:'old',title:'STALE'},target:{id:'target'}}]});
+      await pending;
+      assert.doesNotMatch(f.report.innerHTML, /STALE/);
+      assert.equal(f.suggestions().length, 1);
+    }
+  });
+  await test('Organize does not start analysis if scope changes during the first model read', async () => {
+    let finish;
+    const f = organizeFixture(undefined, () => new Promise(resolve => {finish = resolve;}));
+    const view = f.mount();
+    const pending = view.refresh();
+    f.ctx.desktop.health.account_id = 'acct-b';
+    finish();
+    await pending;
+    assert.equal(f.suggestions().length, 0);
+    view.update();
+    await f.flush();
+    assert.equal(f.suggestions().length, 0);
+  });
+  await test('a requested audit wins over the initial suggestions, and a later refresh does not overlap it', async () => {
+    const responses = [];
+    const f = organizeFixture(() => new Promise(resolve => {responses.push(resolve);}));
+    const view = f.mount();
+    const first = view.refresh();
+    await f.flush();
+    const audit = {dataset:{analyze:'audit'},hasAttribute:()=>false};
+    f.listeners.click({target:{closest:()=>audit}});
+    await f.flush();
+    assert.equal(f.report.innerHTML, '结构检查');
+    const queued = view.refresh();
+    await f.flush();
+    assert.equal(f.suggestions().length,1);
+    responses[0]({suggests:[{orphan:{id:'old',title:'STALE'},target:{id:'target'}}]});
+    await first;
+    await f.flush();
+    assert.doesNotMatch(f.report.innerHTML,/STALE/);
+    assert.equal(f.suggestions().length,2);
+    responses[1]({suggests: []});
+    await queued;
+    assert.match(f.report.innerHTML,/当前没有归纲建议/);
+  });
+  await test('Organize rejects changes to catalog generation even when global Health has not refreshed', async () => {
+    let complete;
+    const f = organizeFixture(() => new Promise(resolve => {complete = resolve;}));
+    const view = f.mount();
+    const pending = view.refresh();
+    await f.flush();
+    f.model.generation = 'different-profile-generation';
+    complete({suggests:[{orphan:{id:'old',title:'STALE'},target:{id:'target'}}]});
+    await pending;
+    assert.match(f.report.innerHTML,/模型已变化/);
+    assert.doesNotMatch(f.report.innerHTML,/STALE/);
+    assert.equal(f.suggestions().length,1);
+  });
+  await test('Organize rechecks the real current account before showing results, even before app refresh', async () => {
+    let finish;
+    const f = organizeFixture(() => new Promise(resolve => {finish = resolve;}));
+    const view = f.mount();
+    const pending = view.refresh();
+    await f.flush();
+    f.fixture.desktop = {connected:true, health:{...f.ctx.desktop.health, account_id:'acct-b'}};
+    finish({suggests:[{orphan:{id:'old',title:'STALE'},target:{id:'target'}}]});
+    await pending;
+    assert.doesNotMatch(f.report.innerHTML,/STALE/);
+    assert.match(f.report.innerHTML,/运行环境已变化/);
+    assert.equal(f.suggestions().length,1);
+  });
+  await test('Organize defers suggestion requests while Runtime reports an active model switch', async () => {
+    const f = organizeFixture();
+    f.model.switch = {state:'pending',id:'switch-task'};
+    const view = f.mount();
+    await view.refresh();
+    assert.match(f.report.innerHTML, /模型正在切换/);
+    assert.equal(f.suggestions().length, 0);
+    f.model.switch = {state:'ready',id:'switch-task'};
+    view.update();
+    await f.flush();
+    assert.equal(f.suggestions().length,0);
+    await view.refresh();
+    assert.equal(f.suggestions().length,1);
+  });
   console.log(`${count} focused refresh tests passed; browser/native UIA not exercised.`);
 })().catch(error => { console.error(error); process.exitCode = 1; });
