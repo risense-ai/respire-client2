@@ -285,6 +285,20 @@ func TestStartTaskCancellableReportsFailure(t *testing.T) {
 	}
 }
 
+func TestModelRequestCancellationStillReportsWatchdogFailure(t *testing.T) {
+	m := &Manager{}
+	if !m.StartTaskCancellable("下载模型", func(ctx context.Context) error {
+		return errors.Join(errModelReadStall, context.Canceled)
+	}) {
+		t.Fatal("start must succeed")
+	}
+	waitTaskIdle(t, m)
+	snap := m.ModelDownloadSnapshot()
+	if snap.Stage != "操作失败" || !strings.Contains(snap.Error, errModelReadStall.Error()) {
+		t.Fatalf("request watchdog was mistaken for task cancellation: %+v", snap)
+	}
+}
+
 func waitTaskIdle(t *testing.T, m *Manager) {
 	t.Helper()
 	deadline := time.Now().Add(2 * time.Second)

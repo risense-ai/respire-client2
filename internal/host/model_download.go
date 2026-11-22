@@ -65,19 +65,40 @@ func (m *Manager) modelDirFor(model string) (string, modelDefinition, error) {
 	return m.ProfileDir(model), definition, nil
 }
 
-// modelClient streams multi-hundred-MiB chunks: no overall deadline (the
-// request context governs). It shares the manager's outbound transport, so
-// environment and system proxy settings apply to model downloads too.
+// modelClient grants each segment group its own pool. It keeps the manager's
+// proxy/redirect/TLS setup, but has no overall deadline of its own.
 func (m *Manager) modelClient() *http.Client {
+	client := &http.Client{}
+	var transport *http.Transport
 	if m.modelHTTPClient != nil {
-		return m.modelHTTPClient
+		template := m.modelHTTPClient
+		client.Jar = template.Jar
+		client.CheckRedirect = template.CheckRedirect
+		if template.Transport != nil {
+			base, ok := template.Transport.(*http.Transport)
+			if !ok {
+				// Internal test transports are provided as-is, not owned here.
+				client.Transport = template.Transport
+				return client
+			}
+			transport = base.Clone()
+		}
 	}
-	transport := http.DefaultTransport.(*http.Transport).Clone()
-	transport.ResponseHeaderTimeout = modelDownloadStall
-	if m.proxy != nil {
-		transport.Proxy = m.proxy.proxyFunc(func() string { return m.Preferences().ProxyMode })
+	if transport == nil {
+		transport = http.DefaultTransport.(*http.Transport).Clone()
+		if m.proxy != nil {
+			transport.Proxy = m.proxy.proxyFunc(func() string { return m.Preferences().ProxyMode })
+		}
 	}
-	return &http.Client{Transport: transport}
+	if transport.ResponseHeaderTimeout == 0 || transport.ResponseHeaderTimeout > modelDownloadStall {
+		transport.ResponseHeaderTimeout = modelDownloadStall
+	}
+	// Preserve the supplied per-host limit (default: none). An abandoned
+	// SOCKS dial can occupy a slot until group teardown. A new one-slot
+	// cap would prevent retries from connecting to a recovered proxy.
+	preserveModelProxyStatus(transport)
+	client.Transport = transport
+	return client
 }
 
 // ValidModelMirror accepts the application default or a single HTTP(S) mirror

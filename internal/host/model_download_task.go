@@ -44,12 +44,16 @@ func (m *Manager) StartTaskCancellable(stage string, action func(ctx context.Con
 		task := &m.modelDownload
 		task.cancel = nil
 		task.state.Busy = false
+		// A transport can wrap context.Canceled when its own watchdog
+		// cancels a request. Only cancellation of the task itself is a
+		// user pause/cancel; report request failures with their cause.
+		cancelled := ctx.Err() != nil && errors.Is(err, context.Canceled)
 		switch {
 		case err == nil:
 			task.state.Stage = "完成"
-		case task.pause && errors.Is(err, context.Canceled):
+		case task.pause && cancelled:
 			task.state.Stage = "已暂停"
-		case errors.Is(err, context.Canceled):
+		case cancelled:
 			task.state.Stage = "已取消"
 		default:
 			task.state.Stage = "操作失败"

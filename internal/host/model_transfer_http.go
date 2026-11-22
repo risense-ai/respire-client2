@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
+	"sync"
 	"time"
 )
 
@@ -16,7 +18,18 @@ func (e *modelRangeError) Error() string { return e.reason }
 
 func receiveModelRange(ctx context.Context, client *http.Client, url string, chunk modelChunk, have int64, file *os.File, buf []byte, stall time.Duration, reset, rollback func() error, report func(int64)) error {
 	requestCtx, cancel := context.WithCancelCause(ctx)
-	defer cancel(nil)
+	watch := newModelRequestWatchdog(stall, cancel)
+	var body io.ReadCloser
+	defer func() {
+		watch.stop()
+		// On rejected or incomplete responses, cancel before closing.
+		// Don't wait for the server to drain an untrusted error body.
+		// A clean EOF has already returned a reusable connection.
+		cancel(nil)
+		if body != nil {
+			_ = body.Close()
+		}
+	}()
 	req, err := http.NewRequestWithContext(requestCtx, http.MethodGet, url, nil)
 	if err != nil {
 		return &modelRangeError{err.Error()}
@@ -26,9 +39,10 @@ func receiveModelRange(ctx context.Context, client *http.Client, url string, chu
 	req.Header.Set("Accept-Encoding", "identity")
 	res, err := client.Do(req)
 	if err != nil {
-		return err
+		return errors.Join(context.Cause(requestCtx), err)
 	}
-	defer res.Body.Close()
+	body = res.Body
+	watch.bodyProgress()
 	switch res.StatusCode {
 	case http.StatusOK:
 		if chunk.end-chunk.start+1 != chunk.total {
@@ -57,13 +71,13 @@ func receiveModelRange(ctx context.Context, client *http.Client, url string, chu
 	if _, err = file.Seek(have, io.SeekStart); err != nil {
 		return &modelRangeError{err.Error()}
 	}
-	// Cancel transport reads even if the remote has only sent headers. Only
-	// actual bytes reset the idle clock; this is not a whole-download timeout.
-	touch := watchModelReads(requestCtx, cancel, stall)
 	for {
-		n, readErr := res.Body.Read(buf)
+		n, readErr := body.Read(buf)
 		if n > 0 {
-			touch()
+			watch.bodyProgress()
+			if cause := context.Cause(requestCtx); cause != nil {
+				return cause
+			}
 			if int64(n) > remaining {
 				return errors.Join(&modelRangeError{"模型源发送了超出分段范围的数据"}, rollback())
 			}
@@ -91,34 +105,74 @@ func receiveModelRange(ctx context.Context, client *http.Client, url string, chu
 	}
 }
 
-func watchModelReads(ctx context.Context, cancel context.CancelCauseFunc, stall time.Duration) func() {
-	activity := make(chan struct{}, 1)
-	go func() {
-		timer := time.NewTimer(stall)
-		defer timer.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-activity:
-				timer.Reset(stall)
-			case <-timer.C:
-				select {
-				case <-activity:
-					timer.Reset(stall)
-				default:
-					cancel(errModelReadStall)
-					return
-				}
+func preserveModelProxyStatus(transport *http.Transport) {
+	// net/http otherwise turns a refused CONNECT into a reason string,
+	// losing the HTTP code needed to avoid retrying permanent 4xx.
+	onProxyResponse := transport.OnProxyConnectResponse
+	transport.OnProxyConnectResponse = func(ctx context.Context, proxy *url.URL, request *http.Request, response *http.Response) error {
+		if onProxyResponse != nil {
+			if err := onProxyResponse(ctx, proxy, request, response); err != nil {
+				return err
 			}
 		}
-	}()
-	return func() {
-		select {
-		case activity <- struct{}{}:
-		default:
+		if response.StatusCode != http.StatusOK {
+			return &modelHTTPError{status: response.StatusCode, text: response.Status, proxy: true}
 		}
+		return nil
 	}
+
+}
+
+// One request owns its own idle clock. Before the first accepted response
+// headers it also covers proxy negotiation and redirects, including paths
+// where http.Transport's ResponseHeaderTimeout does not yet apply.
+type modelRequestWatchdog struct {
+	mu       sync.Mutex
+	timer    *time.Timer
+	stall    time.Duration
+	deadline time.Time
+	cause    error
+	done     bool
+}
+
+func newModelRequestWatchdog(stall time.Duration, cancel context.CancelCauseFunc) *modelRequestWatchdog {
+	w := &modelRequestWatchdog{
+		stall: stall, deadline: time.Now().Add(stall), cause: errModelHeaderStall,
+	}
+	w.mu.Lock()
+	w.timer = time.AfterFunc(stall, func() {
+		w.mu.Lock()
+		defer w.mu.Unlock()
+		if w.done {
+			return
+		}
+		if remaining := time.Until(w.deadline); remaining > 0 {
+			w.timer.Reset(remaining)
+			return
+		}
+		w.done = true
+		cancel(w.cause)
+	})
+	w.mu.Unlock()
+	return w
+}
+
+func (w *modelRequestWatchdog) bodyProgress() {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if !w.done {
+		// The first headers move the clock into the body phase. Subsequent
+		// bodies advance it only when the transport returns actual bytes.
+		w.deadline = time.Now().Add(w.stall)
+		w.cause = errModelReadStall
+	}
+}
+
+func (w *modelRequestWatchdog) stop() {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.done = true
+	w.timer.Stop()
 }
 
 func openModelPart(path string, resume bool) (*os.File, error) {
