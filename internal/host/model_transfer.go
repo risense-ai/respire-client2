@@ -18,6 +18,7 @@ import (
 const modelDownloadStall = 30 * time.Second
 
 var (
+	errModelHeaderStall = errors.New("等待模型下载响应头超时")
 	errRangeUnsupported = errors.New("下载源不支持分段并行")
 	errModelReadStall   = errors.New("等待模型下载数据超时")
 )
@@ -25,9 +26,15 @@ var (
 type modelHTTPError struct {
 	status int
 	text   string
+	proxy  bool
 }
 
-func (e *modelHTTPError) Error() string { return "下载模型 HTTP " + e.text }
+func (e *modelHTTPError) Error() string {
+	if e.proxy {
+		return "模型下载代理 HTTP " + e.text
+	}
+	return "下载模型 HTTP " + e.text
+}
 
 func (e *modelHTTPError) retryable() bool {
 	return e.status == http.StatusRequestTimeout || e.status == http.StatusTooManyRequests || e.status >= 500
@@ -52,10 +59,10 @@ func (m *Manager) downloadModelFrom(ctx context.Context, url, dest string, spec 
 		parts[i] = fmt.Sprintf("%s.p%d", tmp, i)
 	}
 	cleanupParts := append(append([]string{}, parts...), tmp+".single")
-	err := m.downloadChunks(ctx, url, parts, spec)
+	err := m.downloadChunks(ctx, url, parts, spec, modelDownloadStall)
 	if errors.Is(err, errRangeUnsupported) && ctx.Err() == nil {
 		parts = []string{tmp + ".single"}
-		err = m.downloadChunks(ctx, url, parts, spec)
+		err = m.downloadChunks(ctx, url, parts, spec, modelDownloadStall)
 	}
 	if err != nil {
 		return err
@@ -159,11 +166,17 @@ func copyModelPart(ctx context.Context, dest io.Writer, path string, buf []byte,
 	}
 }
 
-func (m *Manager) downloadChunks(ctx context.Context, url string, parts []string, spec modelFileSpec) error {
+func (m *Manager) downloadChunks(ctx context.Context, url string, parts []string, spec modelFileSpec, stall time.Duration) error {
 	ctx, cancel := context.WithCancelCause(ctx)
 	defer cancel(nil)
 	var done atomic.Int64
 	client := m.modelClient()
+	if transport, owned := client.Transport.(*http.Transport); owned {
+		// net/http owns all sockets, including setup already detached
+		// from a cancelled request. Once every worker is out, close this
+		// private pool and stop transports whose dials have no waiter.
+		defer transport.CloseIdleConnections()
+	}
 	chunk := (spec.size + int64(len(parts)) - 1) / int64(len(parts))
 	var wg sync.WaitGroup
 	for i, part := range parts {
@@ -172,7 +185,7 @@ func (m *Manager) downloadChunks(ctx context.Context, url string, parts []string
 		wg.Go(func() {
 			err := m.downloadChunk(ctx, client, url, modelChunk{
 				path: part, base: filepath.Base(spec.rel), start: start, end: end, total: spec.size,
-			}, &done, modelDownloadStall)
+			}, &done, stall)
 			if err != nil {
 				cancel(err) // first real failure wins, not faster sibling cancellation
 			}

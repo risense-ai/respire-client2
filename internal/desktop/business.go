@@ -127,8 +127,8 @@ func (d *desktop) businessRoute(w http.ResponseWriter, r *http.Request) bool {
 		// finishes; otherwise progress polling could only begin after the
 		// task was already over and the modal never showed a live bar.
 		if !d.m.StartTaskCancellable("下载模型 "+variant, func(ctx context.Context) error {
-			ctx, cancel := context.WithTimeout(ctx, 60*time.Minute)
-			defer cancel()
+			// Transfer attempts supervise network stalls; healthy progress
+			// is not limited by the total time this background task takes.
 			return d.m.DownloadModelForEngine(ctx, model, variant, mirror, body.Engine)
 		}) {
 			w.WriteHeader(http.StatusConflict)

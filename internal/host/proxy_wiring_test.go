@@ -30,6 +30,29 @@ func TestOutboundClientsShareProxyResolver(t *testing.T) {
 		}
 	}
 
+	modelTransport := clients["model"].Transport.(*http.Transport)
+	modelTemplate := m.modelHTTPClient.Transport.(*http.Transport)
+	updateTransport := m.HTTPClient.Transport.(*http.Transport)
+	if modelTransport == modelTemplate || modelTransport == updateTransport ||
+		modelTransport.ResponseHeaderTimeout != modelDownloadStall || modelTransport.MaxConnsPerHost != modelTemplate.MaxConnsPerHost ||
+		modelTransport.OnProxyConnectResponse == nil || clients["model"].Timeout != 0 {
+		t.Fatal("constructed manager lost the model-only setup policy or group pool")
+	}
+	second := m.modelClient().Transport.(*http.Transport)
+	if second == modelTransport || second.MaxConnsPerHost != modelTemplate.MaxConnsPerHost ||
+		modelTemplate.ResponseHeaderTimeout != 0 || modelTemplate.MaxConnsPerHost != 0 ||
+		updateTransport.ResponseHeaderTimeout != 0 || updateTransport.OnProxyConnectResponse != nil {
+		t.Fatal("model group policy mutated its template or update transport")
+	}
+
+	custom := modelTemplate.Clone()
+	custom.MaxConnsPerHost = 3
+	configured := &Manager{modelHTTPClient: &http.Client{Transport: custom}}
+	candidate := configured.modelClient().Transport.(*http.Transport)
+	if candidate == custom || candidate.MaxConnsPerHost != 3 {
+		t.Fatal("intentional per-host limits must be preserved by the clone")
+	}
+
 	// direct mode is deterministic regardless of the host configuration.
 	m.prefs.ProxyMode = ProxyModeDirect
 	for name, client := range clients {
