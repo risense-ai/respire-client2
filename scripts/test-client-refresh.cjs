@@ -1025,6 +1025,7 @@ async function test(name, fn) { await fn(); console.log(`PASS ${++count}: ${name
     ], {encoding:'utf8'});
     assert.match(output, /initial retry, same-scope display only, delayed same-root ABA, fresh reader, real lock passed/);
     assert.match(output, /timed recovery and late committed writes passed/);
+    assert.match(output, /editor revalidates and submits the original same-scope draft only/);
   });
   console.log(`${count} focused refresh tests passed; browser/native UIA not exercised.`);
 })().catch(error => { console.error(error); process.exitCode = 1; });

@@ -142,7 +142,9 @@ globalThis.setTimeout = (callback, delay) => { polls.push({callback, delay}); re
 globalThis.FormData = class {
   constructor(form) {
     this.values = [...form.querySelectorAll("[name]")].map(node =>
-      [node.getAttribute("name"), node.value || node.getAttribute("value") || (node.tagName === "TEXTAREA" ? node.textContent : "")]);
+      [node.getAttribute("name"), node.value || node.getAttribute("value") ||
+        (node.tagName === "TEXTAREA" ? node.textContent :
+          node.tagName === "SELECT" ? node.querySelector("option[selected]")?.getAttribute("value") : "") || ""]);
   }
   [Symbol.iterator]() { return this.values[Symbol.iterator](); }
 };
@@ -151,7 +153,7 @@ const fixture = { account:"A", generation:1, lock:false, stateError:false, statu
 const snapshot = (result) => ({ ok:true, json:async () => ({ok:true, result}) });
 const memory = () => ({
   id:"same-id", title:"Fixture title " + fixture.account, content:"Fixture body " + fixture.account,
-  kind:"context", updated_at:"2026-01-01T00:00:00Z",
+  kind:"context", importance:"important", updated_at:"2026-01-01T00:00:00Z",
 });
 const status = (count = fixture.account === "A" ? 3341 : 1) => ({
   command:"status", status:fixture.lock ? "warn" : "ok",
@@ -181,18 +183,29 @@ globalThis.fetch = async (url, options) => {
     return pending.promise;
   }
   if (url === "/api/execute") {
-    const {id,name} = JSON.parse(options.body);
+    const {id,name,args} = JSON.parse(options.body);
     fixture.calls.push(name);
     if (name === "memory_purge" || name === "memory_update") {
       const pending = fixture.mutation;
       assert.equal(pending.name, name);
       pending.started = true;
+      pending.args = args;
       await pending.promise;
       return snapshot({id,name,state:"done",envelope:{summary:{id:"same-id",action:"updated"}}});
     }
+    let opened = memory();
+    if (name === "memory_show" && fixture.readerOverride) opened = fixture.readerOverride(opened);
+    if (name === "memory_show" && fixture.readerWait) {
+      const pending = fixture.readerWait;
+      fixture.readerWait = null;
+      pending.started = true;
+      await pending.promise;
+    }
     const envelope = name === "capabilities" ? { summary:{capabilities:{memory_list_metadata:true}} }
       : name === "memory_list" ? { details:[memory()] }
-      : name === "memory_show" ? { details:{entry:memory()} }
+      : name === "memory_show" ? { details:{entry:opened} }
+      : name === "status" ? status()
+      : name === "memory_revision" ? { summary:{revision:"test-revision"} }
       : name === "diary_list" ? { details:[] }
       : assert.fail("unexpected memory action " + name);
     return snapshot({id, name, state:"done", envelope});
@@ -320,6 +333,105 @@ const pendingResponse = () => {
   }
   console.error = logError;
 
+  const countCalls = name => fixture.calls.filter(call => call === name).length;
+  const newDeferred = (values = {}) => {
+    const pending = {...values};
+    pending.promise = new Promise(resolve => { pending.release = resolve; });
+    return pending;
+  };
+  if (process.env.FIXTURE_REVIEW !== "postcommit") {
+    // Keep the real editor open through Status-only faults under the same
+    // exact scope. Drive the scheduled poll since the modal owns the screen.
+    await until(() => catalog().includes("Fixture title " + fixture.account), "catalog before draft");
+    await $('[data-select="same-id"].memory-title').click();
+    await until(() => reader().includes("Fixture body " + fixture.account), "reader before draft");
+    await $("[data-edit]").click();
+    const form = $("dialog[open] form");
+    const draft = form.querySelector("[name=content]");
+    draft.value = "untouched synthetic draft";
+    const beforeWrites = countCalls("memory_update");
+    fixture.statusError = true;
+    await polls.shift().callback();
+    assert.equal($("dialog[open] form"), form);
+    await form.submit();
+    assert.equal(draft.value, "untouched synthetic draft");
+    assert.equal(countCalls("memory_update"), beforeWrites);
+    assert.match(form.querySelector(".form-error").textContent, /尚未确认/);
+
+    fixture.statusError = false;
+    await polls.shift().callback();
+    assert.equal($("dialog[open] form"), form);
+    if (process.env.FIXTURE_REVIEW !== "editor-recovery") {
+      for (const override of [
+        original => ({...original, id:"another-id"}),
+        original => ({...original, updated_at:""}),
+        original => ({...original, updated_at:"2026-01-02T00:00:00Z"}),
+        original => ({...original, content:"a same-timestamp replacement"}),
+        original => ({...original, tags:["a same-timestamp tag change"]}),
+      ]) {
+        fixture.readerOverride = override;
+        await form.submit();
+        assert.equal(countCalls("memory_update"), beforeWrites);
+        assert.match(form.querySelector(".form-error").textContent, /原记忆.*版本/);
+      }
+      fixture.readerOverride = null;
+
+      const preflight = newDeferred();
+      fixture.readerWait = preflight;
+      const staleAttempt = form.submit();
+      await until(() => preflight.started, "original record was re-read before dispatch");
+      fixture.statusError = true;
+      await polls.shift().callback();
+      fixture.statusError = false;
+      await polls.shift().callback();
+      preflight.release();
+      await staleAttempt;
+      assert.equal(countCalls("memory_update"), beforeWrites);
+      assert.equal($("dialog[open] form"), form);
+      assert.equal(draft.value, "untouched synthetic draft");
+    }
+
+    const save = newDeferred({name:"memory_update"});
+    fixture.mutation = save;
+    const resumed = form.submit();
+    await tick();
+    await until(() => save.started, "recovered original draft should dispatch: " + form.querySelector(".form-error").textContent);
+    assert.equal(save.args.id, "same-id");
+    assert.equal(save.args.content, "untouched synthetic draft");
+    save.release();
+    await resumed;
+    assert.equal(countCalls("memory_update"), beforeWrites + 1);
+    assert.equal($("#notice").textContent, "记忆已保存");
+    assert.equal($("dialog[open]"), null);
+
+    // Even a forced event on a removed dialog cannot save into a changed
+    // account using a coincident memory ID or directory.
+    await polls.shift().callback();
+    await until(() => Boolean($("[data-edit]")) && !$("[data-edit]").disabled, "current reader reloaded");
+    await $("[data-edit]").click();
+    const oldForm = $("dialog[open] form");
+    oldForm.querySelector("[name=content]").value = "old scoped draft";
+    fixture.account = fixture.account === "A" ? "B" : "A";
+    fixture.generation++;
+    await polls.shift().callback();
+    assert.equal($("dialog[open]"), null);
+    await oldForm.submit();
+    assert.equal(countCalls("memory_update"), beforeWrites + 1);
+    await until(() => catalog().includes("Fixture title " + fixture.account), "new catalog before connection loss");
+    await $('[data-select="same-id"].memory-title').click();
+    await until(() => reader().includes("Fixture body " + fixture.account), "fresh account reader");
+    await $("[data-edit]").click();
+    const noIdentity = $("dialog[open] form");
+    fixture.stateError = true;
+    await polls.shift().callback();
+    assert.equal($("dialog[open]"), null);
+    await noIdentity.submit();
+    assert.equal(countCalls("memory_update"), beforeWrites + 1);
+    fixture.stateError = false;
+    await polls.shift().callback();
+    console.log("Production editor revalidates and submits the original same-scope draft only");
+  }
+
   // A write got its successful Runtime receipt after Health had already
   // moved to another scope. Never feed it to the newly mounted local reader.
   for (const [name, selector, message] of [
@@ -334,8 +446,8 @@ const pendingResponse = () => {
     assert.ok(form, "expected original operation confirmation/editor");
     if (name === "memory_purge") form.querySelector("[name=id]").value = "same-id";
     const prior = fixture.account;
-    const pending = { name };
-    pending.promise = new Promise(resolve => { pending.release = resolve; });
+    const pending = newDeferred({name});
+    const previousWrites = countCalls(name), previousUndo = countCalls("memory_revision");
     fixture.mutation = pending;
     const saving = form.submit();
     await until(() => pending.started, "confirmed synthetic mutation reached host");
@@ -348,9 +460,9 @@ const pendingResponse = () => {
     const notice = $("#notice");
     assert.equal(notice.textContent, message);
     assert.equal(notice.classList.contains("error"), false);
-    assert.equal(fixture.calls.filter(call => call === name).length, 1);
+    assert.equal(countCalls(name), previousWrites + 1);
     assert.doesNotMatch(reader(), new RegExp("Fixture body " + prior));
-    assert.equal(fixture.calls.includes("memory_revision"), false);
+    assert.equal(countCalls("memory_revision"), previousUndo);
   }
 
   const preferences = {};

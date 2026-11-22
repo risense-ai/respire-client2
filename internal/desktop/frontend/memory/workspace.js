@@ -629,18 +629,38 @@ export function memoryWorkspace(root, ctx) {
     });
   }
   function edit(options = {}) {
-    const guard = options.requireCurrent || requireReadable();
-    guard();
-    keepDialog(editor({
+    const openingGuard = options.requireCurrent || requireReadable();
+    openingGuard();
+    const scope = readableLibrary(), id = options.memory?.id;
+    const resumesOriginalItem = Boolean(id && !options.merge?.length);
+    let element;
+    function beginAttempt() {
+      if (!resumesOriginalItem) {
+        openingGuard();
+        return openingGuard;
+      }
+      // Only the open original draft can survive a same-scope status outage.
+      // Nothing from the old reader token authorizes a write: each attempt
+      // starts from today's verified scope and rereads the original item.
+      const sameDraft = () => Boolean(element?.isConnected && selected === id && ctx.statusScope === scope);
+      const library = requireReadable();
+      const attempt = scopedGuard(
+        () => sameDraft() && library.current(),
+        "当前记忆或账户已变化，请重新选择后操作。",
+      );
+      attempt();
+      return attempt;
+    }
+    element = keepDialog(editor({
       ...options,
-      requireCurrent: guard,
+      beginAttempt,
       keepDialog,
-      onSaved: (id, undo) => afterCommit(guard, async () => {
-        if (undo) await recordUndo({ ...undo, id }, guard.current);
-        if (!guard.current()) return;
+      onSaved: (id, undo, attempt) => afterCommit(attempt, async () => {
+        if (undo) await recordUndo({ ...undo, id }, attempt.current);
+        if (!attempt.current()) return;
         if (id) selected = id;
         await load();
-        if (guard.current()) await ctx.refresh();
+        if (attempt.current()) await ctx.refresh();
       }),
     }));
   }
