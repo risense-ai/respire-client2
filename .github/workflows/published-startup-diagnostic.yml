@@ -8,6 +8,10 @@ on:
         default: existing-keys
         type: choice
         options: [existing-keys, default-online, candidate-online, candidate-lifecycle]
+      verify_reader_reconnect:
+        description: 'Existing-keys only: verify the same visible reader across a Runtime reconnect'
+        type: boolean
+        default: false
       runtime_run_id:
         description: 'Online scopes only: successful public Runtime producer run ID'
         type: string
@@ -353,6 +357,8 @@ jobs:
       - name: Diagnose sealed desktop real-SDK existing-key restart
         if: inputs.scope == 'existing-keys'
         shell: pwsh
+        env:
+          VERIFY_READER_RECONNECT: ${{ inputs.verify_reader_reconnect }}
         run: |
           $assets = Join-Path $env:RUNNER_TEMP 'startup-assets'
           ./scripts/diagnose-published-startup.ps1 `
@@ -360,6 +366,7 @@ jobs:
             -Client "$assets/client/respire-windows-amd64.exe" `
             -RuntimeArchive "$assets/runtime/rsrs-runtime-x86_64-pc-windows-msvc.tar.gz" `
             -ModelDirectory "$env:RUNNER_TEMP/startup-model-preparation/models/bge-m3" `
+            -VerifyReaderReconnect:($env:VERIFY_READER_RECONNECT -ceq 'true') `
             -RuntimeVersion $env:RUNTIME_VERSION `
             -OutputDirectory "$env:RUNNER_TEMP/published-startup-diagnostic"
       - name: Diagnose fresh online installation only

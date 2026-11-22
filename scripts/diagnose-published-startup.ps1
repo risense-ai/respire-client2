@@ -4,6 +4,7 @@ param(
     [Parameter(Mandatory)][string]$Client,
     [Parameter(Mandatory)][string]$RuntimeArchive,
     [Parameter(Mandatory,ParameterSetName='ExistingKeys')][string]$ModelDirectory,
+    [Parameter(ParameterSetName='ExistingKeys')][switch]$VerifyReaderReconnect,
     [Parameter(Mandatory,ParameterSetName='DefaultOnline')][switch]$DefaultOnline,
     [Parameter(Mandatory,ParameterSetName='DefaultOnline')][string]$PublicInputs,
     [Parameter(Mandatory,ParameterSetName='CandidateOnline')][switch]$CandidateOnline,
@@ -141,6 +142,28 @@ function Invoke-Child([string]$Stage, [string]$Executable, [string[]]$Arguments)
     }
     return ($output | ConvertFrom-Json)
 }
+function Find-ReaderControl([string]$Pattern, [string]$Type) {
+    $deadline = [Diagnostics.Stopwatch]::StartNew()
+    do {
+        $desktop.Refresh()
+        if ($desktop.HasExited) { throw 'Reader window exited during reconnect diagnostic' }
+        $handle = $desktop.MainWindowHandle
+        if ($handle -ne [IntPtr]::Zero) {
+            $window = [Windows.Automation.AutomationElement]::FromHandle($handle)
+            if ($window.Current.ProcessId -ne $desktop.Id) { throw 'Reader window identity differs' }
+            $condition = [Windows.Automation.PropertyCondition]::new([Windows.Automation.AutomationElement]::ControlTypeProperty, [Windows.Automation.ControlType]::$Type)
+            foreach ($element in $window.FindAll([Windows.Automation.TreeScope]::Descendants, $condition)) {
+                if (!$element.Current.IsOffscreen -and $element.Current.Name -match $Pattern) { return $element }
+            }
+        }
+        Start-Sleep -Milliseconds 250
+    } while ($deadline.Elapsed.TotalSeconds -lt 30)
+    throw 'Expected reader control was not visible'
+}
+function Invoke-ReaderButton([string]$Pattern) {
+    $button = Find-ReaderControl $Pattern 'Button'
+    $button.GetCurrentPattern([Windows.Automation.InvokePattern]::Pattern).Invoke()
+}
 function Health {
     return Invoke-RestMethod -Uri "http://127.0.0.1:$port/api/health" -Headers @{'X-Respire-Health'='runtime-v1'} -TimeoutSec 3 -NoProxy
 }
@@ -259,7 +282,8 @@ try {
     $runtimeActor = Assert-Actor $seedHealth
     if (-not $seedHealth.account_id -or -not $seedHealth.store_ready) { throw 'Seed library was not ready' }
     $text = 'published-startup-' + [Guid]::NewGuid().ToString('N')
-    $saved = Invoke-Child 'remember' $seedCli @('--client-only','--json','remember',$text,'--title',$text,'--importance','important','--force')
+    $title = if ($VerifyReaderReconnect) { "$text-title" } else { $text }
+    $saved = Invoke-Child 'remember' $seedCli @('--client-only','--json','remember',$text,'--title',$title,'--importance','important','--force')
     if ($saved.status -cne 'ok' -or -not $saved.summary.id) { throw 'Synthetic memory write did not succeed' }
     $memoryId = $saved.summary.id
     $seedStop = Invoke-Child 'seed_stop' $seedCli @('--json','runtime','stop')
@@ -284,7 +308,8 @@ try {
     $preferences.autoRuntime = $true
     [IO.File]::WriteAllText($preferencesPath, ($preferences | ConvertTo-Json -Compress), [Text.UTF8Encoding]::new($false))
     $report.phase = 'existing_keys_gui_restart'
-    $desktop = Start-Child $clientPath @('--tray')
+    $desktopArgs = if ($VerifyReaderReconnect) { @() } else { @('--tray') }
+    $desktop = Start-Child $clientPath $desktopArgs
     $deadline = [Diagnostics.Stopwatch]::StartNew()
     $report.runtime_observations = @()
     $report.health_probe_timeouts = 0
@@ -405,6 +430,36 @@ try {
     Assert-NoManagedCLI 'reconciled_library_without_cli'
     $report.legacy_cli_online_remember = $true
     $report.legacy_cli_online_runtime_identity = $true
+    if ($VerifyReaderReconnect) {
+        Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes
+        $report.phase = 'reader_before_disconnect'
+        Invoke-ReaderButton '^(记忆|Memory)(?:\s|$)'
+        Invoke-ReaderButton ('^' + [regex]::Escape($title) + '$')
+        $body = '^' + [regex]::Escape($text) + '$'
+        $null = Find-ReaderControl $body 'Text'
+        $windowHandle = $desktop.MainWindowHandle
+
+        $stop = Invoke-Child 'reader_disconnect' $clientPath @('--headless','stop')
+        if (!$stop.ok -or (Get-CimInstance Win32_Process -Filter "ProcessId=$($runtimeActor.ProcessId)")) {
+            throw 'Reader diagnostic did not stop its Runtime'
+        }
+        $runtimeActor = $null
+        $null = Find-ReaderControl '^(等待 Runtime 连接|Waiting for Runtime connection)$' 'Text'
+        $null = Find-ReaderControl $body 'Text'
+
+        $restart = Invoke-Child 'reader_reconnect' $clientPath @('--headless','start')
+        if (!$restart.ok) { throw 'Reader diagnostic could not restart Runtime' }
+        $reconnected = Health
+        $runtimeActor = Assert-Actor $reconnected
+        if (!$reconnected.store_ready -or $reconnected.account_id -cne $seedHealth.account_id -or $reconnected.pid -eq $health.pid) {
+            throw 'Reader diagnostic did not reconnect to the same unlocked library'
+        }
+        $null = Find-ReaderControl '^(已载入|Loaded)\s' 'Text'
+        $null = Find-ReaderControl $body 'Text'
+        if ($windowHandle -ne $desktop.MainWindowHandle) { throw 'Reader window changed during reconnect' }
+        Assert-NoManagedCLI 'reader_reconnect_without_cli'
+        $report.reader_reconnect = @{same_window=$true; body_visible_before_during_and_after=$true; unlocked_after_reconnect=$true}
+    }
     $report.status = 'diagnostic-passed'
     }
 } catch {
