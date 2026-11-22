@@ -67,19 +67,10 @@ export const graniteVariant = (model) =>
 // Weight per device: CPU stays quantized; GPU/NPU prefer fp16.
 export const DEVICE_VARIANTS = { cpu: "quantized", gpu: "fp16", npu: "fp16" };
 
-// Scenario modes for the models page: three intent cards instead of the raw
+// Scenario modes for the models page: intent cards instead of the raw
 // variant/engine matrix. Subtitles are static fallbacks; the page overrides
 // them with live inventory sizes so numbers never go stale.
 export const MODEL_MODES = [
-  {
-    id: "lite",
-    title: "省空间",
-    subtitle: "~540 MB",
-    description: "最低存储占用，基础性能",
-    variant: "quantized",
-    engine: "cpu",
-    requiresGPU: false,
-  },
   {
     id: "balanced",
     title: "均衡",
@@ -107,13 +98,12 @@ export function modeForVariant(variant) {
   return variant === "fp16" ? "performance" : "balanced";
 }
 
-export function performanceAvailable(platform) {
-  return engineAvailable(platform, "gpu") || engineAvailable(platform, "npu");
+export function performanceAvailable(platform, capabilities) {
+  return engineAvailable(platform, "gpu", capabilities) || engineAvailable(platform, "npu", capabilities);
 }
 
-export function detectBestEngine(platform) {
-  if (engineAvailable(platform, "npu")) return "npu";
-  if (engineAvailable(platform, "gpu")) return "gpu";
+export function detectBestEngine(platform, capabilities) {
+  if (engineAvailable(platform, "gpu", capabilities)) return "gpu";
   return "cpu";
 }
 
@@ -137,18 +127,114 @@ export const DEVICES = [
 
 export const isProfileModel = (model) => model !== "m3";
 
-export function variantFromItem(item) {
-  const match = /model_([a-z0-9]+)\.onnx/.exec(item || "");
-  return match ? match[1] : "";
+export function variantFromItem(item, variants = []) {
+  const name = String(item || "").toLowerCase();
+  for (const variant of variants) {
+    const filename = String(variant.path || "").toLowerCase().split(/[\\/]/).pop();
+    if (filename && name.includes(filename)) return variant.name;
+  }
+  return /model_([a-z0-9]+)(?:[.][a-z0-9-]+)?[.](?:onnx|ort)\b/.exec(name)?.[1] || "";
 }
 
-// OS-level engine entry availability. This is not hardware detection: NPU and
-// GPU still go through the runtime's real inference probe when applied.
-export function engineAvailable(platform, engine) {
+// The legacy GPU choice asks Runtime to probe; only explicit denial removes
+// that choice. An NPU, unlike GPU, is never inferred from the OS.
+export function engineAvailable(platform, engine, capabilities) {
   if (engine === "cpu") return true;
-  if (engine === "gpu") return !String(platform || "").startsWith("linux");
-  if (engine === "npu") return String(platform || "").startsWith("windows");
+  const os = String(platform || "");
+  const advertised = capabilities?.[engine];
+  const available = typeof advertised === "boolean" ? advertised : advertised?.available;
+  if (engine === "gpu") return Boolean(os) && !os.startsWith("linux") && available !== false;
+  if (engine === "npu") return os.startsWith("windows") && available === true;
   return false;
+}
+
+export function engineCapabilities(ctx) {
+  return ctx.status?.summary?.model_engine_capabilities ?? ctx.desktop?.engine?.capabilities;
+}
+
+export function localModelDownload(task) {
+  return task?.busy === true &&
+    /下载(?:模型|基础文件)|合并文件|模型文件校验|tokenizer[.]json|[a-z0-9_.-]+[.](?:onnx|ort)\b/i.test(String(task.stage || ""));
+}
+
+export function modelActivity({ task, operation, index, switching } = {}) {
+  if (switching) return "switching";
+  if (localModelDownload(task)) return "downloading";
+  if (operation?.active) {
+    const phase = String(operation.phase || "").toLowerCase();
+    if (phase.startsWith("switch-") || /load|probe/.test(phase)) return "switching";
+    if (operation.background || /index|embed/.test(phase) || index?.running) return "indexing";
+    if (/download|fetch|merge|verify|check|hash/.test(phase)) return "downloading";
+  }
+  if (index?.running || index?.scheduled) return "indexing";
+  return "idle";
+}
+
+export async function fetchModelDownloadTask(legacyTask) {
+  try {
+    return (await api("models/progress"))?.task || {};
+  } catch (error) {
+    // The previous desktop host rejects unknown GET routes with this exact
+    // response. A transport error does not prove the isolated slot is absent.
+    const legacy = /^(?:desktop API request rejected|unknown desktop action|请求失败 \((?:404|405|501)\))$/i;
+    if (!legacy.test(error.message)) throw error;
+    return typeof legacyTask === "function" ? legacyTask() : (await api("state"))?.task || {};
+  }
+}
+
+export function watchModelDownloadTask(onTask, {
+  read = fetchModelDownloadTask,
+  schedule = setTimeout,
+  cancel = clearTimeout,
+} = {}) {
+  let disposed = false, timer, last = {};
+  async function tick() {
+    let snapshot;
+    try {
+      snapshot = await read();
+    } catch {
+      // Keep the last isolated snapshot during a failed read. It is not
+      // replaced by unrelated desktop work from the legacy global slot.
+    }
+    if (disposed) return;
+    if (snapshot) {
+      last = snapshot;
+      onTask(snapshot);
+    }
+    timer = schedule(tick, localModelDownload(last) ? 700 : 3000);
+  }
+  void tick();
+  return () => {
+    disposed = true;
+    cancel(timer);
+  };
+}
+
+export async function cancelModelWork(task, operation) {
+  if (localModelDownload(task))
+    return api("model-download-cancel", { pause: false });
+  if (operation?.active && operation.id) return execute("model_cancel", { id: operation.id });
+  throw new Error("没有正在运行的模型任务");
+}
+
+// Bind the click to what the page showed. If work changes while obtaining a
+// fresh snapshot, never reinterpret a local cancel as Runtime cancel (or the
+// reverse), and never cancel a replacement Runtime operation.
+export async function cancelDisplayedModelWork(displayedTask, displayedOperation, {
+  read = fetchModelDownloadTask, currentOperation, onTask,
+}) {
+  const local = localModelDownload(displayedTask);
+  const task = await read();
+  onTask?.(task);
+  if (local) {
+    if (localModelDownload(task)) return cancelModelWork(task);
+  } else {
+    const current = currentOperation();
+    if (!localModelDownload(task) && displayedOperation?.active && displayedOperation.id &&
+        current?.active && current.id === displayedOperation.id)
+      return cancelModelWork(null, current);
+  }
+  throw new Error("模型任务已变化，请重新确认后取消。");
 }
 
 export async function fetchInventory(model) {
@@ -187,30 +273,98 @@ export async function applyLegacyEngine(engine, variant) {
   return { envelope, result: summary(envelope) };
 }
 
+function switchID(value) {
+  return value?.id ?? value?.task_id ?? value?.details?.id ?? value?.summary?.id ?? null;
+}
+
+async function requestProfileSwitch(model, engine, variant) {
+  const response = await fetch("/api/model-switch", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "X-Respire-Client": "1" },
+    body: JSON.stringify({ model, engine, variant, receipt: true }),
+  });
+  if ([404, 405, 501].includes(response.status))
+    throw Object.assign(new Error("旧版桌面宿主不提供模型切换接口。"), { switchUnsupported: true });
+  const data = await response.json();
+  if (!response.ok || !data.ok) {
+    const message = data.error || `请求失败 (${response.status})`;
+    const switchUnsupported = /^(?:未知 API|不支持的 RPC 方法|method not found)(?:: model\.switch)?$/i.test(message);
+    throw Object.assign(new Error(message), { switchUnsupported });
+  }
+  return data.result;
+}
+
 export async function submitProfileSwitch(model, engine, variant) {
-  await api("model-configure", { model, variant });
-  await api("model-switch", { model, engine, variant });
+  const snapshot = await fetchProfileState();
+  const prior = readProfileState(snapshot).switchState;
+  if ((prior.state ?? prior.status) === "pending") throw new Error("已有模型切换任务，等待原任务完成后再试。");
+  if (isProfileModel(model)) await api("model-configure", { model, variant });
+  const receipt = await requestProfileSwitch(model, engine, variant);
+  return { expectedId: switchID(receipt), priorId: switchID(prior),
+    priorKnown: Boolean(snapshot), model, engine, sawPending: false };
 }
 
-// profileStateSettled reports whether a switch task reached a terminal
-// state, and whether that state is success. Only switch.state is authoritative:
-// pending → ready | failed; the live operation phase never settles.
-export function profileStateSettled(state) {
-  const { switchState } = readProfileState(state);
-  const text = String(switchState.state || "");
-  if (/failed/i.test(text)) return { settled: true, failed: true };
-  if (/ready/i.test(text)) return { settled: true, failed: false };
-  return { settled: false, failed: false };
+// A switch receipt is authoritative only for the accepted task, not a stale
+// global progress snapshot. Old hosts omit the ID in their POST response;
+// accept a fresh server ID or a pending→terminal transition on those hosts.
+export function profileStateSettled(state, tracking) {
+  const { switchState, active } = readProfileState(state);
+  const id = switchID(switchState);
+  const phase = String(switchState.state || switchState.status || "").toLowerCase();
+  if (!tracking) return { settled: false, failed: false };
+  if (tracking.expectedId != null && String(id) !== String(tracking.expectedId))
+    return { settled: false, failed: false };
+  if (tracking.expectedId == null) {
+    if (id != null && String(id) === String(tracking.priorId))
+      return { settled: false, failed: false };
+    if (phase === "pending" && (!tracking.model || switchState.target === tracking.model))
+      tracking.sawPending = true;
+    // A fast legacy completion can be confirmed without sampling pending only
+    // when a known different task was superseded and the selected model agrees.
+    const fastCompletion = tracking.priorKnown && id != null && phase === "ready" &&
+      active?.model === tracking.model && active?.engine === tracking.engine;
+    if (!tracking.sawPending && !fastCompletion) return { settled: false, failed: false };
+    if (id == null && phase === "ready" && tracking.model &&
+        (active?.model !== tracking.model || active?.engine !== tracking.engine))
+      return { settled: false, failed: false };
+    if (id != null) tracking.expectedId = id;
+  }
+  const failed = ["failed", "cancelled", "canceled"].includes(phase);
+  return { settled: failed || phase === "ready", failed };
 }
 
-// waitForProfileSwitch polls model-profile-state until the switch settles or
-// the deadline passes; it never reports success without a runtime receipt.
-export async function waitForProfileSwitch({ onTick, timeoutMs = 15 * 60_000 } = {}) {
+export function switchProgressLabel(state) {
+  const { operation, switchState } = readProfileState(state);
+  const phase = {
+    queued: "排队中",
+    "switch-verify": "验证权重",
+    "switch-download": "下载权重",
+    "switch-load": "加载模型",
+    "switch-index": "重建记忆索引",
+    "switch-diary": "重建日记索引",
+  }[operation.phase] || (switchState.state === "pending" ? "等待 Runtime 完成切换" : "");
+  return phase && operation.total
+    ? `${phase} · ${Math.min(100, Math.round((operation.done / operation.total) * 100))}%`
+    : phase;
+}
+
+export function switchFailure(state) {
+  const { switchState } = state || {};
+  const rollback = switchState?.rollback?.state ?? switchState?.rollback ?? switchState?.recovery ?? switchState?.semantic;
+  const detail = {
+    previous_ready: "切换前模型已重新验证可用。",
+    unchanged: "原模型未被更改。",
+    unverified: "原模型是否可用尚未确认。",
+  }[rollback] || "请查看 Runtime 的当前模型状态。";
+  return `模型切换失败${switchState?.error ? `：${switchState.error}` : ""}；${detail}`;
+}
+
+export async function waitForProfileSwitch({ tracking, onTick, timeoutMs = 15 * 60_000 } = {}) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     const state = await fetchProfileState();
     onTick?.(state);
-    const verdict = profileStateSettled(state);
+    const verdict = profileStateSettled(state, tracking);
     if (verdict.settled) return { ...verdict, details: readProfileState(state) };
     await new Promise((resolve) => setTimeout(resolve, 3000));
   }
@@ -221,6 +375,7 @@ export async function waitForProfileSwitch({ onTick, timeoutMs = 15 * 60_000 } =
 // Resolves `done` with true only when the task reached the completed stage.
 export function openDownloadModal({
   model,
+  engine,
   variant,
   label,
   getMirror,
@@ -262,14 +417,18 @@ export function openDownloadModal({
   // While our POST is in flight a terminal task snapshot may still describe
   // the previous task, so poll() must not treat it as our result.
   let submitting = false;
+  let polling = false;
+  let generation = 0;
   function start() {
     errorNode.hidden = true;
     setMode("downloading");
     const mirror = getMirror?.() || "auto";
     submitting = true;
+    generation += 1;
     startPromise = api("model-download", {
       model,
       variant,
+      ...(["cpu", "gpu"].includes(engine) ? { engine } : {}),
       ...(mirror && mirror !== "auto" ? { mirror } : {}),
     }).then(
       () => {
@@ -298,10 +457,12 @@ export function openDownloadModal({
     }
   }
   async function poll() {
-    if (submitting) return;
+    if (submitting || polling || !element.open) return;
+    polling = true;
+    const started = generation;
     try {
-      const state = await api("state");
-      const task = state.task || {};
+      const task = await fetchModelDownloadTask();
+      if (started !== generation || submitting || !element.open) return;
       applyTask(task);
       if (task.busy) return;
       // The download ended: success, paused, cancelled or failed.
@@ -329,6 +490,8 @@ export function openDownloadModal({
       }
     } catch {
       // transient state poll failure: keep the modal as-is
+    } finally {
+      polling = false;
     }
   }
   const resumeOrRetry = (button) =>
@@ -371,7 +534,7 @@ export function openDownloadModal({
   // Poll from the start, not after the POST resolves: the server answers as
   // soon as the task is registered, so progress streams in while it runs.
   timer = setInterval(poll, 700);
-  start();
+  start().catch(() => { clearInterval(timer); timer = null; });
   return { element, done };
 }
 
@@ -388,22 +551,27 @@ export function fallbackMessage(engine, result) {
   return `${engine.toUpperCase()} 验证失败${reason}，已恢复切换前的 ${restored}；详情见应用结果。`;
 }
 
-export async function applyEngineChoice({ model, engine, variant }) {
-  if (isProfileModel(model)) {
-    await submitProfileSwitch(model, engine, variant);
-    const verdict = await waitForProfileSwitch();
+export async function applyEngineChoice({ model, engine, variant, onTick }) {
+  try {
+    const tracking = await submitProfileSwitch(model, engine, variant);
+    const verdict = await waitForProfileSwitch({ tracking, onTick });
+    const { active } = verdict.details;
     return {
-      engine,
-      variant,
+      engine: active?.engine || engine,
+      variant: active?.variant || variant,
       fallback: false,
       failed: verdict.failed,
       warning: verdict.failed
         ? verdict.timeout
           ? "模型切换等待超时，请在模型页查看最终状态。"
-          : "模型切换失败，Runtime 已回退原模型。"
+          : switchFailure(verdict.details)
         : "",
       details: verdict.details,
     };
+  } catch (error) {
+    // Only an explicit unsupported interface is eligible for legacy M3.
+    // Never resubmit after network failure or an ambiguous acceptance.
+    if (model !== "m3" || !error.switchUnsupported) throw error;
   }
   const { envelope, result } = await applyLegacyEngine(engine, variant);
   return {

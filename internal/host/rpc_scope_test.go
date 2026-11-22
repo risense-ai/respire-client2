@@ -9,12 +9,14 @@ import (
 )
 
 func TestRPCBindsOperationsToRuntimeIdentity(t *testing.T) {
-	for _, method := range []string{"cli.exec", "model.catalog", "runtime.result"} {
+	for _, method := range []string{"cli.exec", "runtime.status", "assets.status", "model.catalog", "model.progress", "cli.progress", "runtime.result"} {
 		t.Run(method, func(t *testing.T) {
 			called := false
+			healthCalls := 0
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				w.Header().Set("Content-Type", "application/json")
 				if r.URL.Path == "/api/health" {
+					healthCalls++
 					_, _ = w.Write([]byte(`{"server":"respire","v":1,"pid":42,"account_id":"account","instance_id":"instance","generation":7}`))
 					return
 				}
@@ -31,7 +33,11 @@ func TestRPCBindsOperationsToRuntimeIdentity(t *testing.T) {
 				if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
 					t.Error(err)
 				}
-				if request.Scope.AccountID != "account" || request.Scope.InstanceID != "instance" || request.Scope.Generation != 7 {
+				if runtimeScopeExempt(method) {
+					if request.Scope.AccountID != "" || request.Scope.InstanceID != "" || request.Scope.Generation != 0 {
+						t.Error("scope-exempt read must not inject identity")
+					}
+				} else if request.Scope.AccountID != "account" || request.Scope.InstanceID != "instance" || request.Scope.Generation != 7 {
 					t.Error("request lost its Runtime identity")
 				}
 				if method == "cli.exec" {
@@ -47,7 +53,14 @@ func TestRPCBindsOperationsToRuntimeIdentity(t *testing.T) {
 			manager := &Manager{Endpoint: server.URL, localClient: server.Client()}
 			_, err := manager.localRequest(context.Background(), "POST", "/api/rpc", map[string]any{"v": 1, "id": "original", "method": method, "args": []string{}})
 			if err != nil || !called {
-				t.Fatalf("scoped RPC failed: %v", err)
+				t.Fatalf("RPC failed: %v", err)
+			}
+			wantHealth := 1
+			if runtimeScopeExempt(method) {
+				wantHealth = 0
+			}
+			if healthCalls != wantHealth {
+				t.Fatalf("superfluous or missing Health calls: got %d, want %d", healthCalls, wantHealth)
 			}
 		})
 	}

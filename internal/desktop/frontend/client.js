@@ -157,8 +157,8 @@ function route() {
   view = definitions[page][1](root, ctx);
   document.querySelector(".view-scroll").scrollTop = 0;
 }
-// Sidebar nav counts: memories come from the status summary; diary (today)
-// and organize (pending suggestions) are RPC-backed and refreshed sparingly.
+// Memories use status; the diary badge uses a lightweight date-filtered read.
+// Organize suggestions are fetched by the Organize page, not by this timer.
 const navCounts = { at: 0, running: false };
 async function refreshNavCounts() {
   if (!ctx.desktop?.connected || navCounts.running) return;
@@ -172,16 +172,6 @@ async function refreshNavCounts() {
     $("#nav-diary-count").textContent = number(rows(diaryEnv).length);
   } catch {
     $("#nav-diary-count").textContent = "";
-  }
-  try {
-    const suggestEnv = await execute("organize_suggestions", { top: 50 });
-    if (!document.isConnected) return;
-    const items = suggestEnv?.details?.suggests;
-    $("#nav-organize-count").textContent = Array.isArray(items)
-      ? number(items.length)
-      : "";
-  } catch {
-    $("#nav-organize-count").textContent = "";
   }
   navCounts.running = false;
 }

@@ -32,6 +32,7 @@ type actionInput struct {
 	Theme          string `json:"theme"`
 	Language       string `json:"language"`
 	ProxyMode      string `json:"proxyMode"`
+	ModelMirror    string `json:"modelMirror"`
 
 	ClientUpdateInterval  string `json:"clientUpdateInterval"`
 	RuntimeUpdateInterval string `json:"runtimeUpdateInterval"`

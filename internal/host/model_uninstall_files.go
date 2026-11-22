@@ -277,10 +277,8 @@ func stageAndRemoveM3(target string, verify func() error) (bool, error) {
 		}
 		return nil
 	}
-	if _, err := models.Lstat(m3UninstallStage); err == nil {
-		return false, fmt.Errorf("已有未完成的 BGE-M3 卸载暂存目录: %s", filepath.Join(parent, m3UninstallStage))
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return false, err
+	if err := recoverEmptyM3Stage(models, verifyParent); err != nil {
+		return false, fmt.Errorf("已有未完成的 BGE-M3 卸载暂存目录，已保留内容: %s: %w", filepath.Join(parent, m3UninstallStage), err)
 	}
 	name := filepath.Base(target)
 	original, err := models.Lstat(name)

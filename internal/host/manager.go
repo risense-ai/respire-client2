@@ -1,7 +1,6 @@
 package host
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -215,8 +214,9 @@ type Manager struct {
 	cliInstallMu    sync.RWMutex
 	prefs           Preferences
 	task            TaskState
-	taskCancel      context.CancelFunc
-	taskPause       bool
+	modelDownload   modelDownloadTask
+	modelExclusive  bool
+	lastModelTask   bool
 	jobs            map[string]*Operation
 	// proxy resolves environment and system proxy settings for outbound
 	// requests. localClient deliberately bypasses it (loopback only).
@@ -237,7 +237,7 @@ func New() (*Manager, error) {
 		return nil, err
 	}
 	m.Endpoint = "http://127.0.0.1:" + port
-	m.localClient = &http.Client{Timeout: 30 * time.Second, Transport: &http.Transport{Proxy: nil}, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	m.localClient = &http.Client{Timeout: defaultRuntimeHTTPTimeout, Transport: &http.Transport{Proxy: nil}, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	if err := m.loadOperations(); err != nil {
 		return nil, err
 	}
@@ -378,6 +378,7 @@ func (m *Manager) RunTask(stage string, action func() error) error {
 		return errors.New("已有操作正在执行")
 	}
 	previous := m.task
+	m.lastModelTask = false
 	m.task = TaskState{Busy: true, Stage: stage}
 	m.mu.Unlock()
 	err := action()
@@ -397,59 +398,13 @@ func (m *Manager) RunTask(stage string, action func() error) error {
 	return err
 }
 
-// StartTaskCancellable runs action with a cancellable context in the
-// background so a download can be paused (canceled while keeping partial
-// chunks) or aborted. The busy state is published synchronously before it
-// returns: the HTTP handler can answer immediately and clients polling the
-// task snapshot never observe a stale pre-start terminal state. It reports
-// false when another task is already running, without touching that task.
-func (m *Manager) StartTaskCancellable(stage string, action func(ctx context.Context) error) bool {
+func (m *Manager) TaskSnapshot() TaskState {
 	m.mu.Lock()
-	if m.task.Busy {
-		m.mu.Unlock()
-		return false
+	defer m.mu.Unlock()
+	// Preserve the legacy global snapshot while allowing new model clients
+	// to poll the isolated slot even during an unrelated desktop operation.
+	if !m.task.Busy && (m.modelDownload.state.Busy || m.lastModelTask) {
+		return m.modelDownload.state
 	}
-	ctx, cancel := context.WithCancel(context.Background())
-	m.taskCancel = cancel
-	m.taskPause = false
-	m.task = TaskState{Busy: true, Stage: stage}
-	m.mu.Unlock()
-	go func() {
-		err := action(ctx)
-		m.mu.Lock()
-		defer m.mu.Unlock()
-		m.taskCancel = nil
-		m.task.Busy = false
-		paused := m.taskPause && errors.Is(err, context.Canceled)
-		m.taskPause = false
-		switch {
-		case err == nil:
-			m.task.Stage = "完成"
-			m.task.Error = ""
-		case paused:
-			m.task.Stage = "已暂停"
-			m.task.Error = ""
-		case errors.Is(err, context.Canceled):
-			m.task.Stage = "已取消"
-			m.task.Error = ""
-		default:
-			m.task.Stage = "操作失败"
-			m.task.Error = err.Error()
-		}
-	}()
-	return true
+	return m.task
 }
-
-// CancelTask aborts the running task; pause keeps partial chunks so the
-// next run resumes from where it stopped.
-func (m *Manager) CancelTask(pause bool) {
-	m.mu.Lock()
-	m.taskPause = pause
-	cancel := m.taskCancel
-	m.mu.Unlock()
-	if cancel != nil {
-		cancel()
-	}
-}
-
-func (m *Manager) TaskSnapshot() TaskState { m.mu.Lock(); defer m.mu.Unlock(); return m.task }

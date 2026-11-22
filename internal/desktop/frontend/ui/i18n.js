@@ -623,6 +623,8 @@ export const ZH_TO_EN = [
   ["账户与本机密钥", "Account & local keys"],
   ["加载中", "Loading"],
   ["正在读取记忆目录…", "Loading memory tree…"],
+  ["暂时无法读取记忆状态，请稍后刷新。", "Memory status is temporarily unavailable. Try refreshing shortly."],
+  ["暂时无法刷新记忆目录，请稍后重试。", "Could not refresh the memory catalog. Try again shortly."],
   ["正在检索整库…", "Searching all memories…"],
   ["正在读取完整内容…", "Loading full content…"],
   ["验证不改变默认召回方式。高质量查询与候选标题会发送给已配置的模型服务。Benchmark 只使用本机 Runtime，运行首轮及后续 8 轮，耗时包含 RPC 等待。", "Benchmark does not change the default retrieval mode. Quality queries and candidate titles are sent to the configured model service. Benchmark uses only local Runtime, runs one initial round plus eight later rounds, and includes RPC wait time."],

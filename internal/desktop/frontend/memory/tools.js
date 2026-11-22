@@ -12,7 +12,7 @@ import {
 import { recordUndo } from "./undo.js";
 import { inspectGrants } from "../pages/grants.js";
 
-export function memoryTools(reader, memory, { changed }) {
+export function memoryTools(reader, memory, { changed, requireCurrent }) {
   const area = document.createElement("div");
   area.className = "panel-body actions";
   area.innerHTML =
@@ -22,6 +22,7 @@ export function memoryTools(reader, memory, { changed }) {
     const button = event.target.closest("[data-tool]");
     if (!button) return;
     action(button, async () => {
+      requireCurrent();
       const kind = button.dataset.tool;
       if (kind === "access") return inspectGrants(memory);
       if (kind === "purge") {
@@ -32,6 +33,7 @@ export function memoryTools(reader, memory, { changed }) {
             input("id", "输入完整记忆 ID 以确认", "", { required: true }),
           submit: "永久清除",
           onSubmit: async (value) => {
+            requireCurrent();
             if (value.id.trim() !== memory.id)
               throw Error("ID 不匹配，未执行清除");
             await execute("memory_purge", { id: memory.id });
@@ -50,6 +52,7 @@ export function memoryTools(reader, memory, { changed }) {
           ))
         )
           return;
+        requireCurrent();
         await execute("memory_promote", { id: memory.id });
         await recordUndo({ kind: "move", id: memory.id, before: memory });
         await changed();
@@ -64,6 +67,7 @@ export function memoryTools(reader, memory, { changed }) {
         name,
         kind === "portrait" ? { limit: 40 } : { root: memory.id },
       );
+      requireCurrent();
       showText(
         { book: "成书材料", portrait: "画像材料", material: "子树安装材料" }[
           kind

@@ -5,17 +5,12 @@ package host
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
-	"fmt"
-	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
-	"sync/atomic"
 )
 
 const (
@@ -78,10 +73,28 @@ func (m *Manager) modelClient() *http.Client {
 		return m.modelHTTPClient
 	}
 	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.ResponseHeaderTimeout = modelDownloadStall
 	if m.proxy != nil {
 		transport.Proxy = m.proxy.proxyFunc(func() string { return m.Preferences().ProxyMode })
 	}
 	return &http.Client{Transport: transport}
+}
+
+// ValidModelMirror accepts the application default or a single HTTP(S) mirror
+// origin/base path. Custom mirrors remain supported; embedded credentials,
+// fragments and query strings are not valid bases for pinned file paths.
+func ValidModelMirror(mirror string) bool {
+	mirror = strings.TrimSpace(mirror)
+	if mirror == "auto" || mirror == "" {
+		return true
+	}
+	if !strings.Contains(mirror, "://") {
+		mirror = "https://" + mirror
+	}
+	parsed, err := url.Parse(mirror)
+	return err == nil && (parsed.Scheme == "http" || parsed.Scheme == "https") &&
+		parsed.Hostname() != "" && parsed.User == nil && parsed.RawQuery == "" &&
+		!parsed.ForceQuery && parsed.Fragment == ""
 }
 
 func modelOrigins(mirror string) []string {
@@ -123,26 +136,54 @@ func expandTilde(p string) (string, error) {
 	return p, nil
 }
 
-// DownloadModel fetches one pinned file into the model's dir. For m3 the
-// variant is one of the legacy keys or "baseline" (CPU first-run files);
-// profile models download tokenizer.json plus
-// the chosen onnx variant from their pinned repository.
+// DownloadModel keeps the legacy default when no engine is provided.
 func (m *Manager) DownloadModel(ctx context.Context, model, variant, mirror string) error {
+	return m.DownloadModelForEngine(ctx, model, variant, mirror, "")
+}
+
+type plannedModelFile struct {
+	spec modelFileSpec
+	ort  bool
+}
+
+func m3DownloadPlan(variant, engine string, ownedCPU bool) ([]plannedModelFile, error) {
+	spec, ok := modelFileSpecs[variant]
+	if variant == "baseline" {
+		variant, spec, ok = "quantized", modelFileSpecs["quantized"], true
+	} else if !ok {
+		return nil, errors.New("未知模型文件: " + variant)
+	}
+	files := []plannedModelFile{{spec: spec}}
+	if variant == "tokenizer" {
+		return files, nil
+	}
+	// A requested weight is deployable only with its tokenizer. Preserve the
+	// legacy ONNX file until Runtime can plan the target's ORT-only selection
+	// independently of the currently active model/engine.
+	files = append([]plannedModelFile{{spec: modelFileSpecs["tokenizer"]}}, files...)
+	if ownedCPU && (engine == "cpu" || engine == "") && variant == "quantized" {
+		files = append(files, plannedModelFile{spec: m3CPUContainer, ort: true})
+	}
+	return files, nil
+}
+
+// DownloadModelForEngine downloads pinned prerequisites for one explicit
+// engine/variant; it does not change Runtime's selected model or engine.
+func (m *Manager) DownloadModelForEngine(ctx context.Context, model, variant, mirror, engine string) error {
+	switch engine {
+	case "", "cpu", "gpu", "npu":
+	default:
+		return errors.New("未知的模型下载引擎")
+	}
 	dir, definition, err := m.modelDirFor(model)
 	if err != nil {
 		return err
 	}
-	var files []modelFileSpec
+	var files []plannedModelFile
 	if definition.Legacy {
-		switch variant {
-		case "baseline":
-			files = []modelFileSpec{modelFileSpecs["tokenizer"], modelFileSpecs["quantized"]}
-		default:
-			spec, ok := modelFileSpecs[variant]
-			if !ok {
-				return errors.New("未知模型文件: " + variant)
-			}
-			files = []modelFileSpec{spec}
+		files, err = m3DownloadPlan(variant, engine, m3UsesCPUContainer())
+		if err != nil {
+			return err
 		}
 	} else {
 		if variant == "baseline" {
@@ -152,36 +193,53 @@ func (m *Manager) DownloadModel(ctx context.Context, model, variant, mirror stri
 		if specErr != nil {
 			return specErr
 		}
-		files = []modelFileSpec{definition.Tokenizer, spec}
+		files = []plannedModelFile{{spec: definition.Tokenizer}, {spec: spec}}
 	}
-	origins := modelOrigins(m.modelMirrorSetting(mirror))
-	for _, spec := range files {
+	mirror = m.modelMirrorSetting(mirror)
+	if !ValidModelMirror(mirror) {
+		return errors.New("模型镜像地址无效")
+	}
+	origins := modelOrigins(mirror)
+	for _, file := range files {
+		spec := file.spec
 		dest := filepath.Join(dir, filepath.FromSlash(spec.rel))
-		if modelFileValid(dest, spec) {
-			continue
-		}
-		var lastErr error
-		for _, origin := range origins {
-			lastErr = m.downloadModelFrom(ctx, modelFileURLOf(definition, origin, spec.rel), dest, spec)
-			if lastErr == nil {
-				break
-			}
-			if errors.Is(lastErr, errCorruptModelCleanup) {
-				return lastErr
-			}
-			if ctx.Err() != nil {
-				return ctx.Err()
+		var urls []string
+		if file.ort {
+			urls = m3CPUContainerSources()
+		} else {
+			urls = make([]string, len(origins))
+			for i, origin := range origins {
+				urls[i] = modelFileURLOf(definition, origin, spec.rel)
 			}
 		}
-		if lastErr != nil {
-			return lastErr
+		if err := m.downloadModelFromSources(ctx, urls, dest, spec); err != nil {
+			return err
 		}
-	}
-	if definition.Legacy && variant == "baseline" && m3UsesCPUContainer() {
-		return m.downloadModelFrom(ctx, m3CPUContainerURL,
-			filepath.Join(m.ModelDir(), filepath.FromSlash(m3CPUContainer.rel)), m3CPUContainer)
 	}
 	return nil
+}
+
+func m3CPUContainerSources() []string {
+	return []string{
+		mirrorURL(m3CPUContainerURL),
+		"https://gh-proxy.org/" + m3CPUContainerURL,
+		m3CPUContainerURL,
+	}
+}
+
+func (m *Manager) downloadModelFromSources(ctx context.Context, urls []string, dest string, spec modelFileSpec) error {
+	var failures error
+	for _, url := range urls {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		err := m.downloadModelFrom(ctx, url, dest, spec)
+		if err == nil || errors.Is(err, errCorruptModelCleanup) {
+			return err
+		}
+		failures = errors.Join(failures, err)
+	}
+	return failures
 }
 
 func m3UsesCPUContainer() bool {
@@ -206,8 +264,8 @@ func (m *Manager) cpuContainerPresent(dir string) bool {
 }
 
 func modelFileValid(path string, spec modelFileSpec) bool {
-	info, err := os.Stat(path)
-	return err == nil && info.Size() == spec.size && fileHashMust(path) == spec.sha256
+	info, err := os.Lstat(path)
+	return err == nil && info.Mode().IsRegular() && info.Size() == spec.size && fileHashMust(path) == spec.sha256
 }
 
 func fileHashMust(path string) string {
@@ -216,183 +274,4 @@ func fileHashMust(path string) string {
 		return ""
 	}
 	return sum
-}
-
-// downloadModelFrom downloads url into dest through parallel Range chunks
-// (falling back to a single stream when the source ignores Range). Partial
-// chunks stay on disk so a retry resumes instead of restarting.
-func (m *Manager) downloadModelFrom(ctx context.Context, url, dest string, spec modelFileSpec) error {
-	if modelFileValid(dest, spec) {
-		return nil
-	}
-	if err := os.MkdirAll(filepath.Dir(dest), 0700); err != nil {
-		return err
-	}
-	tmp := dest + ".download"
-	workers := 8
-	const minParallel = 32 << 20
-	if spec.size < minParallel {
-		workers = 1
-	}
-	chunk := (spec.size + int64(workers) - 1) / int64(workers)
-	parts := make([]string, workers)
-	for i := range parts {
-		parts[i] = fmt.Sprintf("%s.p%d", tmp, i)
-	}
-	if err := m.downloadChunks(ctx, url, tmp, parts, spec, chunk, workers); err != nil {
-		return err
-	} // Merge, verify, publish.
-	out, err := os.OpenFile(tmp, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0600)
-	if err != nil {
-		return err
-	}
-	hasher := sha256.New()
-	var merged int64
-	for _, part := range parts {
-		data, err := os.ReadFile(part)
-		if err != nil {
-			out.Close()
-			return err
-		}
-		if _, err = out.Write(data); err != nil {
-			out.Close()
-			return err
-		}
-		hasher.Write(data)
-		merged += int64(len(data))
-	}
-	if err = out.Close(); err != nil {
-		return err
-	}
-	if merged != spec.size || hex.EncodeToString(hasher.Sum(nil)) != spec.sha256 {
-		verifyErr := fmt.Errorf("下载的 %s 大小或校验和不匹配", filepath.Base(dest))
-		cleanupErr := os.Remove(tmp)
-		for _, part := range parts {
-			cleanupErr = errors.Join(cleanupErr, os.Remove(part))
-		}
-		if cleanupErr != nil {
-			return errors.Join(verifyErr, fmt.Errorf("%w: %w", errCorruptModelCleanup, cleanupErr))
-		}
-		return verifyErr
-	}
-	if err = os.Rename(tmp, dest); err != nil {
-		return err
-	}
-	for _, part := range parts {
-		_ = os.Remove(part)
-	}
-	m.progress("模型文件校验通过", 0, 0)
-	return nil
-}
-
-func (m *Manager) downloadChunks(ctx context.Context, url, tmp string, parts []string, spec modelFileSpec, chunk int64, workers int) error {
-	var done atomic.Int64
-	errs := make([]error, workers)
-	base := filepath.Base(spec.rel)
-	var wg sync.WaitGroup
-	for i := 0; i < workers; i++ {
-		start := int64(i) * chunk
-		end := start + chunk - 1
-		if end >= spec.size {
-			end = spec.size - 1
-		}
-		if start > end {
-			break
-		}
-		wg.Add(1)
-		go func(i int, start, end int64) {
-			defer wg.Done()
-			errs[i] = m.downloadChunk(ctx, url, parts[i], base, start, end, &done, spec.size)
-		}(i, start, end)
-	}
-	wg.Wait()
-	for _, err := range errs {
-		if err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-// downloadChunk fetches one Range into its part file, resuming from the part's
-// current size and retrying with fresh requests until complete.
-func (m *Manager) downloadChunk(ctx context.Context, url, part, base string, start, end int64, done *atomic.Int64, total int64) error {
-	partTotal := end - start + 1
-	var have int64
-	if info, err := os.Stat(part); err == nil {
-		have = info.Size()
-	}
-	if have > partTotal {
-		_ = os.Remove(part)
-		have = 0
-	}
-	if have >= partTotal {
-		done.Add(partTotal)
-		return nil
-	}
-	done.Add(have)
-	file, err := os.OpenFile(part, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
-	if err != nil {
-		return err
-	}
-	defer file.Close()
-	var lastReport int64
-	report := func() {
-		if now := done.Load(); now-lastReport >= 8<<20 || now == total {
-			lastReport = now
-			m.progress("下载 "+base, now, total)
-		}
-	}
-	for attempt := 0; attempt < 6; attempt++ {
-		if ctx.Err() != nil {
-			return ctx.Err()
-		}
-		offset := start + have
-		req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
-		if err != nil {
-			return err
-		}
-		req.Header.Set("Range", fmt.Sprintf("bytes=%d-%d", offset, end))
-		res, err := m.modelClient().Do(req)
-		if err != nil {
-			continue
-		}
-		if res.StatusCode == 200 && partTotal != total {
-			// Source ignored Range: only safe as a single-stream whole file.
-			res.Body.Close()
-			return errors.New("下载源不支持分段并行")
-		}
-		if res.StatusCode != 206 && res.StatusCode != 200 {
-			res.Body.Close()
-			continue
-		}
-		buf := make([]byte, 256<<10)
-		for {
-			n, readErr := res.Body.Read(buf)
-			if n > 0 {
-				if _, writeErr := file.Write(buf[:n]); writeErr != nil {
-					res.Body.Close()
-					return writeErr
-				}
-				have += int64(n)
-				done.Add(int64(n))
-				report()
-			}
-			if readErr == io.EOF {
-				res.Body.Close()
-				if have >= partTotal {
-					return nil
-				}
-				break // short body: retry from current offset
-			}
-			if readErr != nil {
-				res.Body.Close()
-				break
-			}
-		}
-	}
-	if have >= partTotal {
-		return nil
-	}
-	return fmt.Errorf("分段下载未完成（%d / %d）", have, partTotal)
 }
