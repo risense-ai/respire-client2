@@ -1,9 +1,12 @@
 package host
 
 import (
+	"context"
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
+	"time"
 )
 
 // seedVariant writes a size-exact sparse file so installedVariants counts it.
@@ -108,5 +111,112 @@ func TestEngineSnapshot(t *testing.T) {
 	snapshot = m.EngineSnapshot(install, "")
 	if snapshot["variant"] != "fp16" || snapshot["variant_installed"] != false || snapshot["note"] == "" {
 		t.Fatalf("missing-file snapshot = %v", snapshot)
+	}
+}
+
+func TestLegacyEngineSnapshotScansWeightsOnceInCatalogOrder(t *testing.T) {
+	dir := t.TempDir()
+	seedVariant(t, dir, "quantized")
+	quantizedPath := filepath.Join(dir, variantFileName("quantized"))
+	fp16Path := filepath.Join(dir, variantFileName("fp16"))
+	wantOrder := make([]string, 0, len(modelVariantFiles))
+	for _, v := range modelVariantFiles {
+		wantOrder = append(wantOrder, filepath.Join(dir, variantFileName(v.Name)))
+	}
+	for _, test := range []struct {
+		name      string
+		selection inferenceSelection
+		want      map[string]any
+	}{
+		{"implicit accelerator falls back", inferenceSelection{Engine: "gpu"}, map[string]any{
+			"source": "legacy", "engine": "gpu", "variant": "quantized", "file": variantFileName("quantized"),
+			"path": quantizedPath, "model_dir": dir, "variant_installed": true,
+			"note": "默认 fp16 权重未安装，Runtime 实际使用 quantized；需要时请先下载对应权重。",
+		}},
+		{"explicit unavailable variant keeps its identity", inferenceSelection{Engine: "gpu", Model: "fp16"}, map[string]any{
+			"source": "legacy", "engine": "gpu", "variant": "fp16", "file": variantFileName("fp16"),
+			"path": fp16Path, "model_dir": dir, "variant_installed": false,
+			"note": "所选权重文件缺失或校验不一致，切换或重启后推理可能失败。",
+		}},
+		{"CPU defaults unchanged", inferenceSelection{}, map[string]any{
+			"source": "legacy", "engine": "cpu", "variant": "quantized", "file": variantFileName("quantized"),
+			"path": quantizedPath, "model_dir": dir, "variant_installed": true, "note": "",
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var paths []string
+			snapshot := legacyEngineSnapshot(dir, test.selection, func(path string) (os.FileInfo, error) {
+				paths = append(paths, path)
+				if path == fp16Path {
+					return nil, os.ErrPermission
+				}
+				return os.Stat(path)
+			})
+			if !reflect.DeepEqual(paths, wantOrder) {
+				t.Fatalf("weight probes: got %d %q, want %d %q", len(paths), paths, len(wantOrder), wantOrder)
+			}
+			if !reflect.DeepEqual(snapshot, test.want) {
+				t.Fatalf("snapshot: got %#v, want %#v", snapshot, test.want)
+			}
+		})
+	}
+}
+
+func TestLegacyEngineSnapshotKeepsOneObservationWithoutCachingAnotherRead(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+	defer cancel()
+	dir := t.TempDir()
+	seedVariant(t, dir, "quantized")
+	quantizedPath := filepath.Join(dir, variantFileName("quantized"))
+	selection := inferenceSelection{Engine: "gpu"}
+	observed := make(chan struct{})
+	resume := make(chan struct{})
+	resumed := false
+	defer func() {
+		if !resumed {
+			close(resume)
+		}
+	}()
+	beforeRemoval := make(chan map[string]any, 1)
+	go func() {
+		first := true
+		beforeRemoval <- legacyEngineSnapshot(dir, selection, func(path string) (os.FileInfo, error) {
+			info, err := os.Stat(path)
+			if path == quantizedPath && first {
+				first = false
+				close(observed)
+				select {
+				case <-resume:
+				case <-ctx.Done():
+				}
+			}
+			return info, err
+		})
+	}()
+	select {
+	case <-observed:
+	case <-ctx.Done():
+		t.Fatal("first scan did not observe the original quantized file")
+	}
+	if err := os.Remove(quantizedPath); err != nil {
+		t.Fatal(err)
+	}
+	// A separate overlapping request must not reuse the first request's
+	// file observation after the weight has become unavailable.
+	after := legacyEngineSnapshot(dir, selection, os.Stat)
+	if after["variant"] != "fp16" || after["variant_installed"] != false {
+		t.Fatalf("later snapshot did not see the missing weight: %#v", after)
+	}
+	close(resume)
+	resumed = true
+	var first map[string]any
+	select {
+	case first = <-beforeRemoval:
+	case <-ctx.Done():
+		t.Fatal("first scan did not return")
+	}
+	if first["variant"] != "quantized" || first["variant_installed"] != true ||
+		first["note"] != "默认 fp16 权重未安装，Runtime 实际使用 quantized；需要时请先下载对应权重。" {
+		t.Fatalf("first snapshot contradicted its sampled fallback: %#v", first)
 	}
 }
