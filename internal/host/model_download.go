@@ -224,38 +224,53 @@ func (m *Manager) DownloadModelForEngine(ctx context.Context, model, variant, mi
 	for _, file := range files {
 		spec := file.spec
 		dest := filepath.Join(dir, filepath.FromSlash(spec.rel))
-		var urls []string
+		var sources []modelDownloadSource
 		if file.ort {
-			urls = m3CPUContainerSources()
+			sources = m3CPUContainerSources()
 		} else {
-			urls = make([]string, len(origins))
+			sources = make([]modelDownloadSource, len(origins))
 			for i, origin := range origins {
-				urls[i] = modelFileURLOf(definition, origin, spec.rel)
+				sources[i].url = modelFileURLOf(definition, origin, spec.rel)
 			}
 		}
-		if err := m.downloadModelFromSources(ctx, urls, dest, spec); err != nil {
+		if err := m.downloadModelFromSources(ctx, sources, dest, spec); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func m3CPUContainerSources() []string {
-	return []string{
-		mirrorURL(m3CPUContainerURL),
-		"https://gh-proxy.org/" + m3CPUContainerURL,
-		m3CPUContainerURL,
+type modelDownloadSource struct {
+	url string
+	// Only fixed, public release URLs are safe to label in progress errors.
+	publicRelease bool
+}
+
+func m3CPUContainerSources() []modelDownloadSource {
+	// ModelMirror is the base of a Hugging Face resolve endpoint, not a
+	// GitHub relay. Keep the release asset and its supported relay order
+	// pinned; modelClient still applies the configured system/direct proxy.
+	return []modelDownloadSource{
+		{url: mirrorURL(m3CPUContainerURL), publicRelease: true},
+		{url: "https://gh-proxy.org/" + m3CPUContainerURL, publicRelease: true},
+		{url: m3CPUContainerURL, publicRelease: true},
 	}
 }
 
-func (m *Manager) downloadModelFromSources(ctx context.Context, urls []string, dest string, spec modelFileSpec) error {
+func (m *Manager) downloadModelFromSources(ctx context.Context, sources []modelDownloadSource, dest string, spec modelFileSpec) error {
 	var failures error
-	for _, url := range urls {
+	for _, source := range sources {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		err := m.downloadModelFrom(ctx, url, dest, spec)
-		if err == nil || errors.Is(err, errCorruptModelCleanup) {
+		err := m.downloadModelFrom(ctx, source.url, dest, spec)
+		if err == nil {
+			return nil
+		}
+		if source.publicRelease {
+			err = &modelReleaseSourceError{url: source.url, cause: err}
+		}
+		if errors.Is(err, errCorruptModelCleanup) {
 			return err
 		}
 		failures = errors.Join(failures, err)
