@@ -65,19 +65,24 @@ func (m *Manager) EngineSnapshot(installationRoot, exe string) map[string]any {
 		installationRoot = filepath.Join(home, ".rsrs")
 	}
 	dir := resolveModelDir(installationRoot, exe, m.Owns(exe), home)
-	selection := m.readInferenceSelection()
+	return legacyEngineSnapshot(dir, m.readInferenceSelection(), os.Stat)
+}
+
+func legacyEngineSnapshot(dir string, selection inferenceSelection, stat func(string) (os.FileInfo, error)) map[string]any {
 	engine := selection.Engine
 	if engine == "" {
 		engine = "cpu"
 	}
 	variant := selection.Model
+	// Both fallback selection and the installed flag use the same scan.
+	// This is local to the current response, not an asset-readiness cache.
+	installed := installedVariantsFor(modelDefinition{Variants: modelVariantFiles}, dir, stat)
 	// The runtime silently downgrades to quantized only when the accelerator
 	// default was never explicitly selected and its file is missing; mirror
 	// that so the snapshot names the weight file inference actually uses.
 	note := ""
 	if engine != "cpu" && variant == "" {
 		variant = defaultVariantFor(engine)
-		installed := installedVariants(dir)
 		if _, ok := installed[variant]; !ok {
 			if _, ok := installed["quantized"]; ok {
 				variant = "quantized"
@@ -89,7 +94,7 @@ func (m *Manager) EngineSnapshot(installationRoot, exe string) map[string]any {
 		variant = defaultVariantFor(engine)
 	}
 	variantInstalled := false
-	if _, ok := installedVariants(dir)[variant]; ok {
+	if _, ok := installed[variant]; ok {
 		variantInstalled = true
 	} else if note == "" {
 		note = "所选权重文件缺失或校验不一致，切换或重启后推理可能失败。"

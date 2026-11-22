@@ -94,10 +94,10 @@ func modelFilesPresent(dir string) bool {
 
 // installedVariantsFor returns the variants of one catalog model whose onnx
 // file exists with the exact pinned size under dir.
-func installedVariantsFor(definition modelDefinition, dir string) map[string]int64 {
+func installedVariantsFor(definition modelDefinition, dir string, stat func(string) (os.FileInfo, error)) map[string]int64 {
 	present := map[string]int64{}
 	for _, variant := range definition.Variants {
-		if info, err := os.Stat(filepath.Join(dir, definition.weightPath(variant.Name))); err == nil && info.Size() == variant.Size {
+		if info, err := stat(filepath.Join(dir, definition.weightPath(variant.Name))); err == nil && info.Size() == variant.Size {
 			present[variant.Name] = info.Size()
 		}
 	}
@@ -107,7 +107,7 @@ func installedVariantsFor(definition modelDefinition, dir string) map[string]int
 // installedVariants returns the m3 variants whose onnx file exists with the
 // exact pinned size under dir.
 func installedVariants(dir string) map[string]int64 {
-	return installedVariantsFor(modelDefinition{Variants: modelVariantFiles}, dir)
+	return installedVariantsFor(modelDefinition{Variants: modelVariantFiles}, dir, os.Stat)
 }
 
 // ModelVariants reports install state and location for every variant of one
@@ -127,7 +127,7 @@ func (m *Manager) ModelVariants(ctx context.Context, model string) (map[string]a
 	} else {
 		dir = m.ProfileDir(model)
 	}
-	present := installedVariantsFor(definition, dir)
+	present := installedVariantsFor(definition, dir, os.Stat)
 	variants := make([]map[string]any, 0, len(definition.Variants))
 	for _, variant := range definition.Variants {
 		entry := map[string]any{
