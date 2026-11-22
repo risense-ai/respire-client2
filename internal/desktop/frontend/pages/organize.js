@@ -64,6 +64,10 @@ export function organize(root, ctx) {
     previewedPlan = null;
     applyButton.disabled = true;
   }
+  function beginReport() {
+    invalidatePreview();
+    return ++reportEpoch;
+  }
   function setPlan(value, source = null) {
     invalidatePreview();
     suggestionSource = source;
@@ -89,10 +93,11 @@ export function organize(root, ctx) {
     const scope = organizeScope();
     if (scope !== observedScope) {
       observedScope = scope;
-      ++reportEpoch;
-      invalidateSuggestionPlan();
+      const hadReport = previewedPlan || displayedSuggestions || pendingSuggestions;
+      invalidateSuggestionPlan(suggestionSource, false);
+      beginReport();
       suggestions = [];
-      if (displayedSuggestions || pendingSuggestions)
+      if (hadReport)
         area.innerHTML = '<div class="panel empty">运行环境已变化，请重新读取归纲建议。</div>';
       displayedSuggestions = null;
       pendingSuggestions = null;
@@ -173,8 +178,8 @@ export function organize(root, ctx) {
       current.next = { epoch: queuedEpoch, promise };
       return promise;
     }
-    const request = { scope, epoch: ++reportEpoch };
     invalidateSuggestionPlan();
+    const request = { scope, epoch: beginReport() };
     suggestions = [];
     displayedSuggestions = null;
     area.innerHTML = '<div class="panel empty">正在读取归纲建议…</div>';
@@ -217,8 +222,8 @@ export function organize(root, ctx) {
     const scope = observeScope();
     if (!scope) return;
     initialStarted = true;
-    const epoch = ++reportEpoch;
     invalidateSuggestionPlan();
+    const epoch = beginReport();
     suggestions = [];
     displayedSuggestions = null;
     area.innerHTML = '<div class="panel empty">正在读取检查结果…</div>';
@@ -241,10 +246,14 @@ export function organize(root, ctx) {
   async function preview() {
     const parsed = JSON.parse(specField.value);
     if (!Array.isArray(parsed.ops)) throw new Error("方案需要包含 ops 数组");
-    invalidatePreview();
+    // The preview owns the same report area as suggestions and checks.
+    // Retire their display without cancelling or duplicating an in-flight RPC.
+    initialStarted = true;
+    const previewReportEpoch = beginReport();
     const epoch = specEpoch;
     const source = suggestionSource;
-    const stillCurrent = () => specEpoch === epoch && suggestionSource === source;
+    const stillCurrent = () => reportEpoch === previewReportEpoch &&
+      specEpoch === epoch && suggestionSource === source;
     try {
       const stamp = source ? source.revision : await revision();
       if (source) await verifySuggestionContext(source, stillCurrent);
@@ -265,7 +274,9 @@ export function organize(root, ctx) {
   }
   async function applyPlan() {
     const approved = previewedPlan;
-    const stillCurrent = () => previewedPlan === approved && approved &&
+    const approvedReportEpoch = reportEpoch;
+    const stillCurrent = () => reportEpoch === approvedReportEpoch &&
+      previewedPlan === approved && approved &&
       raw(JSON.parse(specField.value)) === raw(approved.value);
     if (!stillCurrent()) throw new Error("方案已改变，请重新预览");
     try {
@@ -291,8 +302,8 @@ export function organize(root, ctx) {
     const result = await execute("organize_resort_apply", {
       spec: raw(approved.value),
     });
-    if (approved.source && (observeScope() !== approved.source.scope ||
-        specEpoch !== appliedSpecEpoch || reportEpoch !== appliedReportEpoch)) return;
+    if (approved.source && observeScope() !== approved.source.scope) return;
+    if (specEpoch !== appliedSpecEpoch || reportEpoch !== appliedReportEpoch) return;
     if (previewedPlan === approved) invalidatePreview();
     area.innerHTML = resultView("整理结果", result);
     notify("方案已应用");

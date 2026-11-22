@@ -813,5 +813,71 @@ async function test(name, fn) { await fn(); console.log(`PASS ${++count}: ${name
     ]);
     assert.deepEqual(f.errors,[]);
   });
+  await test('manual preview keeps the report and matching Apply when late mount suggestions succeed or fail', async () => {
+    for (const fail of [false, true]) {
+      let complete;
+      const f = organizeFixture(() => new Promise((resolve, reject) => {
+        complete = () => fail ? reject(new Error('stale failure')) :
+          resolve({suggests:[{orphan:{id:'stale',title:'STALE'},target:{id:'other'}}]});
+      }));
+      const view = f.mount();
+      const initial = view.refresh();
+      await f.flush();
+      const spec = '{"ops":[{"id":"manual","parent":"target"}]}';
+      f.field.value = spec;
+      f.field.input();
+      f.click('data-plan-preview');
+      await f.flush();
+      assert.equal(f.report.innerHTML,'方案预览');
+      assert.equal(f.apply.disabled,false);
+      complete();
+      await initial;
+      assert.equal(f.report.innerHTML,'方案预览');
+      assert.equal(f.apply.disabled,false);
+      assert.equal(f.suggestions().length,1);
+      f.click('data-plan-apply');
+      await f.flush();
+      assert.deepEqual(f.calls.filter(([name]) => name === 'organize_resort_preview' || name === 'organize_resort_apply'),[
+        ['organize_resort_preview',{spec}],
+        ['organize_resort_apply',{spec}],
+      ]);
+    }
+  });
+  await test('a newer audit owns the report and ignores a manual preview that resolves later', async () => {
+    const {f} = await shownSuggestion();
+    let finish;
+    f.fixture.onPreview = () => new Promise(resolve => {finish = resolve;});
+    f.field.value = '{"ops":[{"id":"manual","parent":"target"}]}';
+    f.field.input();
+    f.click('data-plan-preview');
+    await f.flush();
+    assert.equal(typeof finish,'function');
+    f.analyze('audit');
+    await f.flush();
+    assert.equal(f.report.innerHTML,'结构检查');
+    finish({});
+    await f.flush();
+    assert.equal(f.report.innerHTML,'结构检查');
+    assert.equal(f.apply.disabled,true);
+  });
+  await test('manual Apply confirmation cannot submit when explicit suggestions replace its visible preview', async () => {
+    const {f,view} = await shownSuggestion();
+    f.field.value = '{"ops":[{"id":"manual","parent":"target"}]}';
+    f.field.input();
+    f.click('data-plan-preview');
+    await f.flush();
+    let finish;
+    f.fixture.onConfirm = () => new Promise(resolve => {finish = resolve;});
+    f.click('data-plan-apply');
+    await f.flush();
+    assert.equal(typeof finish,'function');
+    await view.refresh();
+    assert.match(f.report.innerHTML,/预览全部建议/);
+    assert.equal(f.apply.disabled,true);
+    finish(true);
+    await f.flush();
+    assert.equal(f.calls.filter(([name]) => name === 'organize_resort_apply').length,0);
+    assert.equal(f.apply.disabled,true);
+  });
   console.log(`${count} focused refresh tests passed; browser/native UIA not exercised.`);
 })().catch(error => { console.error(error); process.exitCode = 1; });
