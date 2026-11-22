@@ -91,10 +91,14 @@ class Node {
     this.parent.children = this.parent.children.filter(node => node !== this);
     this.parent = null;
   }
+  get open() { return this.hasAttribute("open"); }
   showModal() { this.attributes.open = ""; }
   close() {
     if (!this.hasAttribute("open")) return;
     this.removeAttribute("open");
+    if (!this.deferCloseEvent) this.finishClosing();
+  }
+  finishClosing() {
     this.dispatchEvent({type:"close", target:this});
   }
   submit() {
@@ -408,6 +412,19 @@ const pendingResponse = () => {
     // account using a coincident memory ID or directory.
     await polls.shift().callback();
     await until(() => Boolean($("[data-edit]")) && !$("[data-edit]").disabled, "current reader reloaded");
+    await $("[data-edit]").click();
+    const closing = $("dialog[open]");
+    const closingForm = closing.querySelector("form");
+    const beforeCloseReads = countCalls("memory_show");
+    closing.deferCloseEvent = true;
+    closing.close();
+    assert.equal(closing.open, false);
+    assert.equal(closingForm.isConnected, true); // Native close event not yet delivered.
+    await closingForm.submit();
+    assert.equal(countCalls("memory_show"), beforeCloseReads);
+    assert.equal(countCalls("memory_update"), beforeWrites + 1);
+    closing.finishClosing();
+    assert.equal(closingForm.isConnected, false);
     await $("[data-edit]").click();
     const oldForm = $("dialog[open] form");
     oldForm.querySelector("[name=content]").value = "old scoped draft";

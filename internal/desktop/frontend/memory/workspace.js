@@ -642,7 +642,7 @@ export function memoryWorkspace(root, ctx) {
       // Only the open original draft can survive a same-scope status outage.
       // Nothing from the old reader token authorizes a write: each attempt
       // starts from today's verified scope and rereads the original item.
-      const sameDraft = () => Boolean(element?.isConnected && selected === id && ctx.statusScope === scope);
+      const sameDraft = () => Boolean(element?.open && element.isConnected && selected === id && ctx.statusScope === scope);
       const library = requireReadable();
       const attempt = scopedGuard(
         () => sameDraft() && library.current(),
