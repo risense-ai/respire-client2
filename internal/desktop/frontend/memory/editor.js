@@ -13,7 +13,16 @@ import {
 } from "../ui/core.js";
 import { entry, kindNames } from "./model.js";
 
-export function editor({ memory = null, parent = "", merge = [], onSaved, requireCurrent }) {
+function sameEditableVersion(original, current) {
+  if (original.id !== current.id || typeof original.updated_at !== "string" ||
+      !original.updated_at || original.updated_at !== current.updated_at) return false;
+  // The frozen envelope has no record revision beyond updated_at. Do not
+  // accept a different editable snapshot just because its timestamp matches.
+  return ["title", "content", "kind", "importance", "parent_id", "tags"]
+    .every((key) => JSON.stringify(original[key]) === JSON.stringify(current[key]));
+}
+
+export function editor({ memory = null, parent = "", merge = [], onSaved, beginAttempt, keepDialog = (element) => element }) {
   const isEdit = Boolean(memory?.id);
   const element = dialog({
     title: merge.length ? "合并记忆" : isEdit ? "编辑记忆" : "记录一条记忆",
@@ -38,7 +47,7 @@ export function editor({ memory = null, parent = "", merge = [], onSaved, requir
         ? `<p class="warning-text">将合并 ${merge.length} 条记忆。旧条目会被替换，请核对完整正文。未选中的子节点会按 Runtime 规则提升到仍存在的祖先，不会自动挂到新条目。</p>`
         : ""),
     onSubmit: async (values) => {
-      requireCurrent?.();
+      const requireCurrent = beginAttempt();
       const args = {
         title: values.title.trim(),
         content: values.content,
@@ -49,12 +58,12 @@ export function editor({ memory = null, parent = "", merge = [], onSaved, requir
       let envelope;
       if (isEdit && !merge.length) {
         const current = entry(await execute("memory_show", { id: memory.id }));
-        requireCurrent?.();
-        if (current.updated_at !== memory.updated_at)
-          throw new Error("记忆已在其他入口修改，请重新读取后再编辑。");
+        if (!sameEditableVersion(memory, current))
+          throw new Error("无法确认原记忆仍是你打开时的版本。请复制草稿，重新读取后再编辑。");
         delete args.type;
         args.kind = values.type;
         args.id = memory.id;
+        requireCurrent();
         envelope = await execute("memory_update", args);
       } else {
         args.parent = values.parent.trim();
@@ -66,6 +75,7 @@ export function editor({ memory = null, parent = "", merge = [], onSaved, requir
               "确认合并",
               `将用当前正文合并 ${merge.length} 条记忆；请确认需要保留的内容都已写入。未选中的子节点会提升到仍存在的祖先。`,
               "确认合并",
+              keepDialog,
             ))
           )
             return false;
@@ -90,6 +100,7 @@ export function editor({ memory = null, parent = "", merge = [], onSaved, requir
               importance: values.importance,
               action: summary(envelope).action,
             },
+        requireCurrent,
       );
     },
   });
@@ -109,7 +120,7 @@ export function editor({ memory = null, parent = "", merge = [], onSaved, requir
     const area = $("[data-candidates-list]", element);
     area.innerHTML = '<p class="hint">正在查找相近记忆…</p>';
     try {
-      requireCurrent?.();
+      const requireCurrent = beginAttempt();
       const result = await execute("memory_candidates", { content });
       requireCurrent?.();
       const report = result.details || {};
@@ -144,16 +155,18 @@ export function editor({ memory = null, parent = "", merge = [], onSaved, requir
       all("[data-read]", area).forEach((control) =>
         control.addEventListener("click", async () => {
           try {
+            const requireCurrent = beginAttempt();
             const item = entry(
               await execute("memory_show", { id: control.dataset.read }),
             );
-            dialog({
+            requireCurrent?.();
+            keepDialog(dialog({
               title: item.title,
               body: `<div class="reading-content">${h(item.content)}</div>`,
               submit: "关闭",
               onSubmit: () => {},
               wide: true,
-            });
+            }));
           } catch (error) {
             notify(error.message, true);
           }

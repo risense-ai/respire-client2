@@ -5,8 +5,7 @@ const root = path.resolve(__dirname, '..');
 const read = file => fs.readFileSync(path.join(root, 'internal/desktop/frontend', file), 'utf8');
 const source = read('client.js');
 const section = source.slice(source.indexOf('function setRefreshText('), source.indexOf('\nall("nav [data-page]")', source.indexOf('async function refresh()')));
-assert.match(section, /async function refresh\(\)/);
-assert.equal((section.match(/setRefreshText\(\$\(/g) || []).length, 6);
+assert.match(section, /async function refreshStatus\(initial\)/);
 // Execute the production helper and refresh body, not a rewritten algorithm.
 // This deliberately models text-node replacement, not a browser or Windows UIA.
 class Element {
@@ -14,7 +13,7 @@ class Element {
   get textContent() { return this.node.nodeValue; }
   set textContent(value) { this.writes++; this.node = { nodeValue: value == null ? '' : `${value}` }; }
 }
-const elements = Object.fromEntries(['connection-dot', 'connection-label', 'client-version', 'client-platform', 'nav-memory-count', 'status-summary', 'sync-summary'].map(id => [`#${id}`, new Element()]));
+const elements = Object.fromEntries(['connection-dot', 'connection-label', 'client-version', 'client-platform', 'nav-memory-count', 'status-summary', 'sync-summary', 'nav-diary-count'].map(id => [`#${id}`, new Element()]));
 const document = {
   documentElement: {}, body: { querySelectorAll: () => [] },
   createTreeWalker() {
@@ -24,34 +23,49 @@ const document = {
 };
 const i18n = new Function('document', 'NodeFilter', 'localStorage', read('ui/i18n.js').replace(/^export /gm, '') + '\nreturn {t, currentLanguage, setLanguage, applyTranslations};')(document, { SHOW_TEXT: 4 }, { setItem() {} });
 const core = new Function(read('ui/core.js').replace(/^export /gm, '') + '\nreturn {number};')();
-let desktop, status, failure, stateFailure, stateWait;
+let desktop, status, failure, stateFailure, stateWait, statusWait;
 const events = [], notices = [];
-const ctx = {};
+const ctx = { statusScope: null, statusPending: true };
+let published, renderRejection;
+const logged = [];
 const bindings = {
   ctx, $: selector => elements[selector], ...i18n, ...core,
   async api(name) {
     events.push(name);
-    if (name === 'state') { if (stateFailure) throw Error('state failed'); if (stateWait) await stateWait; return desktop; }
+    if (name === 'state') { if (stateFailure) throw Error('state failed'); if (stateWait) await stateWait; return structuredClone(desktop); }
     assert.equal(name, 'runtime-status');
-    if (failure) throw Error('status failed'); return status;
+    if (failure) throw Error('status failed');
+    if (statusWait) return statusWait;
+    return structuredClone(status);
   },
   appearance() { events.push('appearance'); },
-  view: { update() { events.push('view.update'); } },
+  view: { update() {
+    events.push('view.update'); published?.(ctx);
+    if (renderRejection) return Promise.reject(renderRejection);
+  } },
   refreshNavCounts() { events.push('nav'); },
+  maybeShowFirstRun() {},
   notify(...args) { notices.push(args); },
+  console: {error(...args) { logged.push(args); }},
 };
-const { refresh, setRefreshText } = new Function(...Object.keys(bindings), 'let refreshing = false;\n' + section + '\nreturn {refresh, setRefreshText};')(...Object.values(bindings));
-const fields = Object.values(elements).slice(1);
+const { refresh: startRefresh, setRefreshText } = new Function(...Object.keys(bindings),
+  'let refreshPromise, flushStatus, verifiedStatus, stagedStatus; const navCounts = {at:0};\n' +
+  section + '\nreturn {refresh, setRefreshText};')(...Object.values(bindings));
+const refresh = (options = {immediate: false}) => startRefresh(options);
+const fields = Object.values(elements).slice(1, -1);
 const nodes = () => fields.map(e => e.node);
 const writes = () => fields.map(e => e.writes);
 let count = 0;
 async function test(name, fn) { await fn(); console.log(`PASS ${++count}: ${name}`); }
 (async () => {
-  desktop = { connected: true, version: '2.0.0-dev.test', platform: 'windows/amd64', health: { bin: 'fixture' } };
-  status = { summary: { local_alive: 12, workspace: 'normal', sync_live: { phase: 'idle', pending: 0, conflicts: 0 } } };
+  desktop = { connected: true, version: '2.0.0-dev.test', platform: 'windows/amd64',
+    health: { bin: 'fixture', account_id:'account-a', instance_id:'runtime-a', generation:1,
+      data_dir:'/fixture/library', credential_state:'available', store_ready:true } };
+  status = { command:'status', status:'ok', summary: { unlocked:true, data_dir:desktop.health.data_dir,
+    local_alive: 12, workspace: 'normal', sync_live: { phase: 'idle', pending: 0, conflicts: 0 } } };
   await test('initial English values and existing call order', async () => {
     await refresh();
-    assert.deepEqual(events, ['state', 'appearance', 'runtime-status', 'view.update', 'nav']);
+    assert.deepEqual(events, ['state', 'appearance', 'view.update', 'runtime-status', 'state', 'appearance', 'view.update', 'nav']);
     assert.equal(elements['#connection-label'].textContent, 'Runtime connected');
     assert.equal(elements['#client-platform'].textContent, 'windows/amd64');
     assert.equal(elements['#nav-memory-count'].textContent, '12');
@@ -64,10 +78,14 @@ async function test(name, fn) { await fn(); console.log(`PASS ${++count}: ${name
     assert.deepEqual(nodes(), before); fields.forEach((e, n) => assert.equal(e.node, before[n]));
     assert.deepEqual(writes(), counts);
     assert.equal(events.filter(e => e === 'view.update').length, 100);
+    assert.equal(events.filter(e => e === 'state').length, 100);
+    assert.equal(events.filter(e => e === 'runtime-status').length, 100);
   });
   await test('real status count version platform and sync changes propagate', async () => {
     desktop.version = '2.0.0-dev.next'; desktop.platform = 'linux/amd64';
     status.summary.local_alive = 13; status.summary.workspace = 'readonly'; status.summary.sync_live.pending = 2;
+    await refresh();
+    assert.equal(elements['#nav-memory-count'].textContent, '12'); // first unbracketed sample is not displayed
     await refresh();
     assert.equal(elements['#client-version'].textContent, 'Client 2.0.0-dev.next');
     assert.equal(elements['#client-platform'].textContent, 'linux/amd64');
@@ -105,32 +123,139 @@ async function test(name, fn) { await fn(); console.log(`PASS ${++count}: ${name
   await test('missing element still throws instead of hiding selector failures', async () => {
     assert.throws(() => setRefreshText(null, 'value'), TypeError);
   });
-  await test('status error retains existing observer translation behavior', async () => {
-    failure = true; await refresh(); assert.equal(ctx.statusError, 'status failed');
-    assert.equal(elements['#sync-summary'].textContent, '状态读取失败');
-    i18n.applyTranslations(); assert.equal(elements['#sync-summary'].textContent, 'Status read failed');
-    // Known existing English-error rewrite is intentionally not changed here.
-    const before = elements['#sync-summary'].writes; await refresh();
-    assert.equal(elements['#sync-summary'].writes, before + 1);
-    i18n.applyTranslations(); assert.equal(elements['#sync-summary'].textContent, 'Status read failed');
+  await test('status error preserves verified display; verified retry restores current status', async () => {
+    failure = true; await refresh();
+    assert.equal(ctx.statusError, 'status failed');
+    assert.equal(ctx.status, null);
+    assert.equal(ctx.displayStatus.summary.local_alive, 13);
+    assert.equal(elements['#nav-memory-count'].textContent, '13');
+    assert.match(elements['#sync-summary'].textContent, /last verified/);
     failure = false; await refresh(); assert.equal(ctx.statusError, '');
+    assert.equal(ctx.status.summary.local_alive, 13);
   });
-  await test('disconnect skips runtime request and reconnect updates', async () => {
+  await test('rejected view update is observed without undoing a verified snapshot or stopping updates', async () => {
+    renderRejection = Error('async view failed');
+    await refresh();
+    assert.equal(logged.at(-1)[1], renderRejection);
+    assert.equal(ctx.status.summary.local_alive, 13);
+    renderRejection = null;
+    const before = logged.length;
+    await refresh();
+    assert.equal(logged.length, before);
+    assert.equal(ctx.status.summary.local_alive, 13);
+  });
+  await test('disconnect skips status and clears private data; reconnect brackets before restoring it', async () => {
     desktop.connected = false; events.length = 0; await refresh();
     assert.deepEqual(events, ['state', 'appearance', 'view.update', 'nav']);
+    assert.equal(ctx.displayStatus, null);
+    assert.equal(ctx.statusScope, null);
     assert.equal(elements['#connection-label'].textContent, 'Runtime disconnected');
     assert.equal(elements['#status-summary'].textContent, 'Runtime disconnected');
+    assert.equal(elements['#nav-memory-count'].textContent, '');
     desktop.connected = true; await refresh(); assert.equal(elements['#connection-label'].textContent, 'Runtime connected');
   });
-  await test('state failure notification and next refresh recovery', async () => {
-    stateFailure = true; await refresh(); assert.deepEqual(notices.pop(), ['state failed', true]);
+  await test('state failure clears the last private sample and offers a retry (not fake zero or key error)', async () => {
+    stateFailure = true; await refresh();
+    assert.equal(ctx.statusError, 'state failed');
+    assert.equal(ctx.displayStatus, null);
+    assert.equal(elements['#nav-memory-count'].textContent, '');
+    assert.deepEqual(notices, []);
     stateFailure = false; events.length = 0; await refresh(); assert.ok(events.includes('view.update'));
   });
-  await test('overlapping refresh still guarded', async () => {
-    let release; stateWait = new Promise(resolve => { release = resolve; }); events.length = 0;
-    const pending = refresh(); await refresh(); assert.deepEqual(events, ['state']);
-    release(); await pending; stateWait = null;
-    assert.deepEqual(events, ['state', 'appearance', 'runtime-status', 'view.update', 'nav']);
+  await test('overlapping same-scope refresh shares one request; real manual retry upgrades the pending read', async () => {
+    let release;
+    statusWait = new Promise(resolve => { release = resolve; }); events.length = 0;
+    const pending = refresh();
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(refresh(), pending);
+    assert.deepEqual(events, ['state', 'appearance', 'view.update', 'runtime-status']);
+    assert.equal(refresh({immediate: true}), pending);
+    assert.equal(ctx.status, null);
+    assert.equal(ctx.displayStatus.summary.local_alive, 13);
+    release(structuredClone(status)); await pending; statusWait = null;
+    assert.equal(events.filter(e => e === 'state').length, 2);
+    assert.equal(events.filter(e => e === 'runtime-status').length, 1);
+    assert.equal(ctx.status.summary.local_alive, 13);
+  });
+  await test('same directory with a new account/generation clears A before delayed status and rejects older payload', async () => {
+    // Poll under A: its fresh sample expects the next Health observation.
+    status.summary.local_alive = 3341; await refresh();
+    const seen = [];
+    published = (context) => seen.push({
+      scope:context.statusScope, count:context.displayStatus?.summary.local_alive, ready:Boolean(context.status),
+    });
+    desktop.health.account_id = 'account-b';
+    desktop.health.generation++;
+    let release;
+    statusWait = new Promise(resolve => { release = resolve; });
+    const reading = refresh();
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(ctx.status, null);
+    assert.equal(ctx.displayStatus, null);
+    assert.equal(elements['#nav-memory-count'].textContent, '');
+    assert.ok(seen.every(x => x.count !== 3341));
+    // Scenario: generation B changes to a subsequent same-path A before the bracket closes.
+    desktop.health.account_id = 'account-a';
+    desktop.health.generation++;
+    release({ ...status, summary:{ ...status.summary, local_alive:22 } });
+    await reading; statusWait = null; published = null;
+    assert.equal(ctx.status, null);
+    assert.equal(ctx.displayStatus, null);
+    assert.equal(ctx.statusScope, null);
+    status.summary.local_alive = 37;
+    await refresh();
+    assert.equal(ctx.status.summary.local_alive, 37);
+  });
+  await test('changed directory rejects a status body for another profile without exposing counts', async () => {
+    status.summary.data_dir = '/fixture/unrelated';
+    await refresh();
+    assert.equal(ctx.status, null);
+    assert.equal(ctx.displayStatus, null);
+    assert.equal(ctx.statusScope, null);
+    assert.match(elements['#status-summary'].textContent, /Click Refresh/);
+    status.summary.data_dir = desktop.health.data_dir;
+    await refresh();
+    assert.equal(ctx.status.summary.local_alive, 37);
+  });
+  await test('first-run wizard still supports a clean offline install but does not interpret temporary status loss as new account', () => {
+    const from = source.indexOf('function maybeShowFirstRun()');
+    const countShows = new Function('ctx', 'wizard', 'let checkFirstRun = true;\n' +
+      source.slice(from, source.indexOf('async function poll(', from)) + '\nreturn maybeShowFirstRun;');
+    let shown = 0;
+    const wizard = {show: () => shown++};
+    const existing = {desktop:{connected:true, preferences:{}}, status:null};
+    const waiting = countShows(existing, wizard);
+    waiting();
+    assert.equal(shown, 0);
+    existing.status = {summary:{session:{has_token:true}}};
+    waiting();
+    assert.equal(shown, 0);
+    countShows({desktop:{connected:false, localSessionHasToken:true}}, wizard)();
+    assert.equal(shown, 0);
+    const offline = countShows({desktop:{connected:false}}, wizard);
+    offline();
+    offline();
+    assert.equal(shown, 1);
+  });
+  await test('first status loss stays actionable without lock and verified lock never shows an old count', async () => {
+    desktop.health.instance_id = 'next-instance';
+    failure = true; await refresh();
+    assert.equal(ctx.status, null);
+    assert.equal(ctx.displayStatus, null);
+    assert.match(elements['#status-summary'].textContent, /Click Refresh/);
+    failure = false;
+    desktop.health.credential_state = 'required';
+    desktop.health.store_ready = false;
+    status.summary.unlocked = false;
+    status.summary.local_alive = null;
+    await refresh({immediate:true});
+    assert.equal(ctx.status.summary.unlocked, false);
+    assert.equal(elements['#nav-memory-count'].textContent, '');
+    desktop.health.credential_state = 'available';
+    desktop.health.store_ready = true;
+    status.summary.unlocked = true;
+    status.summary.local_alive = 13;
+    await refresh();
   });
   await test('core configuration notices require the original applied receipt', async () => {
     const models = read('pages/models.js');
@@ -204,60 +329,50 @@ async function test(name, fn) { await fn(); console.log(`PASS ${++count}: ${name
     assert.equal(save.disabled, false);
     assert.deepEqual(calls, ['agent_set', ['operation-recover', {id:'desktop-original'}], ['operation-recover', {id:'desktop-original'}]]);
   });
-  await test('memory workspace keeps connection and status failures distinct from a confirmed lock', () => {
-    const workspace = fs.readFileSync('internal/desktop/frontend/memory/workspace.js', 'utf8');
-    const start = workspace.indexOf('  function readableLibrary()');
-    const end = workspace.indexOf('  async function load()', start);
-    assert.ok(start >= 0 && end > start);
-    const ctx = {desktop: {connected: false}, status: null, statusError: ''};
-    const reader = {innerHTML: ''}, counter = {textContent: ''};
-    const showUnavailable = new Function('ctx', 'reader', 'count', '$', 't', 'h',
-      'const checked = new Set(), expanded = new Set(); function renderTree() {} let records = [], selected, searchCaption, loaded = false, revision = "", renderedEntry, selectedEntry, readerToken = null, renderedContext = null, selectionVersion = 0;\n' +
-      workspace.slice(start, end) +
-      '\nreturn (alreadyLoaded = false) => { loaded = alreadyLoaded; return showUnavailable(); };'
-    )(ctx, reader, counter, () => ({addEventListener() {}}), text => text, text => text);
-    assert.equal(showUnavailable(), true);
-    assert.equal(counter.textContent, '等待 Runtime 连接');
-    assert.doesNotMatch(reader.innerHTML, /data-accounts/);
-
+  await test('memory workspace has actionable retry text separate from a confirmed lock', () => {
+    const workspace = read('memory/workspace.js');
+    const start = workspace.indexOf('  function confirmedLock()');
+    const end = workspace.indexOf('  let catalogEpoch', start);
+    const ctx = {desktop:{connected:false}, status:null, statusError:''};
+    const message = new Function('ctx','readableLibrary', workspace.slice(start,end) +
+      '\nreturn unavailableMessage;')(ctx, () => ctx.status?.summary?.unlocked === true);
+    assert.equal(message(), '等待 Runtime 连接');
+    ctx.statusError = 'host failed';
+    assert.match(message(), /重连.*刷新/);
     ctx.desktop.connected = true;
-    assert.equal(showUnavailable(), true);
-    assert.equal(counter.textContent, '正在读取记忆目录…');
-    reader.innerHTML = 'previously loaded entry';
-    ctx.statusError = 'status failed';
-    assert.equal(showUnavailable(true), true);
-    assert.equal(counter.textContent, '暂时无法读取记忆状态，请稍后刷新。');
-    assert.equal(reader.innerHTML, 'previously loaded entry');
-
-    ctx.status = {summary: {unlocked: false}};
-    assert.equal(showUnavailable(true), true);
-    assert.equal(counter.textContent, '需要解锁记忆库');
-    assert.match(reader.innerHTML, /data-accounts/);
-    ctx.status = {summary: {unlocked: true}};
-    assert.equal(showUnavailable(true), false);
+    assert.match(message(), /无法读取.*刷新/);
+    ctx.status = {summary:{unlocked:false}};
+    assert.equal(message(), '需要解锁记忆库');
+    ctx.status = {summary:{unlocked:true}};
+    assert.equal(message(), '');
   });
   // Reuse the real workspace module for memory readback and refresh rules.
   const workspace = read('memory/workspace.js');
   const segment = (from, to) => workspace.slice(workspace.indexOf(from), workspace.indexOf(to));
-  const build = new Function('ctx', 'execute', `
+  const build = new Function('ctx', 'execute', 'metadataCap', `
   const root = { isConnected: true }, checked = new Set(), expanded = new Set();
   const reader = { innerHTML: 'old reader', querySelector: () => true };
   const tree = { innerHTML: 'old tree' }, count = { textContent: '' };
-  let loaded = true, revision = 'loaded', busy = false, limit = 4, metadataCap = true;
+  metadataCap = metadataCap === undefined ? true : metadataCap;
+  let loaded = true, revision = 'loaded', busy = false, limit = 4,
+    catalogContext = ctx.statusScope, selectionAnchor = null, lastFoldClick, filter = '', actionEpoch = 0, statusUnavailable = false;
   let records = [{id:'old'}], selected = 'old', selectionVersion = 0;
   let renderedEntry = {id:'old', updated_at:'before', content:'prior body'}, selectedEntry = renderedEntry, searchCaption;
   let renderedContext = readableLibrary(), readerToken = {};
   function renderTree() { tree.innerHTML = records.map(row => row.id).join(','); }
   const h = String, t = String, number = String, list = value => value, entry = value => value;
+  const summary = value => value?.summary || {}, notify = () => {};
   const inventory = rows => ({byId: new Map(rows.map(row => [row.id, row]))});
   const $ = () => ({addEventListener() {}, insertAdjacentHTML() {}});
+  const all = () => [];
+  function closeMemoryDialogs() {} function update() {} function keepDialog() {}
   const renderReader = (memory) => { reader.innerHTML = memory.content; };
   const memoryTools = () => {};
   ${segment('  function readableLibrary()', '  // Body records')}
   ${segment('  async function choose(', '  async function search()')}
   return {load, choose, showUnavailable, activeReaderEntry, requireCurrentReader, tree, reader, count, ids: () => records.map(row => row.id)};
   `);
-  const fixtureContext = () => ({desktop: {connected:true, health:{account_id:'account-a', instance_id:'fixture-runtime', generation:1}}, status:{summary:{unlocked:true, local_alive:10, data_dir:'fixture-library'}}});
+  const fixtureContext = () => ({desktop: {connected:true, health:{account_id:'account-a', instance_id:'fixture-runtime', generation:1}}, statusScope:'verified-a', status:{summary:{unlocked:true, local_alive:10, data_dir:'fixture-library'}}});
   await test('failed later memory catalog page preserves the reader and prior catalog', async () => {
     const ctx = fixtureContext();
     const failure = build(ctx, async (name, {limit}) => {
@@ -285,6 +400,29 @@ async function test(name, fn) { await fn(); console.log(`PASS ${++count}: ${name
     await loading;
     assert.deepEqual(pending.ids(), []);
   });
+  await test('a late capabilities read cannot set the catalog mode for the next scope', async () => {
+    const ctx = fixtureContext();
+    let release, probes = 0, calls = [];
+    const reading = build(ctx, async (name, args) => {
+      if (name === 'capabilities') {
+        if (++probes === 1) return new Promise(resolve => {release = resolve;});
+        return {summary:{capabilities:{memory_list_metadata:false}}};
+      }
+      calls.push(args);
+      return [{id:'new'}];
+    }, null);
+    const old = reading.load();
+    ctx.statusScope = 'verified-b'; ctx.status = null;
+    assert.equal(reading.showUnavailable(), true);
+    release({summary:{capabilities:{memory_list_metadata:true}}});
+    await old;
+    assert.deepEqual(calls, []);
+    ctx.status = fixtureContext().status;
+    await reading.load();
+    assert.equal(probes, 2);
+    assert.deepEqual(calls, [{limit:4}]);
+    assert.deepEqual(reading.ids(), ['new']);
+  });
   await test('reader preserves content on transport failure but renders definite rejection', async () => {
     const ctx = fixtureContext();
     let error = new Error('transport unavailable');
@@ -292,8 +430,8 @@ async function test(name, fn) { await fn(); console.log(`PASS ${++count}: ${name
     const before = reading.requireCurrentReader(reading.activeReaderEntry());
     await reading.choose('old', false);
     assert.equal(reading.reader.innerHTML, 'old reader');
-    assert.equal(reading.activeReaderEntry().content, 'prior body');
-    before();
+    assert.equal(reading.activeReaderEntry(), null);
+    assert.throws(before, /重新选择/);
     error = Object.assign(new Error('not found'), {envelope:{summary:{reason:'not_found'}}});
     await reading.choose('old', false);
     assert.match(reading.reader.innerHTML, /not found/);
@@ -307,11 +445,12 @@ async function test(name, fn) { await fn(); console.log(`PASS ${++count}: ${name
     const before = reading.requireCurrentReader(reading.activeReaderEntry());
     const pending = reading.choose('old', false);
     ctx.desktop.health.account_id = 'account-b';
+    ctx.statusScope = 'verified-b'; ctx.status = null;
     assert.equal(reading.activeReaderEntry(), null);
-    assert.throws(before, /重新选择/);
+    assert.throws(before, /刷新后重试/);
     finish({id:'old', updated_at:'new', content:'wrong account'});
     await pending;
-    assert.match(reading.reader.innerHTML, /账户已变化/);
+    assert.match(reading.reader.innerHTML, /正在读取/);
     assert.doesNotMatch(reading.reader.innerHTML, /wrong account|old reader/);
     assert.equal(reading.activeReaderEntry(), null);
   });
@@ -326,12 +465,12 @@ async function test(name, fn) { await fn(); console.log(`PASS ${++count}: ${name
     const after = reading.requireCurrentReader(reading.activeReaderEntry());
     ctx.status.summary.unlocked = false;
     assert.equal(reading.activeReaderEntry(), null);
-    assert.throws(after, /重新选择/);
+    assert.throws(after, /刷新后重试/);
     assert.equal(reading.showUnavailable(), true);
     ctx.status.summary.unlocked = true;
     await reading.choose('old');
     assert.equal(reading.activeReaderEntry().id, 'old');
-    assert.throws(after, /重新选择/);
+    assert.throws(after, /刷新后重试/);
   });
   await test('reader blocks before slow status completes when Health sees a new library or confirmed lock', () => {
     const ctx = fixtureContext();
@@ -340,14 +479,15 @@ async function test(name, fn) { await fn(); console.log(`PASS ${++count}: ${name
     const reading = build(ctx, () => {});
     const before = reading.requireCurrentReader(reading.activeReaderEntry());
     ctx.desktop.health.data_dir = 'new-library';
+    ctx.statusScope = 'changed'; ctx.status = null;
     assert.equal(reading.activeReaderEntry(), null);
-    assert.throws(before, /重新选择/);
+    assert.throws(before, /刷新后重试/);
     ctx.desktop.health.data_dir = 'fixture-library';
     ctx.desktop.health.credential_state = 'required';
     assert.equal(reading.activeReaderEntry(), null);
     assert.equal(reading.showUnavailable(), true);
     ctx.desktop.health.credential_state = 'available';
-    assert.throws(before, /重新选择/);
+    assert.throws(before, /刷新后重试/);
   });
   const loadModelPageTools = (api, execute) => new Function('api', 'execute',
     read('pages/model-kit.js').replace(/^import \{[\s\S]+?;\n/, '').replace(/^export /gm, '') +
@@ -878,6 +1018,14 @@ async function test(name, fn) { await fn(); console.log(`PASS ${++count}: ${name
     await f.flush();
     assert.equal(f.calls.filter(([name]) => name === 'organize_resort_apply').length,0);
     assert.equal(f.apply.disabled,true);
+  });
+  await test('production client and memory page handle DOM-fixture clicks and delayed synthetic status', () => {
+    const output = require('node:child_process').execFileSync(process.execPath, [
+      path.join(__dirname, 'fixtures/client-refresh-dom.cjs'),
+    ], {encoding:'utf8'});
+    assert.match(output, /initial retry, same-scope display only, delayed same-root ABA, fresh reader, real lock passed/);
+    assert.match(output, /timed recovery and late committed writes passed/);
+    assert.match(output, /editor revalidates and submits the original same-scope draft only/);
   });
   console.log(`${count} focused refresh tests passed; browser/native UIA not exercised.`);
 })().catch(error => { console.error(error); process.exitCode = 1; });

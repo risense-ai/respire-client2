@@ -16,15 +16,25 @@ export function stats(root, ctx) {
   root.innerHTML =
     `<div class="page-heading"><div><h2>本地召回统计</h2><p>只统计这台机器上的召回。成功命中是一次召回至少返回一条候选，不上传。</p></div><div class="heading-actions"><button data-reload>刷新</button></div></div>` +
     `<div data-body><div class="panel empty">正在读取本机召回日志。</div></div>`;
+  const body = $("[data-body]", root);
+  let shownScope = null, attempted = false, sequence = 0;
+  function currentScope() {
+    return ctx.desktop?.health?.credential_state === "required" || ctx.status?.summary?.unlocked === false
+      ? null : ctx.statusScope;
+  }
   async function load() {
-    const body = $("[data-body]", root);
+    const scope = currentScope();
     if (!ctx.desktop?.connected) {
       body.innerHTML = `<div class="panel empty">Runtime 未连接，暂时读不到本机召回日志。</div>`;
       return;
     }
+    if (!scope || ctx.status?.summary?.unlocked !== true) return;
+    attempted = true;
+    const request = ++sequence;
+    const current = () => root.isConnected && sequence === request && currentScope() === scope && !!ctx.status;
     try {
       const envelope = await execute("query_log", { stats: true, limit: 1 });
-      if (!root.isConnected) return;
+      if (!current()) return;
       const details = envelope?.details || {};
       const daily = Array.isArray(details.daily) ? details.daily : [];
       const today = daily.find((row) => row.day === localDay()) || {
@@ -57,20 +67,23 @@ export function stats(root, ctx) {
             : `<div class="panel-body"><p class="hint">还没有召回记录。正常使用后，这里会按本机日期累计。</p></div>`,
         );
     } catch (error) {
-      if (!root.isConnected) return;
+      if (!current()) return;
       body.innerHTML = `<div class="panel empty">${h(error.message || "读取失败")}</div>`;
+    } finally {
+      if (sequence === request && currentScope() === scope && !ctx.status) attempted = false;
     }
   }
   $("[data-reload]", root).onclick = () => load();
-  let connected = Boolean(ctx.desktop?.connected);
-  load();
-  return {
-    refresh: load,
-    update() {
-      const next = Boolean(ctx.desktop?.connected);
-      if (next === connected) return;
-      connected = next;
-      load();
-    },
-  };
+  function update() {
+    const scope = currentScope();
+    if (scope !== shownScope) {
+      shownScope = scope;
+      attempted = false;
+      ++sequence;
+      body.innerHTML = `<div class="panel empty">${scope ? "正在读取本机召回日志。" : "召回日志状态待确认。"}</div>`;
+    }
+    if (!attempted) load();
+  }
+  update();
+  return { refresh: load, update };
 }
