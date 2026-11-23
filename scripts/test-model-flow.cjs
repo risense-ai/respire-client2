@@ -14,7 +14,7 @@ async function main() {
       await fs.mkdir(path.dirname(path.join(tree, file)), { recursive: true });
       await fs.copyFile(path.join(source, file), path.join(tree, file));
     }
-    const {applyEngineChoice, cancelModelWork, detectBestEngine, engineAvailable, localModelDownload, modelActivity, profileStateSettled, submitProfileSwitch, switchFailure, switchProgressLabel, variantFromItem, fetchModelDownloadTask, runtimeModelScope, modelSwitchBlock, modelSwitchUnconfirmed, MODEL_MODES} = await import(pathToFileURL(path.join(tree, "pages/model-kit.js")));
+    const {applyEngineChoice, cancelModelWork, detectBestEngine, engineAvailable, modeForVariant, performanceAvailable, engineCapabilities, localModelDownload, modelActivity, profileStateSettled, submitProfileSwitch, switchFailure, switchProgressLabel, variantFromItem, fetchModelDownloadTask, readProfileState, runtimeModelScope, modelSwitchBlock, modelSwitchUnconfirmed, MODEL_MODES} = await import(pathToFileURL(path.join(tree, "pages/model-kit.js")));
     const S = (sw={}, active=null, operation={}) => ({
       progress:{command:"model.progress",status:"ok",summary:{switch:sw,operation}},
       catalog:{command:"model.catalog",status:"ok",summary:{active}},
@@ -147,28 +147,194 @@ async function main() {
       assert.ok(start >= 0 && end > start);
       return source.slice(start,end);
     };
+    // Render the real model status/mode/button functions against DOM targets.
+    // Synthetic inventory deliberately separates verified fields from missing metadata.
+    const installed = { model: "m3", tokenizer_installed: true, cpu_container_ready: true,
+      variants: [{name:"quantized",installed:true,size:540}, {name:"fp16",installed:false,size:900}] };
+    const selector = modulePart(modelsSource, "  function currentMode()", "  function renderAdvancedVisibility()");
+    const pageStates = modulePart(modelsSource, "const PAGE_STATES", "// Five-axis recall fusion");
+    const slotGate = modelsSource.includes("  function scopedModelStatus()")
+      ? modulePart(modelsSource, "  function scopedModelStatus()", "  function engineEnabled(")
+      : modelsSource.includes("  function runtimeActivationBlock()")
+        ? modulePart(modelsSource, "  function runtimeActivationBlock()", "  function engineEnabled(") : "";
+    const baselineRules = modelsSource.includes("  function m3BaselineReady(")
+      ? modulePart(modelsSource, "  function m3BaselineReady(", "  function currentMode()")
+      : modulePart(modelsSource, "  function renderBaseline(", "  function currentMode()");
+    const activitySupport = modulePart(modelsSource, "  function engineEnabled(", "  // Live selection");
+    const variantSupport = modulePart(modelsSource, "  function variantStatus(", "  function renderVariants(");
+    const scope = runtimeModelScope({desktop:desktop()});
+    const activeM3 = S({}, {model:"m3",engine:"cpu",variant:"quantized"});
+    function modelStatus({ inventory = installed, phase, index, operation, task, switching,
+      progress, account = "a", selectedMode = "balanced", profileState = null, profileStateScope = scope,
+      switchingModel = "m3", lastVerification = null, statusScope = scope,
+    } = {}) {
+      const nodes = Object.fromEntries(["data-status-card","data-mode-selector","data-primary-action","data-mode-progress"].map(
+        (attr) => [`[${attr}]`, {innerHTML:"",textContent:"",hidden:false}]));
+      const context = {
+        root:{}, $: key => nodes[key], modelID:"m3", inventory, selectedMode,
+        ctx:{desktop:desktop(),statusScope,status:{summary:{retrieval_index:index,
+          model_operation:operation === undefined ? {active:false} : operation}}},
+        switchInFlight:Boolean(switching), switchProgressState:progress, modelSwitchBlock,
+        switchingVariant:"quantized", switchingModel,
+        modelSwitchUnconfirmed, runtimeModelScope, currentModelTask:()=>task,
+        profileState, profileStateScope, readProfileState, engineState:{model:"quantized",engine:"cpu"},
+        MODEL_MODES, modelActivity, localModelDownload, modeForVariant, performanceAvailable,
+        switchProgressLabel, engineCapabilities, engineAvailable, variantFromItem, graniteVariant:()=>false,
+        h:String, bytes:String, date:String, lastVerification, lastVerifiedAt:null, stateOverride:null,
+      };
+      context.ctx.desktop.health.account_id = account;
+      if (phase !== undefined) context.ctx.desktop.health.inference = {phase};
+      vm.runInNewContext(pageStates + selector + slotGate + activitySupport + variantSupport +
+        "\nrenderStatusCard(); renderModeSelector(); renderPrimaryAction();", context);
+      nodes.variant = vm.runInNewContext('variantStatus({name:"quantized",installed:true}, {}, "", currentModelTask())', context);
+      nodes.chips = vm.runInNewContext('engineChips({name:"quantized"})', context);
+      return nodes;
+    }
+    function shows(options, state) {
+      const result = modelStatus(options), status = result["[data-status-card]"].innerHTML;
+      assert.ok(status.includes('status-card ' + state + '"'), status);
+      return result;
+    }
+    shows({inventory:null}, "unknown");
+    shows({inventory:{...installed,model:"bge-small"}}, "unknown");
+    shows({inventory:{...installed,tokenizer_installed:undefined}}, "unknown");
+    shows({inventory:{...installed,tokenizer_installed:false}}, "empty");
+    shows({phase:"idle"}, "idle");
+    const noCatalog = shows({phase:"running"}, "installed");
+    assert.doesNotMatch(noCatalog.variant,/当前选择/);
+    assert.doesNotMatch(noCatalog["[data-status-card]"].innerHTML,/mode-tag/);
+    assert.doesNotMatch(noCatalog["[data-primary-action]"].innerHTML,/data-mode-apply disabled/);
+    const proof = {scope, at:new Date(0), model:"m3", engine:"cpu", variant:"quantized"};
+    shows({phase:"running",profileState:S(),lastVerification:proof}, "installed");
+    shows({phase:"running",profileState:S({}, {model:"m3",variant:"quantized"}),lastVerification:proof}, "installed");
+    shows({phase:"running",profileState:activeM3,account:"b",statusScope:JSON.stringify(["b","rt",1,"/fixture"]),lastVerification:proof}, "installed");
+    shows({phase:"running",profileState:activeM3}, "installed");
+    shows({phase:"ready",profileState:activeM3,lastVerification:proof}, "installed");
+    shows({phase:"idle",profileState:activeM3,lastVerification:proof}, "idle");
+    assert.match(shows({phase:"running",profileState:activeM3,lastVerification:proof}, "ready").variant,/当前选择/);
+    shows({}, "installed");
+    shows({operation:{active:true,phase:"future-phase"}}, "unknown");
+    shows({index:{scheduled:true}}, "index-scheduled");
+    shows({index:{running:true}}, "indexing");
+    const switched = S({id:"owned",state:"pending"}, null, {id:"owned",phase:"switch-load"});
+    const staleProgress = shows({switching:true,operation:{active:true,id:"other",phase:"index"}}, "switching");
+    assert.equal(staleProgress["[data-mode-progress]"].textContent,"等待 Runtime 确认切换");
+    assert.doesNotMatch(staleProgress["[data-mode-progress]"].innerHTML,/index/);
+    assert.equal(modelStatus({switching:true,progress:{scope,state:switched}})["[data-mode-progress]"].textContent,"加载模型");
+    assert.match(modelStatus({switching:true,progress:{scope,state:switched}}).variant,/加载模型/);
+    const stale = modelStatus({switching:true,progress:{scope,state:switched},account:"b",profileState:switched});
+    assert.equal(stale["[data-mode-progress]"].textContent,"等待 Runtime 确认切换");
+    assert.match(stale.variant,/等待 Runtime 确认切换/);
+    assert.doesNotMatch(stale.variant,/加载模型/);
+    assert.doesNotMatch(modelStatus({switching:true,progress:{scope,state:switched},switchingModel:"bge-small"}).variant,/切换中/);
+    shows({index:{running:true},task:{busy:true,stage:"下载 model_quantized.cpu-v1.ort"}}, "downloading");
+    shows({operation:{active:true,phase:"download"}}, "downloading");
+    shows({operation:{active:true,phase:"index-load"}}, "indexing");
+    shows({operation:{active:true,phase:"queued"}}, "unknown");
+    shows({index:{running:true},operation:{active:true,phase:"download"}}, "downloading");
+    shows({operation:{active:true,phase:"load"}}, "switching");
+    const indexing = modelStatus({index:{running:true}});
+    assert.match(indexing["[data-primary-action]"].innerHTML,/data-mode-apply disabled/);
+    assert.match(indexing.chips,/data-variant="quantized" disabled/);
+    assert.match(modelStatus({operation:{active:true,phase:"index-load"}}).chips,/data-variant="quantized" disabled/);
+    assert.match(modelStatus({operation:{active:true,phase:"future-phase"}}).chips,/data-variant="quantized" disabled/);
+    assert.match(modelStatus({operation:null}).chips,/data-variant="quantized" disabled/);
+    assert.match(modelStatus({statusScope:"stale"}).chips,/data-variant="quantized" disabled/);
+    assert.doesNotMatch(modelStatus({index:{scheduled:true}}).chips,/data-variant="quantized" disabled/);
+    assert.match(modelStatus({operation:{active:true,phase:"download"}}).chips,/data-variant="quantized" disabled/);
+    assert.match(modelStatus({inventory:null})["[data-primary-action]"].innerHTML,/data-mode-apply disabled/);
+    function renderedDownloadDisabled(operation, task) {
+      const button = {disabled:true};
+      const cell = {innerHTML:""};
+      const context = {
+        ctx:{status:{summary:{model_operation:operation}}}, root:{}, inventory:installed,
+        scopedModelStatus:()=>({model_operation:operation}),
+        currentModelTask:()=>task, modelActivity, localModelDownload, variantFromItem,
+        variantStatus:()=>"", runtimeDownloadVariant:()=>"",
+        renderBaseline(){}, CSS:{escape:String},
+        document:{querySelectorAll:()=>[]},
+        $:key => key === '[data-status="quantized"]' ? cell :
+            key === '[data-variant="quantized"]' ? button : null,
+      };
+      vm.runInNewContext(modulePart(modelsSource,"  function updateVariantsProgress()","  function update()") +
+        "\nupdateVariantsProgress();", context);
+      return Boolean(button.disabled);
+    }
+    assert.equal(renderedDownloadDisabled({id:"index",active:true,phase:"index-load"},{}),false);
+    assert.equal(renderedDownloadDisabled({id:"unknown",active:true,phase:"future-phase"},{}),false);
+    assert.equal(renderedDownloadDisabled(null,{busy:true,stage:"下载 model_quantized.cpu-v1.ort"}),true);
+    const mismatched = S({id:"owned",state:"pending"}, null, {id:"other",phase:"switch-load"});
+    assert.doesNotMatch(modelStatus({switching:true,progress:{scope,state:mismatched}})["[data-mode-progress]"].textContent,/加载模型/);
+    function renderBaselineRow(files, selected = "m3", busy = false) {
+      const area = {innerHTML:"prior stale row"};
+      const ctx = {desktop:desktop(),statusScope:scope,status:{summary:{model_operation:{active:busy}}}};
+      vm.runInNewContext(slotGate+baselineRules+"\nrenderBaseline()", {
+        ctx, root:{}, $:()=>area, modelID:selected, inventory:files, switchInFlight:false,
+        runtimeModelScope, modelSwitchBlock, modelSwitchUnconfirmed, currentModelTask:()=>({}),
+        localModelDownload, h:String, bytes:String,
+      });
+      return area.innerHTML;
+    }
+    const tokenizerOnly = {...installed,cpu_container_ready:false,variants:[{name:"quantized",installed:false}]};
+    const blockedBaseline = renderBaselineRow(tokenizerOnly,"m3",true);
+    assert.match(blockedBaseline,/data-model="prepare".*>下载基础文件<.*CPU ORT/);
+    assert.doesNotMatch(blockedBaseline,/基础文件已就绪|下载并准备/);
+    assert.match(renderBaselineRow({...installed,cpu_container_ready:false}),/data-model="prepare"/);
+    assert.match(renderBaselineRow({...installed,variants:[{name:"quantized",installed:false}]}),/data-model="prepare"/);
+    assert.match(renderBaselineRow(installed),/基础文件已就绪/);
+    assert.match(renderBaselineRow(null),/状态尚未确认/);
+    assert.match(renderBaselineRow({...installed,model:"granite-97m-r2"}),/状态尚未确认/);
+    assert.equal(renderBaselineRow({...installed,model:"granite-97m-r2"},"granite-97m-r2"),"");
+
+    function renderSecondary(status, statusScope = scope) {
+      const live = {innerHTML:""};
+      const ctx = {desktop:desktop(),statusScope,status};
+      vm.runInNewContext(slotGate+modulePart(modelsSource,"  function update() {","  async function load() {")+"\nupdate()", {
+        ctx, live, modelID:"m3", baselineIntent:null, runtimeModelScope,
+        panel:(name,content)=>name+content, pairs:items=>JSON.stringify(items), phase:v=>v??"—",
+        h:String, number:String, bytes:String, raw:JSON.stringify,
+        updateVariantsProgress(){}, renderDynamic(){}, renderEngineHint(){},
+      });
+      return live.innerHTML;
+    }
+    const inactive = {summary:{model_operation:{active:false},retrieval_index:{running:false,scheduled:false}}};
+    for (const output of [renderSecondary(null), renderSecondary(inactive,"old"),
+      renderSecondary({summary:{retrieval_index:{running:false,scheduled:false}, model_operation:{}}})]) {
+      assert.match(output,/索引任务","状态尚未确认/);
+      assert.match(output,/当前模型任务尚未确认/);
+      assert.doesNotMatch(output,/索引任务","空闲|当前没有模型任务/);
+    }
+    assert.match(renderSecondary(inactive),/索引任务","空闲/);
+    assert.match(renderSecondary(inactive),/当前没有模型任务/);
+    assert.match(renderSecondary({summary:{model_operation:{active:false},retrieval_index:{scheduled:true,running:false}}}),/索引任务","已安排/);
+    assert.match(renderSecondary({summary:{model_operation:{active:true,phase:"index-load"},retrieval_index:{scheduled:false,running:true}}}),/索引任务","正在构建.*index-load/);
+    const modes = [...indexing["[data-mode-selector]"].innerHTML.matchAll(/data-mode-select="([^"]+)"/g)].map((match)=>match[1]);
+    assert.deepEqual(modes,["balanced","performance"]);
+
     const models = {
-      ctx:{desktop:desktop(),refresh:async()=>{}}, root:{isConnected:true}, modelID:"m3",
-      switchInFlight:false, switchingVariant:"", stateOverride:null,lastVerifiedAt:null,
+      ctx:{desktop:desktop(),statusScope:scope,status:{summary:{model_operation:{active:false}}},refresh:async()=>{}}, root:{isConnected:true}, modelID:"m3",
+      switchInFlight:false, switchingVariant:"", stateOverride:null,lastVerification:null,
       PAGE_STATES:{ERROR:"error",FALLBACK:"fallback",UNCONFIRMED:"unconfirmed"},runtimeModelScope,modelSwitchBlock,modelSwitchUnconfirmed,applyEngineChoice,
       adoptProfileState(){ assert.fail("unbound model action observed peer progress"); },
       renderDynamic(){}, renderVariants(){},
       notify:(message,isError)=>models.notices.push([message,isError]),notices:[],
     };
-    let modelsAction = modulePart(modelsSource,"  async function applyEngineAfterDownload(","  // Host configuration");
+    let modelsAction = slotGate + modulePart(modelsSource,"  async function applyEngineAfterDownload(","  // Host configuration");
     responses = [ok(S()),ok("切换任务已提交")];
     await vm.runInNewContext(modelsAction+'\napplyEngineAfterDownload({title:"均衡",variant:"quantized"},"cpu")',models);
-    assert.equal(models.lastVerifiedAt,null);
+    assert.equal(models.lastVerification,null);
     assert.equal(models.stateOverride,null,"unconfirmed is not marked failed");
     assert.equal(modelSwitchUnconfirmed(models.ctx),true,"unresolved is retained independently of mode/view state");
     from = calls.length;
     await vm.runInNewContext(modelsAction+'\napplyEngineAfterDownload({title:"different",variant:"fp16"},"gpu")',models);
     assert.equal(calls.length,from,"an advanced or new mode click cannot resend while unresolved");
-    const enabled = modulePart(modelsSource,"  function engineEnabled(","  function engineChips(");
+    const enabled = modulePart(modelsSource,"  function engineEnabled(","  function activeSelection(");
     assert.equal(vm.runInNewContext(enabled+'\nengineEnabled("cpu",false)',models),false);
     assert.match(models.notices[0][0],/尚未确认.*不要重复提交/);
     const oldDownloadScope = {
-      ctx:{desktop:desktop()}, root:{isConnected:true}, switchInFlight:false,stateOverride:null,modelID:"m3",
+      ctx:{desktop:desktop(),statusScope:scope,status:{summary:{model_operation:{active:false}}}},
+      root:{isConnected:true}, switchInFlight:false,stateOverride:null,modelID:"m3",
+      currentModelTask:()=>null,localModelDownload,
       runtimeModelScope,modelSwitchBlock,modelSwitchUnconfirmed,isProfileModel:id=>id!=="m3",currentMode:()=>MODEL_MODES[0],
       inventory:{tokenizer_installed:true,cpu_container_ready:false},modeVariant:()=>({installed:true}),
       currentMirror:()=>"auto",renderDynamic(){},
@@ -179,7 +345,7 @@ async function main() {
       fetchInventory(){assert.fail("the detached account's download must not continue");},
       applyEngineAfterDownload(){assert.fail("the detached account's download must not start a switch");},
     };
-    const primaryAction = modulePart(modelsSource,"  async function handlePrimaryAction(","  async function applyEngineAfterDownload(");
+    const primaryAction = slotGate + modulePart(modelsSource,"  async function handlePrimaryAction(","  async function applyEngineAfterDownload(");
     await vm.runInNewContext(primaryAction+'\nhandlePrimaryAction()',oldDownloadScope);
     const deniedClicks = [], locked = desktop();
     locked.health.credential_state = "required";
@@ -196,32 +362,75 @@ async function main() {
       {...models,ctx:{desktop:locked}}),false);
     assert.equal(vm.runInNewContext(enabled+'\nengineEnabled("cpu",false)',
       {...models,ctx:{desktop:desktop()},graniteVariant:()=>false,
-        engineAvailable,engineCapabilities:()=>({})}),true);
+        engineAvailable,engineCapabilities:()=>({}),runtimeActivationBlock:()=>"",localModelDownload,currentModelTask:()=>null}),true);
+
+    // Combined primary action uses the same real slot guard before and after
+    // the modal; independent downloads above need not stop during indexing.
+    const applyOnly = modulePart(modelsSource,"  async function applyEngineAfterDownload(","  // Host configuration");
+    for (const transition of ["already-indexing","index-starts-after-download","scope-stale-after-download","still-free"]) {
+      let downloads=0, activations=0;
+      const notices=[];
+      const ctx={
+        desktop:desktop(), statusScope:scope, refresh:async()=>{},
+        status:{summary:{model_operation:{active:transition === "already-indexing",phase:"index-load"}}},
+      };
+      const fixture = {
+        ctx, root:{isConnected:true}, switchInFlight:false,stateOverride:null,modelID:"m3",
+        runtimeModelScope,modelSwitchBlock,modelSwitchUnconfirmed,isProfileModel:()=>false,
+        currentMode:()=>MODEL_MODES[0], inventory:{tokenizer_installed:true,cpu_container_ready:false},
+        modeVariant:()=>({installed:true}), currentMirror:()=>"auto", renderDynamic(){}, renderVariants(){},
+        currentModelTask:()=>null, localModelDownload, notify:(msg)=>notices.push(msg),
+        openDownloadModal:()=>({done:Promise.resolve().then(()=>{
+          downloads++;
+          if (transition === "index-starts-after-download")
+            ctx.status.summary.model_operation = {active:true,phase:"index-load",id:"background"};
+          if (transition === "scope-stale-after-download") ctx.statusScope = "stale";
+          return true;
+        })}),
+        fetchInventory:async()=>installed, applyEngineChoice:async()=>{
+          activations++; return {unconfirmed:true,warning:"fixture stop"};
+        },
+      };
+      await vm.runInNewContext(primaryAction+applyOnly+'\nhandlePrimaryAction()',fixture);
+      assert.equal(downloads,transition === "already-indexing" ? 0 : 1,transition);
+      assert.equal(activations,transition === "still-free" ? 1 : 0,transition);
+      assert.match(notices.at(-1), transition === "still-free" ? /fixture stop/ : /当前任务/,transition);
+    }
 
     // A baseline download may finish after an observed lock or account move.
     // Only its own deliberate, uninterrupted scoped intent can enqueue prep.
-    const baselineDownload = modulePart(modelsSource,"  async function downloadBaseline(","  async function applyEngineAfterDownload");
+    const baselineDownload = slotGate + baselineRules + modulePart(modelsSource,"  async function downloadBaseline(","  async function applyEngineAfterDownload");
     const observeBaseline = modulePart(modelsSource,"  function update() {","    const s =") + "\n  }";
-    for (const transition of ["same","locked-then-unlock","account-B","A-lock-A","cancel","incomplete"]) {
+    for (const transition of ["same","locked-then-unlock","account-B","A-lock-A","cancel","incomplete","index-started","already-indexing","wrong-download-target","non-M3-at-start"]) {
       const writes = [], messages = [];
       let finishDownload;
       const options = {
-        ctx:{desktop:desktop(),refresh:async()=>{}}, root:{isConnected:true}, modelID:"m3",
-        baselineIntent:null, runtimeModelScope,modelSwitchUnconfirmed,load:()=>{},
+        ctx:{desktop:desktop(),statusScope:scope,status:{summary:{model_operation:{active:false}}},refresh:async()=>{}},
+        root:{isConnected:true}, modelID:"m3", switchInFlight:false,
+        baselineIntent:null, inventory:tokenizerOnly, runtimeModelScope,modelSwitchUnconfirmed,load:()=>{},
         confirm:async()=>true,
-        fetchInventory:async()=>({tokenizer_installed:true,cpu_container_ready:true,
+        fetchInventory:async()=>({model:transition==="wrong-download-target"?"granite-97m-r2":"m3",tokenizer_installed:true,cpu_container_ready:true,
           variants:[{name:"quantized",installed:transition!=="incomplete"}]}),
         openDownloadModal:()=>({done:new Promise(resolve=>{finishDownload=resolve;})}),
         notify:(message)=>messages.push(message),
         execute:async (name, args)=>writes.push([name,args.mirror]),
       };
       if (transition === "locked-then-unlock") options.ctx.desktop.health.credential_state = "required";
+      if (transition === "already-indexing") options.ctx.status.summary.model_operation = {active:true,phase:"index-load"};
+      if (transition === "non-M3-at-start") options.modelID = "granite-97m-r2";
       const ownership = vm.createContext(options);
       const pending = vm.runInContext(baselineDownload+observeBaseline+'\ndownloadBaseline("auto")',ownership);
       await new Promise(setImmediate);
+      if (transition === "non-M3-at-start") {
+        await pending;
+        assert.equal(finishDownload,undefined);
+        assert.deepEqual(writes,[]);
+        continue;
+      }
       assert.equal(typeof finishDownload,"function",transition);
       if (transition === "locked-then-unlock") options.ctx.desktop.health.credential_state = "available";
       if (transition === "account-B") options.ctx.desktop.health.account_id = "b";
+      if (transition === "index-started") options.ctx.status.summary.model_operation = {active:true,phase:"index-load"};
       if (transition === "A-lock-A") {
         options.ctx.desktop.health.credential_state = "required";
         vm.runInContext("update()",ownership);
