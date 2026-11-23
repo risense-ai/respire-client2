@@ -36,13 +36,16 @@ import {
   readProfileState,
   applyEngineChoice,
   engineCapabilities,
+  runtimeModelScope,
+  modelSwitchBlock,
+  modelSwitchUnconfirmed,
+  switchID,
   localModelDownload,
   modelActivity,
   cancelDisplayedModelWork,
   fetchModelDownloadTask,
   watchModelDownloadTask,
   waitForProfileSwitch,
-  switchFailure,
   switchProgressLabel,
   openDownloadModal,
 } from "./model-kit.js";
@@ -59,6 +62,8 @@ const PAGE_STATES = {
   IDLE: "idle",
   READY: "ready",
   FALLBACK: "fallback",
+  UNCONFIRMED: "unconfirmed",
+  BLOCKED: "blocked",
   ERROR: "error",
 };
 
@@ -112,6 +117,19 @@ const STATE_CONFIG = {
     buttonText: "重试",
     buttonClass: "primary",
   },
+  [PAGE_STATES.UNCONFIRMED]: {
+    icon: "…",
+    title: "本次切换结果尚未确认",
+    description: "请刷新查看 Runtime 当前状态，不要重复提交原请求。",
+    buttonText: "结果待确认",
+    buttonClass: "disabled",
+  },
+  [PAGE_STATES.BLOCKED]: {
+    icon: "…",
+    title: "暂不能启用模型",
+    buttonText: "暂不能启用",
+    buttonClass: "disabled",
+  },
   [PAGE_STATES.ERROR]: {
     icon: "✗",
     title: "模型异常",
@@ -151,8 +169,7 @@ export function models(root, ctx) {
     inventory = null,
     loaded = false,
     loading = false,
-    sawMissingBaseline = false,
-    baselinePrepared = false,
+    baselineIntent = null,
     modelID = localStorage.getItem("respire-model") || "m3",
     profileState = null,
     modelTask = null,
@@ -232,6 +249,7 @@ export function models(root, ctx) {
   // the wizard via model-kit; the OS check is an entry gate, not hardware
   // detection.
   function engineEnabled(engine, opActive) {
+    if (modelSwitchBlock(ctx) || modelSwitchUnconfirmed(ctx)) return false;
     if (opActive) return false;
     if (graniteVariant(modelID) && engine !== "cpu") return false;
     return engineAvailable(ctx.desktop?.platform, engine, engineCapabilities(ctx));
@@ -258,6 +276,11 @@ export function models(root, ctx) {
   function renderEngineHint() {
     const node = $("[data-engine-hint]", root);
     if (!node) return;
+    const blocked = modelSwitchBlock(ctx);
+    if (blocked) {
+      node.textContent = blocked;
+      return;
+    }
     const platform = ctx.desktop?.platform || "";
     const entries = [
       `CPU 可用`,
@@ -351,7 +374,7 @@ export function models(root, ctx) {
     }
     area.innerHTML = inventory.tokenizer_installed
       ? `<span class="hint">基础文件已就绪 · 模型目录 <code>${h(inventory.model_dir)}</code></span>`
-      : `<button data-model="prepare" class="primary">下载并准备基础模型</button><span class="hint">首次使用需下载基础文件（quantized 权重 + 分词器，约 ${h(bytes(quantizedBytes()))}）并构建索引。</span>`;
+      : `<button data-model="prepare" class="primary">${modelSwitchBlock(ctx) || modelSwitchUnconfirmed(ctx) ? "下载基础文件" : "下载并准备基础模型"}</button><span class="hint">首次使用需下载基础文件（quantized 权重 + 分词器，约 ${h(bytes(quantizedBytes()))}）。启用模型后才能构建索引。</span>`;
   }
   function quantizedBytes() {
     const quantized = (inventory?.variants || []).find(
@@ -392,6 +415,7 @@ export function models(root, ctx) {
     return inventory ? PAGE_STATES.READY : PAGE_STATES.IDLE;
   }
   function effectivePageState() {
+    if (modelSwitchBlock(ctx)) return PAGE_STATES.BLOCKED;
     const computed = computePageState();
     // A sticky FALLBACK/ERROR survives idle recomputation (that is exactly
     // when it must stay visible). Old in-flight snapshots may briefly show
@@ -401,7 +425,7 @@ export function models(root, ctx) {
       computed === PAGE_STATES.SWITCHING
     )
       return computed;
-    return stateOverride || computed;
+    return modelSwitchUnconfirmed(ctx) ? PAGE_STATES.UNCONFIRMED : stateOverride || computed;
   }
   function renderStatusCard() {
     const node = $("[data-status-card]", root);
@@ -411,7 +435,7 @@ export function models(root, ctx) {
     const activeMode = MODEL_MODES.find(
       (mode) => mode.id === modeForVariant(engineState.model),
     );
-    node.innerHTML = `<div class="status-card ${state}"><div class="status-icon">${config.icon}</div><div class="status-body"><strong>${h(config.title)}</strong><span class="hint">${h(config.description)}</span></div><div class="status-meta"><span class="mode-tag">${h(activeMode?.title || "—")} · ${h(engineState.engine.toUpperCase())}</span>${lastVerifiedAt ? `<span class="hint">${h("上次验证 " + date(lastVerifiedAt.toISOString()))}</span>` : ""}</div></div>`;
+    node.innerHTML = `<div class="status-card ${state}"><div class="status-icon">${config.icon}</div><div class="status-body"><strong>${h(config.title)}</strong><span class="hint">${h(state === PAGE_STATES.BLOCKED ? modelSwitchBlock(ctx) : config.description)}</span></div>${state === PAGE_STATES.BLOCKED ? "" : `<div class="status-meta"><span class="mode-tag">${h(activeMode?.title || "—")} · ${h(engineState.engine.toUpperCase())}</span>${lastVerifiedAt ? `<span class="hint">${h("上次验证 " + date(lastVerifiedAt.toISOString()))}</span>` : ""}</div>`}</div>`;
   }
   function renderModeSelector() {
     const node = $("[data-mode-selector]", root);
@@ -428,11 +452,10 @@ export function models(root, ctx) {
   function renderPrimaryAction() {
     const node = $("[data-primary-action]", root);
     if (!node) return;
-    const config = STATE_CONFIG[effectivePageState()];
-    const idle =
-      effectivePageState() === PAGE_STATES.DOWNLOADING ||
-      effectivePageState() === PAGE_STATES.SWITCHING ||
-      effectivePageState() === PAGE_STATES.READY;
+    const state = effectivePageState();
+    const config = STATE_CONFIG[state];
+    const idle = state === PAGE_STATES.DOWNLOADING || state === PAGE_STATES.SWITCHING ||
+      state === PAGE_STATES.UNCONFIRMED || state === PAGE_STATES.BLOCKED || state === PAGE_STATES.READY;
     node.innerHTML = `<div data-mode-progress hidden></div><button type="button" class="${config.buttonClass}" data-mode-apply${idle ? " disabled" : ""}>${h(config.buttonText)}</button>`;
     updateModeProgress();
   }
@@ -475,6 +498,7 @@ export function models(root, ctx) {
     const variant = modeVariant(currentMode());
     const key = [
       effectivePageState(),
+      modelSwitchBlock(ctx),
       selectedMode,
       engineState.engine,
       engineState.model,
@@ -505,8 +529,15 @@ export function models(root, ctx) {
     renderDynamic(true);
   }
   async function handlePrimaryAction() {
-    if (switchInFlight) return;
-    const targetModel = modelID;
+    if (switchInFlight || modelSwitchUnconfirmed(ctx)) return;
+    const targetModel = modelID, scope = runtimeModelScope(ctx);
+    const blocked = modelSwitchBlock(ctx);
+    if (blocked) {
+      notify(blocked, true);
+      return;
+    }
+    const isCurrent = () => root.isConnected && targetModel === modelID && scope === runtimeModelScope(ctx);
+    if (!isCurrent()) return;
     const picked = currentMode();
     const engine = picked.engine === "auto"
       ? detectBestEngine(ctx.desktop?.platform, engineCapabilities(ctx)) : picked.engine;
@@ -520,9 +551,9 @@ export function models(root, ctx) {
         label: mode.title,
         getMirror: currentMirror,
       }).done;
-      if (!completed || !root.isConnected || modelID !== targetModel) return;
+      if (!completed || !isCurrent()) return;
       const fresh = await fetchInventory(targetModel);
-      if (!root.isConnected || modelID !== targetModel) return;
+      if (!isCurrent()) return;
       inventory = fresh;
     }
     const variant = modeVariant(mode);
@@ -539,20 +570,67 @@ export function models(root, ctx) {
         label: mode.title,
         getMirror: currentMirror,
       }).done;
+      if (!isCurrent()) return;
       const fresh = await fetchInventory(targetModel).catch(() => null);
-      if (!root.isConnected || modelID !== targetModel) return;
+      if (!isCurrent()) return;
       if (fresh) inventory = fresh;
       if (downloaded && inventory?.tokenizer_installed && modeVariant(mode)?.installed &&
           (!cpuBaseline || inventory.cpu_container_ready))
-        await applyEngineAfterDownload(mode, engine);
+        await applyEngineAfterDownload(mode, engine, scope);
       else renderDynamic(true);
       return;
     }
-    await applyEngineAfterDownload(mode, engine);
+    await applyEngineAfterDownload(mode, engine, scope);
   }
-  async function applyEngineAfterDownload(mode, engine) {
-    if (switchInFlight) return;
+  async function downloadBaseline(mirror) {
+    const scope = modelSwitchUnconfirmed(ctx) ? null : runtimeModelScope(ctx);
+    const intent = { scope, model: modelID };
+    baselineIntent = intent;
+    const sameIntent = () => root.isConnected && baselineIntent === intent &&
+      Boolean(scope) && scope === runtimeModelScope(ctx) &&
+      intent.model === modelID && !modelSwitchUnconfirmed(ctx);
+    try {
+      const confirmed = await confirm(
+        scope ? "下载并准备基础模型" : "下载基础文件",
+        "将下载量化权重、分词器和所需的 CPU 容器到本机模型目录。已校验的文件会跳过。" +
+          (scope ? "同一 Runtime 账户可用时，完成后会安排索引。" : "仅下载本机文件，不会启用模型或安排索引。"),
+        "开始下载",
+      );
+      if (!confirmed || !root.isConnected || intent.model !== modelID) return;
+      const { done } = openDownloadModal({
+        model: intent.model,
+        engine: "cpu",
+        variant: "baseline",
+        label: "基础文件（quantized + 分词器）",
+        getMirror: () => mirror,
+        onDone: () => load(),
+      });
+      if (!(await done) || !root.isConnected) return;
+      const filesOnly = () => notify("基础文件已下载；未启用模型或安排索引。请在确认 Runtime 账户后手动启用。");
+      if (!sameIntent()) return filesOnly();
+      const fresh = await fetchInventory(intent.model);
+      if (!sameIntent()) {
+        if (root.isConnected) filesOnly();
+        return;
+      }
+      if (!fresh.tokenizer_installed || !fresh.cpu_container_ready ||
+          !fresh.variants.some((variant) => variant.name === "quantized" && variant.installed)) {
+        notify("基础文件尚未确认齐全，未安排索引。", true);
+        return;
+      }
+      await execute("model_prepare", { mirror: mirror || "auto" });
+      if (sameIntent()) notify("基础模型已就绪，索引已安排");
+      await ctx.refresh();
+    } finally {
+      if (baselineIntent === intent) baselineIntent = null;
+    }
+  }
+  async function applyEngineAfterDownload(mode, engine, scope = runtimeModelScope(ctx)) {
+    if (switchInFlight || modelSwitchUnconfirmed(ctx)) return;
     const targetModel = modelID;
+    const isCurrent = () => root.isConnected && Boolean(scope) &&
+      targetModel === modelID && scope === runtimeModelScope(ctx);
+    if (!isCurrent()) return;
     try {
       switchInFlight = true;
       switchingVariant = mode.variant;
@@ -563,8 +641,13 @@ export function models(root, ctx) {
         engine,
         variant: mode.variant,
         onTick: adoptProfileState,
+        ctx,
+        isCurrent,
       });
-      if (result.fallback || result.failed) {
+      if (!isCurrent()) return;
+      if (result.unconfirmed) {
+        notify(result.warning, true);
+      } else if (result.fallback || result.failed) {
         // Reflect what the runtime actually fell back to; the mode tag and
         // the status card must not advertise the failed selection.
         if (modelID === targetModel && result.envelope)
@@ -582,8 +665,10 @@ export function models(root, ctx) {
           result.envelope,
         );
     } catch (error) {
-      stateOverride = PAGE_STATES.ERROR;
-      notify(error.message, true);
+      if (isCurrent()) {
+        stateOverride = PAGE_STATES.ERROR;
+        notify(error.message, true);
+      }
     } finally {
       switchInFlight = false;
       switchingVariant = "";
@@ -720,6 +805,8 @@ export function models(root, ctx) {
     renderBaseline();
   }
   function update() {
+    if (baselineIntent && (baselineIntent.model !== modelID ||
+        baselineIntent.scope !== runtimeModelScope(ctx))) baselineIntent = null;
     const s = ctx.status?.summary || {},
       health = ctx.desktop?.health || {},
       inference = health.inference || {},
@@ -751,21 +838,6 @@ export function models(root, ctx) {
     updateVariantsProgress();
     renderDynamic();
     renderEngineHint();
-    // Ask Runtime to verify and index after all CPU baseline files arrive.
-    if (inventory && modelID === "m3") {
-      const baselineReady = inventory.tokenizer_installed && inventory.cpu_container_ready &&
-        inventory.variants.some((variant) => variant.name === "quantized" && variant.installed);
-      if (!baselineReady) sawMissingBaseline = true;
-      else if (sawMissingBaseline && !baselinePrepared) {
-        baselinePrepared = true;
-        const mirror = currentMirror();
-        execute("model_prepare", {
-          mirror: mirror && mirror !== "auto" ? mirror : "auto",
-        })
-          .then(() => notify("基础模型已就绪，索引已安排"))
-          .catch((error) => notify(error.message, true));
-      }
-    }
   }
   async function load() {
     if (loading || !ctx.desktop?.connected) return;
@@ -924,18 +996,14 @@ export function models(root, ctx) {
     if (root.isConnected) renderVariants();
   }
   async function resumePendingSwitch(switchState) {
+    const expectedId = switchID(switchState), scope = runtimeModelScope(ctx);
+    const isCurrent = () => root.isConnected && Boolean(scope) && scope === runtimeModelScope(ctx);
+    if (!expectedId || !isCurrent()) return;
     switchInFlight = true;
     try {
-      const verdict = await waitForProfileSwitch({
-        tracking: { expectedId: switchState.id ?? switchState.task_id ?? null, sawPending: true },
-        onTick: adoptProfileState,
-      });
-      if (!verdict.failed) lastVerifiedAt = new Date();
-      else stateOverride = PAGE_STATES.ERROR;
-      notify(verdict.timeout
-        ? "模型切换状态等待超时，请到本页查看最终结果。"
-        : verdict.failed ? switchFailure(verdict.details) : "模型切换完成，实际推理验证通过。",
-      verdict.failed);
+      // This task predates this page. Observe it by ID, but do not attribute
+      // successful verification or a user-facing receipt to a new click.
+      await waitForProfileSwitch({ tracking: { expectedId }, onTick: adoptProfileState, isCurrent });
     } finally {
       switchInFlight = false;
       if (root.isConnected) {
@@ -964,6 +1032,11 @@ export function models(root, ctx) {
     const apply = event.target.closest("[data-apply]");
     if (apply) {
       action(apply, async () => {
+        const blocked = modelSwitchBlock(ctx);
+        if (blocked) {
+          notify(blocked, true);
+          return;
+        }
         const engine = apply.dataset.engine;
         const variant = apply.dataset.variant;
         const activity = modelActivity({ task: currentModelTask(), operation: ctx.status?.summary?.model_operation, switching: switchInFlight });
@@ -986,24 +1059,8 @@ export function models(root, ctx) {
       let result;
       const mirror = currentMirror();
       if (operation === "prepare") {
-        if (
-          !(await confirm(
-            "下载基础模型",
-            "将下载量化权重、分词器和所需的 CPU 容器到本机模型目录。已校验的文件会跳过。",
-            "开始下载",
-          ))
-        )
-          return;
-        sawMissingBaseline = true;
-        openDownloadModal({
-          model: modelID,
-          engine: "cpu",
-          variant: "baseline",
-          label: "基础文件（quantized + 分词器）",
-          getMirror: currentMirror,
-          onDone: () => load(),
-        });
-        await ctx.refresh();
+        await downloadBaseline(mirror);
+        return;
       } else if (operation === "download") {
         const variant = button.dataset.variant;
         const size = inventory?.variants?.find(

@@ -210,35 +210,64 @@ func (m *Manager) runtimeRPC(ctx context.Context, method string, args []string) 
 		"method": method,
 		"args":   args,
 	}
+	// Check the scope before submitting a switch. From the POST onward, a
+	// transport/protocol error cannot tell us whether the Runtime acted.
+	var scope *runtimeScope
+	if method == "model.switch" {
+		var err error
+		scope, err = m.requestScope(ctx)
+		if err != nil {
+			return nil, err
+		}
+		body["scope"] = scope
+	}
+	afterDispatch := func(cause error) error {
+		if scope != nil {
+			return &unconfirmedError{id, cause}
+		}
+		return cause
+	}
 	raw, err := m.localRequest(ctx, "POST", "/api/rpc", body)
 	if err != nil {
-		return nil, err
+		return nil, afterDispatch(err)
 	}
 	var reply rpcResponse
 	if err := json.Unmarshal(raw, &reply); err != nil {
-		return nil, fmt.Errorf("runtime RPC 响应无法解析: %w", err)
+		return nil, afterDispatch(fmt.Errorf("runtime RPC 响应无法解析: %w", err))
 	}
+	bound := scope != nil && reply.Scope != nil && *reply.Scope == *scope &&
+		reply.V == 1 && reply.ID == id && reply.OperationID == id
+	var envelope runtimeEnvelopeState
+	_ = json.Unmarshal(reply.Envelope, &envelope)
 	if !reply.OK {
-		var envelope runtimeEnvelopeState
-		_ = json.Unmarshal(reply.Envelope, &envelope)
-		return nil, runtimeModelError("runtime RPC 调用失败", reply.Error, reply.Errors, envelope)
+		rejection := runtimeModelError("runtime RPC 调用失败", reply.Error, reply.Errors, envelope)
+		if scope != nil && (!bound || !modelSwitchPreDispatchRejection(reply.Code)) {
+			return nil, afterDispatch(rejection)
+		}
+		return nil, rejection
 	}
 	if len(reply.Envelope) == 0 {
 		return json.RawMessage("{}"), nil
 	}
-	var envelope runtimeEnvelopeState
-	_ = json.Unmarshal(reply.Envelope, &envelope)
 	if envelope.Status == "fail" {
-		return nil, runtimeModelError("runtime 拒绝了模型操作", reply.Error, reply.Errors, envelope)
+		return nil, afterDispatch(runtimeModelError("runtime 拒绝了模型操作", reply.Error, reply.Errors, envelope))
 	}
-	if method == "model.switch" && switchReceiptID(reply.Envelope) != "" {
-		scope, _ := body["scope"].(*runtimeScope)
-		if scope == nil || reply.Scope == nil || *reply.Scope != *scope || reply.V != 1 ||
-			reply.ID != id || reply.OperationID != id {
-			return nil, &unconfirmedError{id, errors.New("切换任务回执不是原 Runtime 请求；请检查当前状态")}
-		}
+	if taskID := switchReceiptID(reply.Envelope); scope != nil && taskID != "" &&
+		(!bound || taskID != id || reply.Exit != 0 || envelope.Status != "pending") {
+		return nil, afterDispatch(errors.New("切换任务回执不是原 Runtime 请求；请检查当前状态"))
 	}
 	return reply.Envelope, nil
+}
+
+// These published Runtime codes are emitted before model.switch can act.
+// An unknown code, including model_profile_failed, may follow a write.
+func modelSwitchPreDispatchRejection(code string) bool {
+	switch code {
+	case "scope_required", "scope_mismatch", "runtime_locked", "protocol_version_mismatch", "invalid_request_id", "runtime_maintenance":
+		return true
+	default:
+		return false
+	}
 }
 
 // ModelCatalogRPC reports the registry plus the active selection and any

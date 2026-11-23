@@ -39,6 +39,7 @@ const bindings = {
     return structuredClone(status);
   },
   appearance() { events.push('appearance'); },
+  wizard: { updateModelConfirmation() {} },
   view: { update() {
     events.push('view.update'); published?.(ctx);
     if (renderRejection) return Promise.reject(renderRejection);
