@@ -148,6 +148,14 @@ export function engineAvailable(platform, engine, capabilities) {
   return false;
 }
 
+export function runtimeModelScope(ctx) {
+  const health = ctx.desktop?.health;
+  return ctx.desktop?.connected && health?.credential_state !== "required" &&
+    health?.account_id && health.instance_id && health.generation && health.data_dir
+    ? JSON.stringify([health.account_id, health.instance_id, health.generation, health.data_dir])
+    : null;
+}
+
 export function engineCapabilities(ctx) {
   return ctx.status?.summary?.model_engine_capabilities ?? ctx.desktop?.engine?.capabilities;
 }
@@ -273,68 +281,76 @@ export async function applyLegacyEngine(engine, variant) {
   return { envelope, result: summary(envelope) };
 }
 
-function switchID(value) {
-  return value?.id ?? value?.task_id ?? value?.details?.id ?? value?.summary?.id ?? null;
+export function switchID(value) {
+  const id = value?.id ?? value?.task_id ?? value?.details?.id ?? value?.summary?.id;
+  return typeof id === "string" && id.trim() ? id : null;
 }
 
 async function requestProfileSwitch(model, engine, variant) {
-  const response = await fetch("/api/model-switch", {
-    method: "POST",
-    headers: { "Content-Type": "application/json", "X-Respire-Client": "1" },
-    body: JSON.stringify({ model, engine, variant, receipt: true }),
-  });
-  if ([404, 405, 501].includes(response.status))
-    throw Object.assign(new Error("旧版桌面宿主不提供模型切换接口。"), { switchUnsupported: true });
-  const data = await response.json();
-  if (!response.ok || !data.ok) {
-    const message = data.error || `请求失败 (${response.status})`;
-    const switchUnsupported = /^(?:未知 API|不支持的 RPC 方法|method not found)(?:: model\.switch)?$/i.test(message);
-    throw Object.assign(new Error(message), { switchUnsupported });
+  let response, data;
+  try {
+    response = await fetch("/api/model-switch", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Respire-Client": "1" },
+      body: JSON.stringify({ model, engine, variant, receipt: true }),
+    });
+    data = await response.json();
+  } catch (cause) {
+    throw Object.assign(new Error("未收到模型切换回执。", { cause }), { switchUnconfirmed: true });
+  }
+  if (!response.ok || data?.ok !== true) {
+    const message = data?.error || `请求失败 (${response.status})`;
+    // Only the shipped host's outer router can affirm the POST never had
+    // a handler. A generic status or Runtime message might follow dispatch.
+    const switchUnsupported = response.status === 404 && data?.ok === false &&
+      data.error === "unknown desktop action" && Object.keys(data).length === 2;
+    const switchUnconfirmed = response.status >= 500 || typeof data?.ok !== "boolean" ||
+      (typeof message === "string" && /^请求 [^\s]+ 的结果尚未确认/.test(message));
+    throw Object.assign(new Error(message), { switchUnsupported, switchUnconfirmed });
   }
   return data.result;
 }
 
-export async function submitProfileSwitch(model, engine, variant) {
+function ensureCurrentSwitch(isCurrent) {
+  if (!isCurrent()) throw new Error("当前账户或模型选择已变化，未继续提交模型切换。");
+}
+
+export async function submitProfileSwitch(model, engine, variant, isCurrent = () => true) {
+  ensureCurrentSwitch(isCurrent);
   const snapshot = await fetchProfileState();
+  ensureCurrentSwitch(isCurrent);
   const prior = readProfileState(snapshot).switchState;
   if ((prior.state ?? prior.status) === "pending") throw new Error("已有模型切换任务，等待原任务完成后再试。");
   if (isProfileModel(model)) await api("model-configure", { model, variant });
+  ensureCurrentSwitch(isCurrent);
   const receipt = await requestProfileSwitch(model, engine, variant);
-  return { expectedId: switchID(receipt), priorId: switchID(prior),
-    priorKnown: Boolean(snapshot), model, engine, sawPending: false };
+  return { expectedId: switchID(receipt) };
 }
 
-// A switch receipt is authoritative only for the accepted task, not a stale
-// global progress snapshot. Old hosts omit the ID in their POST response;
-// accept a fresh server ID or a pending→terminal transition on those hosts.
-export function profileStateSettled(state, tracking) {
-  const { switchState, active } = readProfileState(state);
-  const id = switchID(switchState);
+function matchingSwitchState(state, tracking) {
+  const progress = state?.progress;
+  if (progress?.command !== "model.progress" || progress.status !== "ok" || !tracking?.expectedId)
+    return null;
+  const details = readProfileState(state);
+  return switchID(details.switchState) === tracking.expectedId ? details : null;
+}
+
+function switchVerdict(details) {
+  const switchState = details?.switchState;
+  if (!switchState) return { settled: false, failed: false };
   const phase = String(switchState.state || switchState.status || "").toLowerCase();
-  if (!tracking) return { settled: false, failed: false };
-  if (tracking.expectedId != null && String(id) !== String(tracking.expectedId))
-    return { settled: false, failed: false };
-  if (tracking.expectedId == null) {
-    if (id != null && String(id) === String(tracking.priorId))
-      return { settled: false, failed: false };
-    if (phase === "pending" && (!tracking.model || switchState.target === tracking.model))
-      tracking.sawPending = true;
-    // A fast legacy completion can be confirmed without sampling pending only
-    // when a known different task was superseded and the selected model agrees.
-    const fastCompletion = tracking.priorKnown && id != null && phase === "ready" &&
-      active?.model === tracking.model && active?.engine === tracking.engine;
-    if (!tracking.sawPending && !fastCompletion) return { settled: false, failed: false };
-    if (id == null && phase === "ready" && tracking.model &&
-        (active?.model !== tracking.model || active?.engine !== tracking.engine))
-      return { settled: false, failed: false };
-    if (id != null) tracking.expectedId = id;
-  }
   const failed = ["failed", "cancelled", "canceled"].includes(phase);
   return { settled: failed || phase === "ready", failed };
 }
 
+export function profileStateSettled(state, tracking) {
+  return switchVerdict(matchingSwitchState(state, tracking));
+}
+
 export function switchProgressLabel(state) {
-  const { operation, switchState } = readProfileState(state);
+  const { operation: progress, switchState } = readProfileState(state);
+  const id = switchID(switchState);
+  const operation = id && id === switchID(progress) ? progress : {};
   const phase = {
     queued: "排队中",
     "switch-verify": "验证权重",
@@ -359,16 +375,21 @@ export function switchFailure(state) {
   return `模型切换失败${switchState?.error ? `：${switchState.error}` : ""}；${detail}`;
 }
 
-export async function waitForProfileSwitch({ tracking, onTick, timeoutMs = 15 * 60_000 } = {}) {
+export async function waitForProfileSwitch({ tracking, onTick, timeoutMs = 15 * 60_000,
+  isCurrent = () => true } = {}) {
+  const unknown = { settled: false, failed: false, unconfirmed: true, details: {} };
+  if (!tracking?.expectedId) return unknown;
   const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
+  while (Date.now() < deadline && isCurrent()) {
     const state = await fetchProfileState();
-    onTick?.(state);
-    const verdict = profileStateSettled(state, tracking);
-    if (verdict.settled) return { ...verdict, details: readProfileState(state) };
+    if (!isCurrent()) return unknown;
+    const details = matchingSwitchState(state, tracking);
+    if (details) onTick?.(state);
+    const verdict = switchVerdict(details);
+    if (verdict.settled) return { ...verdict, details };
     await new Promise((resolve) => setTimeout(resolve, 3000));
   }
-  return { settled: true, failed: true, details: {}, timeout: true };
+  return { ...unknown, timeout: isCurrent() };
 }
 
 // Download progress modal: live bytes, pause / resume / cancel, result.
@@ -551,28 +572,34 @@ export function fallbackMessage(engine, result) {
   return `${engine.toUpperCase()} 验证失败${reason}，已恢复切换前的 ${restored}；详情见应用结果。`;
 }
 
-export async function applyEngineChoice({ model, engine, variant, onTick }) {
+const switchUnconfirmedNotice = "模型切换请求的结果尚未确认。请刷新查看 Runtime 当前状态；不要重复提交。";
+
+export async function applyEngineChoice({ model, engine, variant, onTick, isCurrent = () => true }) {
   try {
-    const tracking = await submitProfileSwitch(model, engine, variant);
-    const verdict = await waitForProfileSwitch({ tracking, onTick });
-    const { active } = verdict.details;
+    const tracking = await submitProfileSwitch(model, engine, variant, isCurrent);
+    const verdict = await waitForProfileSwitch({ tracking, onTick, isCurrent });
+    // Published typed terminal results identify their own selection;
+    // catalog.active may already reflect a subsequent unrelated request.
+    const selection = verdict.details.switchState?.result?.selection;
     return {
-      engine: active?.engine || engine,
-      variant: active?.variant || variant,
+      engine: selection?.engine || engine,
+      variant: selection?.variant || variant,
       fallback: false,
       failed: verdict.failed,
-      warning: verdict.failed
-        ? verdict.timeout
-          ? "模型切换等待超时，请在模型页查看最终状态。"
-          : switchFailure(verdict.details)
-        : "",
+      unconfirmed: verdict.unconfirmed,
+      warning: verdict.unconfirmed
+        ? switchUnconfirmedNotice
+        : verdict.failed ? switchFailure(verdict.details) : "",
       details: verdict.details,
     };
   } catch (error) {
     // Only an explicit unsupported interface is eligible for legacy M3.
     // Never resubmit after network failure or an ambiguous acceptance.
+    if (error.switchUnconfirmed)
+      return { engine, variant, fallback: false, failed: false, unconfirmed: true, warning: switchUnconfirmedNotice };
     if (model !== "m3" || !error.switchUnsupported) throw error;
   }
+  ensureCurrentSwitch(isCurrent);
   const { envelope, result } = await applyLegacyEngine(engine, variant);
   return {
     engine: result.engine,

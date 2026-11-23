@@ -29,6 +29,7 @@ import {
   DEVICES,
   engineAvailable,
   engineCapabilities,
+  runtimeModelScope,
   fetchModelDownloadTask,
   localModelDownload,
   fetchInventory,
@@ -794,8 +795,15 @@ export function createWizard(ctx) {
   }
 
   async function runExecute(startStage) {
-    if (state.executing) return;
-    state.executing = true;
+    if (!active() || state.executing) return;
+    const run = state, scope = runtimeModelScope(ctx);
+    const sameRun = () => state === run && active() && root.isConnected && run.step === "execute";
+    const isCurrent = () => sameRun() && Boolean(scope) && scope === runtimeModelScope(ctx);
+    if (!isCurrent()) {
+      if (sameRun()) failure(startStage, "Runtime 账户尚未确认，请重新连接后再继续。");
+      return;
+    }
+    run.executing = true;
     // The in-memory device/weight selection may be missing on a resumed
     // run; derive the device default so the download never uses a blank
     // variant name.
@@ -803,29 +811,15 @@ export function createWizard(ctx) {
       state.variant = graniteVariant(state.model) || DEVICE_VARIANTS[state.device] || "quantized";
     executeActions([]);
     try {
-      if (startStage === "download") {
-        if (!(await runDownloadStage())) {
-          if (state) state.executing = false;
-          return;
-        }
-      }
-      if (startStage === "download" || startStage === "enable") {
-        if (!(await runEnableStage())) {
-          if (state) state.executing = false;
-          return;
-        }
-      }
-      if (!(await runIndexStage())) {
-        if (state) state.executing = false;
-        return;
-      }
-      if (state) {
-        state.executing = false;
-        renderExecuteSuccess();
-      }
+      if (startStage === "download" && !(await runDownloadStage())) return;
+      if (!isCurrent()) return;
+      if ((startStage === "download" || startStage === "enable") && !(await runEnableStage(isCurrent))) return;
+      if (!isCurrent() || !(await runIndexStage())) return;
+      if (isCurrent()) renderExecuteSuccess();
     } catch (error) {
-      if (state) state.executing = false;
-      failure(startStage === "index" ? "index" : "probe", error.message);
+      if (isCurrent()) failure(startStage === "index" ? "index" : "probe", error.message);
+    } finally {
+      run.executing = false;
     }
   }
 
@@ -911,7 +905,7 @@ export function createWizard(ctx) {
     return false;
   }
 
-  async function runEnableStage() {
+  async function runEnableStage(isCurrent) {
     if (!engineAvailable(ctx.desktop?.platform, state.device, engineCapabilities(ctx))) {
       failure("load", "当前 Runtime 未确认所选计算设备，请返回选择其他设备。");
       return false;
@@ -924,13 +918,21 @@ export function createWizard(ctx) {
         model: state.model,
         engine: state.device,
         variant: state.variant,
+        isCurrent,
         onTick: (snapshot) => {
           const label = switchProgressLabel(snapshot);
-          if (label && state?.step === "execute") executeStatus(label);
+          if (label && isCurrent()) executeStatus(label);
         },
       });
     } catch (error) {
-      failure("load", error.message);
+      if (isCurrent()) failure("load", error.message);
+      return false;
+    }
+    if (!isCurrent()) return false;
+    if (outcome.unconfirmed) {
+      setStage("probe", "pending");
+      executeStatus(outcome.warning, true);
+      executeActions([["保存选择，退出到模型页", "exit-models"]]);
       return false;
     }
     if (outcome.failed) {

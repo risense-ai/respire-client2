@@ -46,13 +46,13 @@ func TestModelSwitchUsesRuntimeProfileRulesAndReceivesTask(t *testing.T) {
 				}
 				_ = json.NewEncoder(w).Encode(map[string]any{
 					"v": 1, "id": request.ID, "scope": request.Scope, "operation_id": request.ID, "ok": true,
-					"envelope": map[string]any{"status": "pending", "summary": map[string]string{"id": "task-from-host"}},
+					"envelope": map[string]any{"status": "pending", "summary": map[string]string{"id": request.ID}},
 				})
 			}))
 			defer origin.Close()
 			m := &Manager{Endpoint: origin.URL, localClient: origin.Client()}
 			receipt, err := m.ModelSwitchWithReceipt(t.Context(), tc.model, "cpu", tc.variant)
-			if err != nil || receipt.ID != "task-from-host" || receipt.Status != "pending" {
+			if err != nil || !strings.HasPrefix(receipt.ID, "client2-model-") || receipt.Status != "pending" {
 				t.Fatalf("not bound to Runtime task receipt: %+v, %v", receipt, err)
 			}
 		})
@@ -96,7 +96,7 @@ func TestModelRPCReportsActualSingleOrPluralError(t *testing.T) {
 }
 
 func TestModelSwitchRefusesUnboundTaskReceiptButPreservesLegacyNoID(t *testing.T) {
-	for _, bad := range []string{"scope", "request ID", "operation ID", ""} {
+	for _, bad := range []string{"scope", "request ID", "operation ID", "different task ID", ""} {
 		t.Run(bad, func(t *testing.T) {
 			origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				if r.URL.Path == "/api/health" {
@@ -111,7 +111,7 @@ func TestModelSwitchRefusesUnboundTaskReceiptButPreservesLegacyNoID(t *testing.T
 					t.Error(err)
 				}
 				reply := rpcResponse{V: 1, ID: request.ID, Scope: &request.Scope, OperationID: request.ID, OK: true,
-					Envelope: json.RawMessage(`{"status":"pending","summary":{"id":"task-from-host"}}`)}
+					Envelope: json.RawMessage(`{"command":"model.switch","status":"pending","summary":{"id":"` + request.ID + `"}}`)}
 				switch bad {
 				case "scope":
 					reply.Scope.Generation++
@@ -119,6 +119,8 @@ func TestModelSwitchRefusesUnboundTaskReceiptButPreservesLegacyNoID(t *testing.T
 					reply.ID = "other-request"
 				case "operation ID":
 					reply.OperationID = "other-operation"
+				case "different task ID":
+					reply.Envelope = json.RawMessage(`{"command":"model.switch","status":"pending","summary":{"id":"other-task"}}`)
 				default:
 					reply = rpcResponse{OK: true, Envelope: json.RawMessage(`{"status":"ok","summary":{}}`)}
 				}

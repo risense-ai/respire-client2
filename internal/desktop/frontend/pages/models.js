@@ -36,13 +36,14 @@ import {
   readProfileState,
   applyEngineChoice,
   engineCapabilities,
+  runtimeModelScope,
+  switchID,
   localModelDownload,
   modelActivity,
   cancelDisplayedModelWork,
   fetchModelDownloadTask,
   watchModelDownloadTask,
   waitForProfileSwitch,
-  switchFailure,
   switchProgressLabel,
   openDownloadModal,
 } from "./model-kit.js";
@@ -59,6 +60,7 @@ const PAGE_STATES = {
   IDLE: "idle",
   READY: "ready",
   FALLBACK: "fallback",
+  UNCONFIRMED: "unconfirmed",
   ERROR: "error",
 };
 
@@ -111,6 +113,13 @@ const STATE_CONFIG = {
     description: "验证失败，已回退到兼容模式",
     buttonText: "重试",
     buttonClass: "primary",
+  },
+  [PAGE_STATES.UNCONFIRMED]: {
+    icon: "…",
+    title: "本次切换结果尚未确认",
+    description: "请刷新查看 Runtime 当前状态，不要重复提交原请求。",
+    buttonText: "结果待确认",
+    buttonClass: "disabled",
   },
   [PAGE_STATES.ERROR]: {
     icon: "✗",
@@ -432,6 +441,7 @@ export function models(root, ctx) {
     const idle =
       effectivePageState() === PAGE_STATES.DOWNLOADING ||
       effectivePageState() === PAGE_STATES.SWITCHING ||
+      effectivePageState() === PAGE_STATES.UNCONFIRMED ||
       effectivePageState() === PAGE_STATES.READY;
     node.innerHTML = `<div data-mode-progress hidden></div><button type="button" class="${config.buttonClass}" data-mode-apply${idle ? " disabled" : ""}>${h(config.buttonText)}</button>`;
     updateModeProgress();
@@ -506,7 +516,9 @@ export function models(root, ctx) {
   }
   async function handlePrimaryAction() {
     if (switchInFlight) return;
-    const targetModel = modelID;
+    const targetModel = modelID, scope = runtimeModelScope(ctx);
+    const isCurrent = () => root.isConnected && targetModel === modelID && scope === runtimeModelScope(ctx);
+    if (!isCurrent()) return;
     const picked = currentMode();
     const engine = picked.engine === "auto"
       ? detectBestEngine(ctx.desktop?.platform, engineCapabilities(ctx)) : picked.engine;
@@ -520,9 +532,9 @@ export function models(root, ctx) {
         label: mode.title,
         getMirror: currentMirror,
       }).done;
-      if (!completed || !root.isConnected || modelID !== targetModel) return;
+      if (!completed || !isCurrent()) return;
       const fresh = await fetchInventory(targetModel);
-      if (!root.isConnected || modelID !== targetModel) return;
+      if (!isCurrent()) return;
       inventory = fresh;
     }
     const variant = modeVariant(mode);
@@ -539,20 +551,24 @@ export function models(root, ctx) {
         label: mode.title,
         getMirror: currentMirror,
       }).done;
+      if (!isCurrent()) return;
       const fresh = await fetchInventory(targetModel).catch(() => null);
-      if (!root.isConnected || modelID !== targetModel) return;
+      if (!isCurrent()) return;
       if (fresh) inventory = fresh;
       if (downloaded && inventory?.tokenizer_installed && modeVariant(mode)?.installed &&
           (!cpuBaseline || inventory.cpu_container_ready))
-        await applyEngineAfterDownload(mode, engine);
+        await applyEngineAfterDownload(mode, engine, scope);
       else renderDynamic(true);
       return;
     }
-    await applyEngineAfterDownload(mode, engine);
+    await applyEngineAfterDownload(mode, engine, scope);
   }
-  async function applyEngineAfterDownload(mode, engine) {
+  async function applyEngineAfterDownload(mode, engine, scope = runtimeModelScope(ctx)) {
     if (switchInFlight) return;
     const targetModel = modelID;
+    const isCurrent = () => root.isConnected && Boolean(scope) &&
+      targetModel === modelID && scope === runtimeModelScope(ctx);
+    if (!isCurrent()) return;
     try {
       switchInFlight = true;
       switchingVariant = mode.variant;
@@ -563,8 +579,13 @@ export function models(root, ctx) {
         engine,
         variant: mode.variant,
         onTick: adoptProfileState,
+        isCurrent,
       });
-      if (result.fallback || result.failed) {
+      if (!isCurrent()) return;
+      if (result.unconfirmed) {
+        stateOverride = PAGE_STATES.UNCONFIRMED;
+        notify(result.warning, true);
+      } else if (result.fallback || result.failed) {
         // Reflect what the runtime actually fell back to; the mode tag and
         // the status card must not advertise the failed selection.
         if (modelID === targetModel && result.envelope)
@@ -582,8 +603,10 @@ export function models(root, ctx) {
           result.envelope,
         );
     } catch (error) {
-      stateOverride = PAGE_STATES.ERROR;
-      notify(error.message, true);
+      if (isCurrent()) {
+        stateOverride = PAGE_STATES.ERROR;
+        notify(error.message, true);
+      }
     } finally {
       switchInFlight = false;
       switchingVariant = "";
@@ -924,18 +947,14 @@ export function models(root, ctx) {
     if (root.isConnected) renderVariants();
   }
   async function resumePendingSwitch(switchState) {
+    const expectedId = switchID(switchState), scope = runtimeModelScope(ctx);
+    const isCurrent = () => root.isConnected && Boolean(scope) && scope === runtimeModelScope(ctx);
+    if (!expectedId || !isCurrent()) return;
     switchInFlight = true;
     try {
-      const verdict = await waitForProfileSwitch({
-        tracking: { expectedId: switchState.id ?? switchState.task_id ?? null, sawPending: true },
-        onTick: adoptProfileState,
-      });
-      if (!verdict.failed) lastVerifiedAt = new Date();
-      else stateOverride = PAGE_STATES.ERROR;
-      notify(verdict.timeout
-        ? "模型切换状态等待超时，请到本页查看最终结果。"
-        : verdict.failed ? switchFailure(verdict.details) : "模型切换完成，实际推理验证通过。",
-      verdict.failed);
+      // This task predates this page. Observe it by ID, but do not attribute
+      // successful verification or a user-facing receipt to a new click.
+      await waitForProfileSwitch({ tracking: { expectedId }, onTick: adoptProfileState, isCurrent });
     } finally {
       switchInFlight = false;
       if (root.isConnected) {

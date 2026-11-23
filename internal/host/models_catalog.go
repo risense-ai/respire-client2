@@ -231,10 +231,10 @@ func (m *Manager) runtimeRPC(ctx context.Context, method string, args []string) 
 	if envelope.Status == "fail" {
 		return nil, runtimeModelError("runtime 拒绝了模型操作", reply.Error, reply.Errors, envelope)
 	}
-	if method == "model.switch" && switchReceiptID(reply.Envelope) != "" {
+	if taskID := switchReceiptID(reply.Envelope); method == "model.switch" && taskID != "" {
 		scope, _ := body["scope"].(*runtimeScope)
 		if scope == nil || reply.Scope == nil || *reply.Scope != *scope || reply.V != 1 ||
-			reply.ID != id || reply.OperationID != id {
+			reply.ID != id || reply.OperationID != id || taskID != reply.OperationID {
 			return nil, &unconfirmedError{id, errors.New("切换任务回执不是原 Runtime 请求；请检查当前状态")}
 		}
 	}
