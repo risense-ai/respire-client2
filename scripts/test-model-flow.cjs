@@ -14,7 +14,7 @@ async function main() {
       await fs.mkdir(path.dirname(path.join(tree, file)), { recursive: true });
       await fs.copyFile(path.join(source, file), path.join(tree, file));
     }
-    const {applyEngineChoice, cancelModelWork, detectBestEngine, engineAvailable, localModelDownload, modelActivity, profileStateSettled, submitProfileSwitch, switchFailure, switchProgressLabel, variantFromItem, fetchModelDownloadTask, runtimeModelScope, modelSwitchUnconfirmed, MODEL_MODES} = await import(pathToFileURL(path.join(tree, "pages/model-kit.js")));
+    const {applyEngineChoice, cancelModelWork, detectBestEngine, engineAvailable, localModelDownload, modelActivity, profileStateSettled, submitProfileSwitch, switchFailure, switchProgressLabel, variantFromItem, fetchModelDownloadTask, runtimeModelScope, modelSwitchBlock, modelSwitchUnconfirmed, MODEL_MODES} = await import(pathToFileURL(path.join(tree, "pages/model-kit.js")));
     const S = (sw={}, active=null, operation={}) => ({
       progress:{command:"model.progress",status:"ok",summary:{switch:sw,operation}},
       catalog:{command:"model.catalog",status:"ok",summary:{active}},
@@ -150,7 +150,7 @@ async function main() {
     const models = {
       ctx:{desktop:desktop(),refresh:async()=>{}}, root:{isConnected:true}, modelID:"m3",
       switchInFlight:false, switchingVariant:"", stateOverride:null,lastVerifiedAt:null,
-      PAGE_STATES:{ERROR:"error",FALLBACK:"fallback",UNCONFIRMED:"unconfirmed"},runtimeModelScope,modelSwitchUnconfirmed,applyEngineChoice,
+      PAGE_STATES:{ERROR:"error",FALLBACK:"fallback",UNCONFIRMED:"unconfirmed"},runtimeModelScope,modelSwitchBlock,modelSwitchUnconfirmed,applyEngineChoice,
       adoptProfileState(){ assert.fail("unbound model action observed peer progress"); },
       renderDynamic(){}, renderVariants(){},
       notify:(message,isError)=>models.notices.push([message,isError]),notices:[],
@@ -169,7 +169,7 @@ async function main() {
     assert.match(models.notices[0][0],/尚未确认.*不要重复提交/);
     const oldDownloadScope = {
       ctx:{desktop:desktop()}, root:{isConnected:true}, switchInFlight:false,stateOverride:null,modelID:"m3",
-      runtimeModelScope,modelSwitchUnconfirmed,isProfileModel:id=>id!=="m3",currentMode:()=>MODEL_MODES[0],
+      runtimeModelScope,modelSwitchBlock,modelSwitchUnconfirmed,isProfileModel:id=>id!=="m3",currentMode:()=>MODEL_MODES[0],
       inventory:{tokenizer_installed:true,cpu_container_ready:false},modeVariant:()=>({installed:true}),
       currentMirror:()=>"auto",renderDynamic(){},
       openDownloadModal:()=>({done:Promise.resolve().then(()=>{
@@ -181,10 +181,26 @@ async function main() {
     };
     const primaryAction = modulePart(modelsSource,"  async function handlePrimaryAction(","  async function applyEngineAfterDownload(");
     await vm.runInNewContext(primaryAction+'\nhandlePrimaryAction()',oldDownloadScope);
+    const deniedClicks = [], locked = desktop();
+    locked.health.credential_state = "required";
+    oldDownloadScope.ctx.desktop = locked;
+    oldDownloadScope.notify = (message, warning) => deniedClicks.push([message,warning]);
+    oldDownloadScope.currentMode = () => assert.fail("locked activation reached the download/switch path");
+    await vm.runInNewContext(primaryAction+'\nhandlePrimaryAction()',oldDownloadScope);
+    assert.match(deniedClicks[0][0],/已锁定.*解锁/);
+    assert.equal(deniedClicks[0][1],true);
+    assert.match(modelSwitchBlock({desktop:{connected:false}}),/未连接/);
+    assert.match(modelSwitchBlock({desktop:{connected:true,health:{account_id:"a"}}}),/尚未确认/);
+    assert.equal(modelSwitchBlock({desktop:desktop()}),"");
+    assert.equal(vm.runInNewContext(enabled+'\nengineEnabled("cpu",false)',
+      {...models,ctx:{desktop:locked}}),false);
+    assert.equal(vm.runInNewContext(enabled+'\nengineEnabled("cpu",false)',
+      {...models,ctx:{desktop:desktop()},graniteVariant:()=>false,
+        engineAvailable,engineCapabilities:()=>({})}),true);
 
     const wizard = {
       ctx:{desktop:desktop()}, root:{isConnected:true}, state:{step:"execute",model:"m3",device:"cpu",variant:"quantized"},
-      active:()=>true,runtimeModelScope,engineAvailable,engineCapabilities:()=>({}),applyEngineChoice,
+      active:()=>true,runtimeModelScope,modelSwitchBlock,modelSwitchUnconfirmed,engineAvailable,engineCapabilities:()=>({}),applyEngineChoice,
       setStage(){},executeStatus:(message,isError)=>wizard.notices.push([message,isError]),
       executeActions:choices=>{wizard.actions=choices;},notices:[], actions:[],
       renderExecuteSuccess(){assert.fail("unconfirmed wizard claims success");},
@@ -192,7 +208,8 @@ async function main() {
       runIndexStage(){assert.fail("unconfirmed wizard must not start a follow-up write");},
       failure(){assert.fail("unconfirmed is not marked failed or offered retry");},
     };
-    const executePart = modulePart(wizardSource,"  async function runExecute(","  async function runDownloadStage");
+    const startPart = modulePart(wizardSource,"  function modelStartBlock(","  async function renderConfirm");
+    const executePart = startPart + modulePart(wizardSource,"  async function runExecute(","  async function runDownloadStage");
     const enablePart = modulePart(wizardSource,"  async function runEnableStage(","  async function runIndexStage");
     from = calls.length;
     responses = [ok(S()),ok({status:"ok"})];
@@ -206,6 +223,24 @@ async function main() {
     assert.equal(calls.length,from,"no re-dispatch on re-entering the wizard");
     wizard.ctx.desktop.health.generation++;
     assert.equal(modelSwitchUnconfirmed(wizard.ctx),false,"a newly verified instance does not inherit a different scope's guard");
+    const button = {disabled:false}, hint = {textContent:"",hidden:true};
+    const deniedWizard = {...wizard, state:{...wizard.state,step:"confirm"}, ctx:{desktop:locked},
+      $:selector=>selector==="[data-start-execute]" ? button : hint};
+    vm.runInNewContext(startPart+'\nupdateModelConfirmation()',deniedWizard);
+    assert.equal(button.disabled,true);
+    assert.equal(hint.hidden,false);
+    assert.match(hint.textContent,/已锁定/);
+    deniedWizard.ctx.desktop = desktop();
+    vm.runInNewContext(startPart+'\nupdateModelConfirmation()',deniedWizard);
+    assert.equal(button.disabled,false);
+    assert.equal(hint.hidden,true);
+    deniedWizard.state.step = "execute";
+    deniedWizard.ctx.desktop = locked;
+    from = calls.length;
+    await vm.runInNewContext(executePart+enablePart+'\nrunExecute("download")',deniedWizard);
+    assert.match(wizard.notices.at(-1)[0],/已锁定/);
+    assert.deepEqual(Array.from(wizard.actions,x=>x[1]),["exit-models"]);
+    assert.equal(calls.length,from,"a blocked wizard neither downloads nor submits nor offers retry");
 
     responses=[new Error("desktop API request rejected"),ok({task:{busy:true,stage:"下载模型 quantized"}})];
     assert.equal((await fetchModelDownloadTask()).busy,true);

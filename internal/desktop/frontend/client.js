@@ -238,6 +238,7 @@ function renderRefresh() {
   // Observe both synchronous throws and asynchronous rejection without
   // letting an unrelated page hold up the Runtime polling cadence.
   try {
+    wizard.updateModelConfirmation();
     Promise.resolve(view?.update?.()).catch(reportRefreshError);
   } catch (error) {
     reportRefreshError(error);

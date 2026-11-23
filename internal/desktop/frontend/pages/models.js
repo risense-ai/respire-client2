@@ -37,6 +37,7 @@ import {
   applyEngineChoice,
   engineCapabilities,
   runtimeModelScope,
+  modelSwitchBlock,
   modelSwitchUnconfirmed,
   switchID,
   localModelDownload,
@@ -62,6 +63,7 @@ const PAGE_STATES = {
   READY: "ready",
   FALLBACK: "fallback",
   UNCONFIRMED: "unconfirmed",
+  BLOCKED: "blocked",
   ERROR: "error",
 };
 
@@ -122,6 +124,12 @@ const STATE_CONFIG = {
     buttonText: "结果待确认",
     buttonClass: "disabled",
   },
+  [PAGE_STATES.BLOCKED]: {
+    icon: "…",
+    title: "暂不能启用模型",
+    buttonText: "暂不能启用",
+    buttonClass: "disabled",
+  },
   [PAGE_STATES.ERROR]: {
     icon: "✗",
     title: "模型异常",
@@ -161,7 +169,7 @@ export function models(root, ctx) {
     inventory = null,
     loaded = false,
     loading = false,
-    sawMissingBaseline = false,
+    missingBaselineScope = null,
     baselinePrepared = false,
     modelID = localStorage.getItem("respire-model") || "m3",
     profileState = null,
@@ -242,7 +250,7 @@ export function models(root, ctx) {
   // the wizard via model-kit; the OS check is an entry gate, not hardware
   // detection.
   function engineEnabled(engine, opActive) {
-    if (modelSwitchUnconfirmed(ctx)) return false;
+    if (modelSwitchBlock(ctx) || modelSwitchUnconfirmed(ctx)) return false;
     if (opActive) return false;
     if (graniteVariant(modelID) && engine !== "cpu") return false;
     return engineAvailable(ctx.desktop?.platform, engine, engineCapabilities(ctx));
@@ -269,6 +277,11 @@ export function models(root, ctx) {
   function renderEngineHint() {
     const node = $("[data-engine-hint]", root);
     if (!node) return;
+    const blocked = modelSwitchBlock(ctx);
+    if (blocked) {
+      node.textContent = blocked;
+      return;
+    }
     const platform = ctx.desktop?.platform || "";
     const entries = [
       `CPU 可用`,
@@ -403,6 +416,7 @@ export function models(root, ctx) {
     return inventory ? PAGE_STATES.READY : PAGE_STATES.IDLE;
   }
   function effectivePageState() {
+    if (modelSwitchBlock(ctx)) return PAGE_STATES.BLOCKED;
     const computed = computePageState();
     // A sticky FALLBACK/ERROR survives idle recomputation (that is exactly
     // when it must stay visible). Old in-flight snapshots may briefly show
@@ -422,7 +436,7 @@ export function models(root, ctx) {
     const activeMode = MODEL_MODES.find(
       (mode) => mode.id === modeForVariant(engineState.model),
     );
-    node.innerHTML = `<div class="status-card ${state}"><div class="status-icon">${config.icon}</div><div class="status-body"><strong>${h(config.title)}</strong><span class="hint">${h(config.description)}</span></div><div class="status-meta"><span class="mode-tag">${h(activeMode?.title || "—")} · ${h(engineState.engine.toUpperCase())}</span>${lastVerifiedAt ? `<span class="hint">${h("上次验证 " + date(lastVerifiedAt.toISOString()))}</span>` : ""}</div></div>`;
+    node.innerHTML = `<div class="status-card ${state}"><div class="status-icon">${config.icon}</div><div class="status-body"><strong>${h(config.title)}</strong><span class="hint">${h(state === PAGE_STATES.BLOCKED ? modelSwitchBlock(ctx) : config.description)}</span></div>${state === PAGE_STATES.BLOCKED ? "" : `<div class="status-meta"><span class="mode-tag">${h(activeMode?.title || "—")} · ${h(engineState.engine.toUpperCase())}</span>${lastVerifiedAt ? `<span class="hint">${h("上次验证 " + date(lastVerifiedAt.toISOString()))}</span>` : ""}</div>`}</div>`;
   }
   function renderModeSelector() {
     const node = $("[data-mode-selector]", root);
@@ -439,12 +453,10 @@ export function models(root, ctx) {
   function renderPrimaryAction() {
     const node = $("[data-primary-action]", root);
     if (!node) return;
-    const config = STATE_CONFIG[effectivePageState()];
-    const idle =
-      effectivePageState() === PAGE_STATES.DOWNLOADING ||
-      effectivePageState() === PAGE_STATES.SWITCHING ||
-      effectivePageState() === PAGE_STATES.UNCONFIRMED ||
-      effectivePageState() === PAGE_STATES.READY;
+    const state = effectivePageState();
+    const config = STATE_CONFIG[state];
+    const idle = state === PAGE_STATES.DOWNLOADING || state === PAGE_STATES.SWITCHING ||
+      state === PAGE_STATES.UNCONFIRMED || state === PAGE_STATES.BLOCKED || state === PAGE_STATES.READY;
     node.innerHTML = `<div data-mode-progress hidden></div><button type="button" class="${config.buttonClass}" data-mode-apply${idle ? " disabled" : ""}>${h(config.buttonText)}</button>`;
     updateModeProgress();
   }
@@ -487,6 +499,7 @@ export function models(root, ctx) {
     const variant = modeVariant(currentMode());
     const key = [
       effectivePageState(),
+      modelSwitchBlock(ctx),
       selectedMode,
       engineState.engine,
       engineState.model,
@@ -519,6 +532,11 @@ export function models(root, ctx) {
   async function handlePrimaryAction() {
     if (switchInFlight || modelSwitchUnconfirmed(ctx)) return;
     const targetModel = modelID, scope = runtimeModelScope(ctx);
+    const blocked = modelSwitchBlock(ctx);
+    if (blocked) {
+      notify(blocked, true);
+      return;
+    }
     const isCurrent = () => root.isConnected && targetModel === modelID && scope === runtimeModelScope(ctx);
     if (!isCurrent()) return;
     const picked = currentMode();
@@ -776,12 +794,15 @@ export function models(root, ctx) {
     updateVariantsProgress();
     renderDynamic();
     renderEngineHint();
-    // Ask Runtime to verify and index after all CPU baseline files arrive.
-    if (inventory && modelID === "m3") {
+    // A Host-only download may continue without a verified Runtime account.
+    // Its passive Runtime follow-up must not carry over from an earlier scope.
+    const scope = runtimeModelScope(ctx);
+    if (missingBaselineScope !== scope) missingBaselineScope = null;
+    if (scope && !modelSwitchUnconfirmed(ctx) && inventory && modelID === "m3") {
       const baselineReady = inventory.tokenizer_installed && inventory.cpu_container_ready &&
         inventory.variants.some((variant) => variant.name === "quantized" && variant.installed);
-      if (!baselineReady) sawMissingBaseline = true;
-      else if (sawMissingBaseline && !baselinePrepared) {
+      if (!baselineReady) missingBaselineScope = scope;
+      else if (missingBaselineScope === scope && !baselinePrepared) {
         baselinePrepared = true;
         const mirror = currentMirror();
         execute("model_prepare", {
@@ -985,6 +1006,11 @@ export function models(root, ctx) {
     const apply = event.target.closest("[data-apply]");
     if (apply) {
       action(apply, async () => {
+        const blocked = modelSwitchBlock(ctx);
+        if (blocked) {
+          notify(blocked, true);
+          return;
+        }
         const engine = apply.dataset.engine;
         const variant = apply.dataset.variant;
         const activity = modelActivity({ task: currentModelTask(), operation: ctx.status?.summary?.model_operation, switching: switchInFlight });
@@ -1015,7 +1041,7 @@ export function models(root, ctx) {
           ))
         )
           return;
-        sawMissingBaseline = true;
+        missingBaselineScope = runtimeModelScope(ctx);
         openDownloadModal({
           model: modelID,
           engine: "cpu",

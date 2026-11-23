@@ -30,6 +30,8 @@ import {
   engineAvailable,
   engineCapabilities,
   runtimeModelScope,
+  modelSwitchBlock,
+  modelSwitchUnconfirmed,
   fetchModelDownloadTask,
   localModelDownload,
   fetchInventory,
@@ -675,28 +677,39 @@ export function createWizard(ctx) {
     node.textContent = `${t("预计下载")}${size ? h(bytes(size)) : t("无需新文件")}${tokenizer} · ${t("保存位置")} ${h(inventory.model_dir)}`;
   }
 
+  function modelStartBlock() {
+    return modelSwitchBlock(ctx) || (modelSwitchUnconfirmed(ctx)
+      ? "上次模型切换的结果尚未确认。请在模型与索引页查看当前状态，不要重复提交。"
+      : "");
+  }
+
+  function updateModelConfirmation() {
+    if (!active() || state.step !== "confirm") return;
+    const start = $("[data-start-execute]", root);
+    const hint = $("[data-model-start-block]", root);
+    if (!start || !hint) return;
+    const blocked = modelStartBlock();
+    start.disabled = Boolean(blocked);
+    if (hint.textContent !== blocked) hint.textContent = blocked;
+    hint.hidden = !blocked;
+  }
+
   async function renderConfirm(body) {
-    if (!connected()) {
-      body.innerHTML = frame(
-        "确认并开始",
-        "",
-        '<p class="hint">等待 Runtime 连接后才能提交下载与启用。</p>',
-        backButton("device"),
-      );
-      return;
-    }
+    const current = state;
     let inventory;
     try {
-      inventory = await ensureInventory(state.model);
+      inventory = await ensureInventory(current.model);
     } catch (error) {
+      if (state !== current || !body.isConnected || state.step !== "confirm") return;
       body.innerHTML = frame(
         "确认并开始",
         "",
-        `<p class="form-error">${h(error.message)}</p>`,
+        `<p class="form-error">${h(modelStartBlock() || error.message)}</p>`,
         backButton("device"),
       );
       return;
     }
+    if (state !== current || !body.isConnected || state.step !== "confirm") return;
     const cloud =
       state.syncChoice === "cloud"
         ? `${t("云端同步")}（${h(session().user || "")}） · ${t("自动同步")}${state.autoSync ? t("已开启") : t("未开启")}`
@@ -705,7 +718,7 @@ export function createWizard(ctx) {
     body.innerHTML = frame(
       "确认并开始",
       "",
-      `<dl class="facts"><div><dt>${t("云端")}</dt><dd>${cloud}</dd></div><div><dt>${t("模型")}</dt><dd>${h(modelLabel(state.model))}</dd></div><div><dt>${t("计算设备")}</dt><dd>${h(state.device.toUpperCase())}</dd></div><div><dt>${t("权重")}</dt><dd>${h(state.variant)}</dd></div><div><dt>${t("预计下载")}</dt><dd>${size ? h(bytes(size)) : t("无需新文件")}</dd></div><div><dt>${t("保存位置")}</dt><dd>${h(inventory.model_dir)}</dd></div></dl><p class="hint">${t("确认前不会触发下载或引擎变更。启用时会运行真实推理验证；GPU/NPU 验证失败会自动回退 CPU 并如实展示。")}</p>`,
+      `<dl class="facts"><div><dt>${t("云端")}</dt><dd>${cloud}</dd></div><div><dt>${t("模型")}</dt><dd>${h(modelLabel(state.model))}</dd></div><div><dt>${t("计算设备")}</dt><dd>${h(state.device.toUpperCase())}</dd></div><div><dt>${t("权重")}</dt><dd>${h(state.variant)}</dd></div><div><dt>${t("预计下载")}</dt><dd>${size ? h(bytes(size)) : t("无需新文件")}</dd></div><div><dt>${t("保存位置")}</dt><dd>${h(inventory.model_dir)}</dd></div></dl><p class="hint">${t("确认前不会触发下载或引擎变更。启用时会运行真实推理验证；GPU/NPU 验证失败会自动回退 CPU 并如实展示。")}</p><p class="hint" role="status" data-model-start-block hidden></p>`,
       backButton("device") +
         `<button type="button" data-later-download>稍后下载</button><button type="button" class="primary" data-start-execute>下载并启用</button>`,
     );
@@ -713,9 +726,14 @@ export function createWizard(ctx) {
       complete(),
     );
     $("[data-start-execute]", body).addEventListener("click", () => {
+      if (modelStartBlock()) {
+        updateModelConfirmation();
+        return;
+      }
       executeStarted = false;
       goto("execute");
     });
+    updateModelConfirmation();
   }
 
   function renderExecute(body) {
@@ -799,8 +817,11 @@ export function createWizard(ctx) {
     const run = state, scope = runtimeModelScope(ctx);
     const sameRun = () => state === run && active() && root.isConnected && run.step === "execute";
     const isCurrent = () => sameRun() && Boolean(scope) && scope === runtimeModelScope(ctx);
-    if (!isCurrent()) {
-      if (sameRun()) failure(startStage, "Runtime 账户尚未确认，请重新连接后再继续。");
+    if (!sameRun()) return;
+    const blocked = modelStartBlock();
+    if (blocked) {
+      executeStatus(blocked, true);
+      executeActions([["保存选择，退出到模型页", "exit-models"]]);
       return;
     }
     run.executing = true;
@@ -820,6 +841,10 @@ export function createWizard(ctx) {
       if (isCurrent()) failure(startStage === "index" ? "index" : "probe", error.message);
     } finally {
       run.executing = false;
+      if (sameRun() && !isCurrent()) {
+        executeStatus("Runtime 账户状态已变化，未继续启用。已提交的任务可能仍在运行，请在模型与索引页查看。", true);
+        executeActions([["保存选择，退出到模型页", "exit-models"]]);
+      }
     }
   }
 
@@ -1317,6 +1342,7 @@ export function createWizard(ctx) {
     show,
     destroy,
     isActive: active,
+    updateModelConfirmation,
     isDone: () => !state || state.done,
   };
 }

@@ -155,6 +155,14 @@ export function runtimeModelScope(ctx) {
     : null;
 }
 
+export function modelSwitchBlock(ctx) {
+  if (runtimeModelScope(ctx)) return "";
+  if (!ctx.desktop?.connected) return "Runtime 未连接。连接后才能启用模型。";
+  if (ctx.desktop.health?.credential_state === "required")
+    return "Runtime 账户已锁定。解锁后才能启用模型。";
+  return "Runtime 账户尚未确认。请刷新状态，确认账户后再启用模型。";
+}
+
 export function engineCapabilities(ctx) {
   return ctx.status?.summary?.model_engine_capabilities ?? ctx.desktop?.engine?.capabilities;
 }
