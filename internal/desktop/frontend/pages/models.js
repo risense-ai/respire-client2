@@ -169,8 +169,7 @@ export function models(root, ctx) {
     inventory = null,
     loaded = false,
     loading = false,
-    missingBaselineScope = null,
-    baselinePrepared = false,
+    baselineIntent = null,
     modelID = localStorage.getItem("respire-model") || "m3",
     profileState = null,
     modelTask = null,
@@ -375,7 +374,7 @@ export function models(root, ctx) {
     }
     area.innerHTML = inventory.tokenizer_installed
       ? `<span class="hint">基础文件已就绪 · 模型目录 <code>${h(inventory.model_dir)}</code></span>`
-      : `<button data-model="prepare" class="primary">下载并准备基础模型</button><span class="hint">首次使用需下载基础文件（quantized 权重 + 分词器，约 ${h(bytes(quantizedBytes()))}）并构建索引。</span>`;
+      : `<button data-model="prepare" class="primary">${modelSwitchBlock(ctx) || modelSwitchUnconfirmed(ctx) ? "下载基础文件" : "下载并准备基础模型"}</button><span class="hint">首次使用需下载基础文件（quantized 权重 + 分词器，约 ${h(bytes(quantizedBytes()))}）。启用模型后才能构建索引。</span>`;
   }
   function quantizedBytes() {
     const quantized = (inventory?.variants || []).find(
@@ -583,6 +582,49 @@ export function models(root, ctx) {
     }
     await applyEngineAfterDownload(mode, engine, scope);
   }
+  async function downloadBaseline(mirror) {
+    const scope = modelSwitchUnconfirmed(ctx) ? null : runtimeModelScope(ctx);
+    const intent = { scope, model: modelID };
+    baselineIntent = intent;
+    const sameIntent = () => root.isConnected && baselineIntent === intent &&
+      Boolean(scope) && scope === runtimeModelScope(ctx) &&
+      intent.model === modelID && !modelSwitchUnconfirmed(ctx);
+    try {
+      const confirmed = await confirm(
+        scope ? "下载并准备基础模型" : "下载基础文件",
+        "将下载量化权重、分词器和所需的 CPU 容器到本机模型目录。已校验的文件会跳过。" +
+          (scope ? "同一 Runtime 账户可用时，完成后会安排索引。" : "仅下载本机文件，不会启用模型或安排索引。"),
+        "开始下载",
+      );
+      if (!confirmed || !root.isConnected || intent.model !== modelID) return;
+      const { done } = openDownloadModal({
+        model: intent.model,
+        engine: "cpu",
+        variant: "baseline",
+        label: "基础文件（quantized + 分词器）",
+        getMirror: () => mirror,
+        onDone: () => load(),
+      });
+      if (!(await done) || !root.isConnected) return;
+      const filesOnly = () => notify("基础文件已下载；未启用模型或安排索引。请在确认 Runtime 账户后手动启用。");
+      if (!sameIntent()) return filesOnly();
+      const fresh = await fetchInventory(intent.model);
+      if (!sameIntent()) {
+        if (root.isConnected) filesOnly();
+        return;
+      }
+      if (!fresh.tokenizer_installed || !fresh.cpu_container_ready ||
+          !fresh.variants.some((variant) => variant.name === "quantized" && variant.installed)) {
+        notify("基础文件尚未确认齐全，未安排索引。", true);
+        return;
+      }
+      await execute("model_prepare", { mirror: mirror || "auto" });
+      if (sameIntent()) notify("基础模型已就绪，索引已安排");
+      await ctx.refresh();
+    } finally {
+      if (baselineIntent === intent) baselineIntent = null;
+    }
+  }
   async function applyEngineAfterDownload(mode, engine, scope = runtimeModelScope(ctx)) {
     if (switchInFlight || modelSwitchUnconfirmed(ctx)) return;
     const targetModel = modelID;
@@ -763,6 +805,8 @@ export function models(root, ctx) {
     renderBaseline();
   }
   function update() {
+    if (baselineIntent && (baselineIntent.model !== modelID ||
+        baselineIntent.scope !== runtimeModelScope(ctx))) baselineIntent = null;
     const s = ctx.status?.summary || {},
       health = ctx.desktop?.health || {},
       inference = health.inference || {},
@@ -794,24 +838,6 @@ export function models(root, ctx) {
     updateVariantsProgress();
     renderDynamic();
     renderEngineHint();
-    // A Host-only download may continue without a verified Runtime account.
-    // Its passive Runtime follow-up must not carry over from an earlier scope.
-    const scope = runtimeModelScope(ctx);
-    if (missingBaselineScope !== scope) missingBaselineScope = null;
-    if (scope && !modelSwitchUnconfirmed(ctx) && inventory && modelID === "m3") {
-      const baselineReady = inventory.tokenizer_installed && inventory.cpu_container_ready &&
-        inventory.variants.some((variant) => variant.name === "quantized" && variant.installed);
-      if (!baselineReady) missingBaselineScope = scope;
-      else if (missingBaselineScope === scope && !baselinePrepared) {
-        baselinePrepared = true;
-        const mirror = currentMirror();
-        execute("model_prepare", {
-          mirror: mirror && mirror !== "auto" ? mirror : "auto",
-        })
-          .then(() => notify("基础模型已就绪，索引已安排"))
-          .catch((error) => notify(error.message, true));
-      }
-    }
   }
   async function load() {
     if (loading || !ctx.desktop?.connected) return;
@@ -1033,24 +1059,8 @@ export function models(root, ctx) {
       let result;
       const mirror = currentMirror();
       if (operation === "prepare") {
-        if (
-          !(await confirm(
-            "下载基础模型",
-            "将下载量化权重、分词器和所需的 CPU 容器到本机模型目录。已校验的文件会跳过。",
-            "开始下载",
-          ))
-        )
-          return;
-        missingBaselineScope = runtimeModelScope(ctx);
-        openDownloadModal({
-          model: modelID,
-          engine: "cpu",
-          variant: "baseline",
-          label: "基础文件（quantized + 分词器）",
-          getMirror: currentMirror,
-          onDone: () => load(),
-        });
-        await ctx.refresh();
+        await downloadBaseline(mirror);
+        return;
       } else if (operation === "download") {
         const variant = button.dataset.variant;
         const size = inventory?.variants?.find(

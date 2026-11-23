@@ -198,6 +198,45 @@ async function main() {
       {...models,ctx:{desktop:desktop()},graniteVariant:()=>false,
         engineAvailable,engineCapabilities:()=>({})}),true);
 
+    // A baseline download may finish after an observed lock or account move.
+    // Only its own deliberate, uninterrupted scoped intent can enqueue prep.
+    const baselineDownload = modulePart(modelsSource,"  async function downloadBaseline(","  async function applyEngineAfterDownload");
+    const observeBaseline = modulePart(modelsSource,"  function update() {","    const s =") + "\n  }";
+    for (const transition of ["same","locked-then-unlock","account-B","A-lock-A","cancel","incomplete"]) {
+      const writes = [], messages = [];
+      let finishDownload;
+      const options = {
+        ctx:{desktop:desktop(),refresh:async()=>{}}, root:{isConnected:true}, modelID:"m3",
+        baselineIntent:null, runtimeModelScope,modelSwitchUnconfirmed,load:()=>{},
+        confirm:async()=>true,
+        fetchInventory:async()=>({tokenizer_installed:true,cpu_container_ready:true,
+          variants:[{name:"quantized",installed:transition!=="incomplete"}]}),
+        openDownloadModal:()=>({done:new Promise(resolve=>{finishDownload=resolve;})}),
+        notify:(message)=>messages.push(message),
+        execute:async (name, args)=>writes.push([name,args.mirror]),
+      };
+      if (transition === "locked-then-unlock") options.ctx.desktop.health.credential_state = "required";
+      const ownership = vm.createContext(options);
+      const pending = vm.runInContext(baselineDownload+observeBaseline+'\ndownloadBaseline("auto")',ownership);
+      await new Promise(setImmediate);
+      assert.equal(typeof finishDownload,"function",transition);
+      if (transition === "locked-then-unlock") options.ctx.desktop.health.credential_state = "available";
+      if (transition === "account-B") options.ctx.desktop.health.account_id = "b";
+      if (transition === "A-lock-A") {
+        options.ctx.desktop.health.credential_state = "required";
+        vm.runInContext("update()",ownership);
+        options.ctx.desktop.health.credential_state = "available";
+      }
+      vm.runInContext("update()",ownership);
+      finishDownload(transition !== "cancel");
+      await pending;
+      assert.deepEqual(writes,transition==="same" ? [["model_prepare","auto"]] : [],transition);
+      if (["locked-then-unlock","account-B","A-lock-A"].includes(transition))
+        assert.match(messages[0],/未启用模型或安排索引/,transition);
+    }
+    assert.equal((modelsSource.match(/execute\("model_prepare"/g) || []).length,1,
+      "no passive inventory-driven prepare; only the explicit baseline action owns it");
+
     const wizard = {
       ctx:{desktop:desktop()}, root:{isConnected:true}, state:{step:"execute",model:"m3",device:"cpu",variant:"quantized"},
       active:()=>true,runtimeModelScope,modelSwitchBlock,modelSwitchUnconfirmed,engineAvailable,engineCapabilities:()=>({}),applyEngineChoice,
