@@ -177,11 +177,16 @@ export function modelActivity({ task, operation, index, switching } = {}) {
   if (localModelDownload(task)) return "downloading";
   if (operation?.active) {
     const phase = String(operation.phase || "").toLowerCase();
-    if (phase.startsWith("switch-") || /load|probe/.test(phase)) return "switching";
-    if (operation.background || /index|embed/.test(phase) || index?.running) return "indexing";
-    if (/download|fetch|merge|verify|check|hash/.test(phase)) return "downloading";
+    if (phase.startsWith("switch-")) return "switching";
+    if (operation.background || /index|embed/.test(phase)) return "indexing";
+    if (/(?:^|[-_])(?:load(?:ing)?|probe)(?:$|[-_])/.test(phase)) return "switching";
+    if (/download|fetch|merge/.test(phase)) return "downloading";
+    if (index?.running) return "indexing";
+    if (/verify|check|hash/.test(phase)) return "downloading";
+    return "unknown";
   }
-  if (index?.running || index?.scheduled) return "indexing";
+  if (index?.running) return "indexing";
+  if (index?.scheduled) return "index-scheduled";
   return "idle";
 }
 
