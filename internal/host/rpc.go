@@ -66,15 +66,25 @@ const defaultRuntimeHTTPTimeout = 30 * time.Second
 
 func (m *Manager) runtimeHTTPTransport(method string, args []string) *http.Client {
 	client := m.localClient
-	if method == "cli.exec" && len(args) >= 3 && args[0] == "--json" &&
-		args[1] == "model" && args[2] == "probe" && client.Timeout == defaultRuntimeHTTPTimeout {
-		// Legacy explicit inference can cold-load a model. Keep every
-		// other call's deadline and the transport identity unchanged.
-		probe := *client
-		probe.Timeout = 2 * time.Minute
-		return &probe
+	if method != "cli.exec" || len(args) < 2 || args[0] != "--json" || client.Timeout != defaultRuntimeHTTPTimeout {
+		return client
 	}
-	return client
+	var timeout time.Duration
+	switch {
+	case len(args) >= 3 && args[1] == "model" && args[2] == "probe":
+		// Preserve the existing cold-load allowance for explicit inference.
+		timeout = 2 * time.Minute
+	case len(args) == 2 && args[1] == "reembed":
+		// Rebuilding is synchronous. Keep a finite cap inside the outer
+		// 30-minute desktop job, which may already have spent time in preflight.
+		// Receipt lookup still uses the original job's remaining budget.
+		timeout = 29 * time.Minute
+	default:
+		return client
+	}
+	operationClient := *client
+	operationClient.Timeout = timeout
+	return &operationClient
 }
 
 func (m *Manager) localRequest(ctx context.Context, method, path string, body any) (json.RawMessage, error) {
