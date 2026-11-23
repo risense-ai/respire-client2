@@ -14,7 +14,7 @@ async function main() {
       await fs.mkdir(path.dirname(path.join(tree, file)), { recursive: true });
       await fs.copyFile(path.join(source, file), path.join(tree, file));
     }
-    const {applyEngineChoice, cancelModelWork, detectBestEngine, engineAvailable, localModelDownload, modelActivity, profileStateSettled, submitProfileSwitch, switchFailure, switchProgressLabel, variantFromItem, fetchModelDownloadTask, runtimeModelScope, MODEL_MODES} = await import(pathToFileURL(path.join(tree, "pages/model-kit.js")));
+    const {applyEngineChoice, cancelModelWork, detectBestEngine, engineAvailable, localModelDownload, modelActivity, profileStateSettled, submitProfileSwitch, switchFailure, switchProgressLabel, variantFromItem, fetchModelDownloadTask, runtimeModelScope, modelSwitchUnconfirmed, MODEL_MODES} = await import(pathToFileURL(path.join(tree, "pages/model-kit.js")));
     const S = (sw={}, active=null, operation={}) => ({
       progress:{command:"model.progress",status:"ok",summary:{switch:sw,operation}},
       catalog:{command:"model.catalog",status:"ok",summary:{active}},
@@ -122,18 +122,22 @@ async function main() {
       globalThis.setTimeout = delay;
     }
 
-    globalThis.document = {dispatchEvent(){}};
+    for (const [status,error] of [[404,"unknown desktop action"],[200,'json: unknown field "model"']]) {
+      from = calls.length;
+      responses=[ok(S()),() => ({ok:status===200,status,json:async()=>({ok:false,error})})];
+      await assert.rejects(applyEngineChoice(pick),{message:error});
+      assert.deepEqual(calls.slice(from).map(x=>x[0]),["/api/model-profile-state","/api/model-switch"],
+        "an unsupported route does not authorize a different mutation");
+    }
     from = calls.length;
-    responses=[ok(S()),() => ({ok:false,status:404,json:async()=>({ok:false,error:"unknown desktop action"})}),
-      (_url,opts) => ({ok:true,status:200,json:async()=>ok({
-        id:JSON.parse(opts.body).id,name:"model_engine_apply",state:"done",
-        envelope:{summary:{engine:"cpu",model:"quantized"}},
-      })}),ok(null)];
-    const realLegacy = await applyEngineChoice(pick);
-    assert.equal(realLegacy.failed,false);
-    assert.equal(realLegacy.engine,"cpu");
-    assert.deepEqual(calls.slice(from).map(x=>x[0]),["/api/model-profile-state","/api/model-switch","/api/execute","/api/operation-ack"],
-      "preserve the old handler only when the outer router proves the new request was never dispatched");
+    responses=[ok(S()),{ok:false,error:"请求 client2-model-1 的结果尚未确认，未自动重试；请检查操作记录和当前数据: EOF"}];
+    assert.equal((await applyEngineChoice(pick)).unconfirmed,true,"the Host's existing ambiguous error survives HTTP 200");
+    assert.deepEqual(calls.slice(from).map(x=>x[0]),["/api/model-profile-state","/api/model-switch"]);
+    from = calls.length;
+    responses=[ok(S()),{ok:false,error:"Runtime scope changed"}];
+    await assert.rejects(applyEngineChoice(pick),/Runtime scope changed/);
+    assert.deepEqual(calls.slice(from).map(x=>x[0]),["/api/model-profile-state","/api/model-switch"]);
+
     const modelsSource = await fs.readFile(path.join(source,"pages/models.js"),"utf8");
     const wizardSource = await fs.readFile(path.join(source,"onboarding/wizard.js"),"utf8");
     const desktop = () => ({platform:"windows-amd64",connected:true,health:{account_id:"a",
@@ -146,7 +150,7 @@ async function main() {
     const models = {
       ctx:{desktop:desktop(),refresh:async()=>{}}, root:{isConnected:true}, modelID:"m3",
       switchInFlight:false, switchingVariant:"", stateOverride:null,lastVerifiedAt:null,
-      PAGE_STATES:{ERROR:"error",FALLBACK:"fallback",UNCONFIRMED:"unconfirmed"},runtimeModelScope,applyEngineChoice,
+      PAGE_STATES:{ERROR:"error",FALLBACK:"fallback",UNCONFIRMED:"unconfirmed"},runtimeModelScope,modelSwitchUnconfirmed,applyEngineChoice,
       adoptProfileState(){ assert.fail("unbound model action observed peer progress"); },
       renderDynamic(){}, renderVariants(){},
       notify:(message,isError)=>models.notices.push([message,isError]),notices:[],
@@ -155,11 +159,17 @@ async function main() {
     responses = [ok(S()),ok("切换任务已提交")];
     await vm.runInNewContext(modelsAction+'\napplyEngineAfterDownload({title:"均衡",variant:"quantized"},"cpu")',models);
     assert.equal(models.lastVerifiedAt,null);
-    assert.equal(models.stateOverride,"unconfirmed","unconfirmed stays visible without looking like failure");
+    assert.equal(models.stateOverride,null,"unconfirmed is not marked failed");
+    assert.equal(modelSwitchUnconfirmed(models.ctx),true,"unresolved is retained independently of mode/view state");
+    from = calls.length;
+    await vm.runInNewContext(modelsAction+'\napplyEngineAfterDownload({title:"different",variant:"fp16"},"gpu")',models);
+    assert.equal(calls.length,from,"an advanced or new mode click cannot resend while unresolved");
+    const enabled = modulePart(modelsSource,"  function engineEnabled(","  function engineChips(");
+    assert.equal(vm.runInNewContext(enabled+'\nengineEnabled("cpu",false)',models),false);
     assert.match(models.notices[0][0],/尚未确认.*不要重复提交/);
     const oldDownloadScope = {
       ctx:{desktop:desktop()}, root:{isConnected:true}, switchInFlight:false,stateOverride:null,modelID:"m3",
-      runtimeModelScope,isProfileModel:id=>id!=="m3",currentMode:()=>MODEL_MODES[0],
+      runtimeModelScope,modelSwitchUnconfirmed,isProfileModel:id=>id!=="m3",currentMode:()=>MODEL_MODES[0],
       inventory:{tokenizer_installed:true,cpu_container_ready:false},modeVariant:()=>({installed:true}),
       currentMirror:()=>"auto",renderDynamic(){},
       openDownloadModal:()=>({done:Promise.resolve().then(()=>{
@@ -190,6 +200,12 @@ async function main() {
     assert.match(wizard.notices.at(-1)[0],/尚未确认/);
     assert.deepEqual(Array.from(wizard.actions,x=>x[1]),["exit-models"]);
     assert.deepEqual(calls.slice(from).map(x=>x[0]),["/api/model-profile-state","/api/model-switch"]);
+    assert.equal(modelSwitchUnconfirmed(wizard.ctx),true,"same app scope keeps the guard across route remounts");
+    from=calls.length;
+    await vm.runInNewContext(executePart+enablePart+'\nrunExecute("enable")',wizard);
+    assert.equal(calls.length,from,"no re-dispatch on re-entering the wizard");
+    wizard.ctx.desktop.health.generation++;
+    assert.equal(modelSwitchUnconfirmed(wizard.ctx),false,"a newly verified instance does not inherit a different scope's guard");
 
     responses=[new Error("desktop API request rejected"),ok({task:{busy:true,stage:"下载模型 quantized"}})];
     assert.equal((await fetchModelDownloadTask()).busy,true);

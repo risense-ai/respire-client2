@@ -918,6 +918,7 @@ export function createWizard(ctx) {
         model: state.model,
         engine: state.device,
         variant: state.variant,
+        ctx,
         isCurrent,
         onTick: (snapshot) => {
           const label = switchProgressLabel(snapshot);

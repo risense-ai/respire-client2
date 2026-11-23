@@ -37,6 +37,7 @@ import {
   applyEngineChoice,
   engineCapabilities,
   runtimeModelScope,
+  modelSwitchUnconfirmed,
   switchID,
   localModelDownload,
   modelActivity,
@@ -241,6 +242,7 @@ export function models(root, ctx) {
   // the wizard via model-kit; the OS check is an entry gate, not hardware
   // detection.
   function engineEnabled(engine, opActive) {
+    if (modelSwitchUnconfirmed(ctx)) return false;
     if (opActive) return false;
     if (graniteVariant(modelID) && engine !== "cpu") return false;
     return engineAvailable(ctx.desktop?.platform, engine, engineCapabilities(ctx));
@@ -410,7 +412,7 @@ export function models(root, ctx) {
       computed === PAGE_STATES.SWITCHING
     )
       return computed;
-    return stateOverride || computed;
+    return modelSwitchUnconfirmed(ctx) ? PAGE_STATES.UNCONFIRMED : stateOverride || computed;
   }
   function renderStatusCard() {
     const node = $("[data-status-card]", root);
@@ -515,7 +517,7 @@ export function models(root, ctx) {
     renderDynamic(true);
   }
   async function handlePrimaryAction() {
-    if (switchInFlight) return;
+    if (switchInFlight || modelSwitchUnconfirmed(ctx)) return;
     const targetModel = modelID, scope = runtimeModelScope(ctx);
     const isCurrent = () => root.isConnected && targetModel === modelID && scope === runtimeModelScope(ctx);
     if (!isCurrent()) return;
@@ -564,7 +566,7 @@ export function models(root, ctx) {
     await applyEngineAfterDownload(mode, engine, scope);
   }
   async function applyEngineAfterDownload(mode, engine, scope = runtimeModelScope(ctx)) {
-    if (switchInFlight) return;
+    if (switchInFlight || modelSwitchUnconfirmed(ctx)) return;
     const targetModel = modelID;
     const isCurrent = () => root.isConnected && Boolean(scope) &&
       targetModel === modelID && scope === runtimeModelScope(ctx);
@@ -579,11 +581,11 @@ export function models(root, ctx) {
         engine,
         variant: mode.variant,
         onTick: adoptProfileState,
+        ctx,
         isCurrent,
       });
       if (!isCurrent()) return;
       if (result.unconfirmed) {
-        stateOverride = PAGE_STATES.UNCONFIRMED;
         notify(result.warning, true);
       } else if (result.fallback || result.failed) {
         // Reflect what the runtime actually fell back to; the mode tag and

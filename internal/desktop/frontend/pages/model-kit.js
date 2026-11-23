@@ -2,7 +2,6 @@ import {
   $,
   h,
   bytes,
-  summary,
   execute,
   action,
   notify,
@@ -273,14 +272,6 @@ export function readProfileState(state) {
   };
 }
 
-export async function applyLegacyEngine(engine, variant) {
-  const envelope = await execute("model_engine_apply", {
-    engine,
-    model: variant,
-  });
-  return { envelope, result: summary(envelope) };
-}
-
 export function switchID(value) {
   const id = value?.id ?? value?.task_id ?? value?.details?.id ?? value?.summary?.id;
   return typeof id === "string" && id.trim() ? id : null;
@@ -300,13 +291,9 @@ async function requestProfileSwitch(model, engine, variant) {
   }
   if (!response.ok || data?.ok !== true) {
     const message = data?.error || `请求失败 (${response.status})`;
-    // Only the shipped host's outer router can affirm the POST never had
-    // a handler. A generic status or Runtime message might follow dispatch.
-    const switchUnsupported = response.status === 404 && data?.ok === false &&
-      data.error === "unknown desktop action" && Object.keys(data).length === 2;
     const switchUnconfirmed = response.status >= 500 || typeof data?.ok !== "boolean" ||
       (typeof message === "string" && /^请求 [^\s]+ 的结果尚未确认/.test(message));
-    throw Object.assign(new Error(message), { switchUnsupported, switchUnconfirmed });
+    throw Object.assign(new Error(message), { switchUnconfirmed });
   }
   return data.result;
 }
@@ -572,12 +559,25 @@ export function fallbackMessage(engine, result) {
   return `${engine.toUpperCase()} 验证失败${reason}，已恢复切换前的 ${restored}；详情见应用结果。`;
 }
 
+const unconfirmedModelSwitches = new WeakMap();
 const switchUnconfirmedNotice = "模型切换请求的结果尚未确认。请刷新查看 Runtime 当前状态；不要重复提交。";
 
-export async function applyEngineChoice({ model, engine, variant, onTick, isCurrent = () => true }) {
+export function modelSwitchUnconfirmed(ctx) {
+  const scope = runtimeModelScope(ctx);
+  return Boolean(scope && scope === unconfirmedModelSwitches.get(ctx));
+}
+
+export async function applyEngineChoice({ model, engine, variant, ctx, onTick, isCurrent = () => true }) {
+  const scope = ctx && runtimeModelScope(ctx);
+  const unconfirmed = () => {
+    if (scope) unconfirmedModelSwitches.set(ctx, scope);
+    return { engine, variant, fallback: false, failed: false, unconfirmed: true, warning: switchUnconfirmedNotice };
+  };
+  if (scope && modelSwitchUnconfirmed(ctx)) return unconfirmed();
   try {
     const tracking = await submitProfileSwitch(model, engine, variant, isCurrent);
     const verdict = await waitForProfileSwitch({ tracking, onTick, isCurrent });
+    if (verdict.unconfirmed) return unconfirmed();
     // Published typed terminal results identify their own selection;
     // catalog.active may already reflect a subsequent unrelated request.
     const selection = verdict.details.switchState?.result?.selection;
@@ -586,27 +586,11 @@ export async function applyEngineChoice({ model, engine, variant, onTick, isCurr
       variant: selection?.variant || variant,
       fallback: false,
       failed: verdict.failed,
-      unconfirmed: verdict.unconfirmed,
-      warning: verdict.unconfirmed
-        ? switchUnconfirmedNotice
-        : verdict.failed ? switchFailure(verdict.details) : "",
+      warning: verdict.failed ? switchFailure(verdict.details) : "",
       details: verdict.details,
     };
   } catch (error) {
-    // Only an explicit unsupported interface is eligible for legacy M3.
-    // Never resubmit after network failure or an ambiguous acceptance.
-    if (error.switchUnconfirmed)
-      return { engine, variant, fallback: false, failed: false, unconfirmed: true, warning: switchUnconfirmedNotice };
-    if (model !== "m3" || !error.switchUnsupported) throw error;
+    if (error.switchUnconfirmed) return unconfirmed();
+    throw error;
   }
-  ensureCurrentSwitch(isCurrent);
-  const { envelope, result } = await applyLegacyEngine(engine, variant);
-  return {
-    engine: result.engine,
-    variant: result.model,
-    fallback: Boolean(result.fallback),
-    failed: false,
-    warning: fallbackMessage(engine, result),
-    envelope,
-  };
 }
