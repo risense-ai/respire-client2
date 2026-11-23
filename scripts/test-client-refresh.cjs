@@ -492,7 +492,7 @@ async function test(name, fn) { await fn(); console.log(`PASS ${++count}: ${name
   });
   const loadModelPageTools = (api, execute) => new Function('api', 'execute',
     read('pages/model-kit.js').replace(/^import \{[\s\S]+?;\n/, '').replace(/^export /gm, '') +
-    '\nreturn {engineAvailable, detectBestEngine, fetchModelDownloadTask, watchModelDownloadTask, cancelDisplayedModelWork, localModelDownload};'
+    '\nreturn {engineAvailable, detectBestEngine, fetchModelDownloadTask, watchModelDownloadTask, cancelDisplayedModelWork, localModelDownload, runtimeModelScope};'
   )(api, execute);
   await test('Windows GPU probe stays selectable without capabilities but explicit denies and NPU are respected', () => {
     const {engineAvailable, detectBestEngine} = loadModelPageTools();
@@ -540,29 +540,55 @@ async function test(name, fn) { await fn(); console.log(`PASS ${++count}: ${name
   });
   await test('model page displays progress and enables cancel outside modal even without an inventory', () => {
     const page = read('pages/models.js');
-    const section = (from, to) => page.slice(page.indexOf(from), page.indexOf(to, page.indexOf(from)));
-    const {localModelDownload} = loadModelPageTools();
-    const progress = {}, cancel = {disabled:true};
+    const section = (from, to) => {
+      const start = page.indexOf(from), end = page.indexOf(to, start);
+      assert.ok(start >= 0 && end > start, `production fixture section missing: ${from}`);
+      return page.slice(start, end);
+    };
+    const {localModelDownload, runtimeModelScope} = loadModelPageTools();
+    const progress = {}, cancel = {disabled:true}, baseline = {};
     const find = (selector) => ({
       '[data-mode-progress]': progress,
       '[data-model=cancel]': cancel,
+      '[data-baseline]': baseline,
     })[selector];
     const ctx = {desktop:{task:{busy:true, stage:'更新 Runtime'}}};
     let isolated = {busy:true, stage:'下载模型 baseline', done:25, total:100};
-    const drive = new Function('ctx', '$', 'currentModelTask', 'localModelDownload', 'h',
-      'const root = {}, inventory = null, switchInFlight = false;\n' +
+    const drive = new Function('ctx', '$', 'currentModelTask', 'localModelDownload', 'runtimeModelScope', 'h',
+      'const root = {}, inventory = null, modelID = "m3", switchInFlight = false;\n' +
+      section('  function scopedModelStatus()', '  function runtimeActivationBlock()') +
+      section('  function m3BaselineReady(', '  function currentMode()') +
       section('  function updateModeProgress()', '  function renderAdvancedVisibility()') +
       section('  function updateVariantsProgress()', '  function update()') +
       '\nreturn () => { updateModeProgress(); updateVariantsProgress(); };'
-    )(ctx, find, () => isolated, localModelDownload, String);
+    )(ctx, find, () => isolated, localModelDownload, runtimeModelScope, String);
     drive();
     assert.equal(progress.hidden, false);
     assert.match(progress.innerHTML, /25%/);
     assert.doesNotMatch(progress.innerHTML, /更新 Runtime/);
     assert.equal(cancel.disabled, false);
+    assert.match(baseline.innerHTML, /基础文件状态尚未确认/);
     isolated = {busy:false, stage:'完成'};
     drive();
     assert.equal(progress.hidden, true);
+    assert.equal(cancel.disabled, true);
+
+    ctx.desktop = {...ctx.desktop, connected:true, health:{
+      account_id:'account', instance_id:'runtime', generation:1, data_dir:'/fixture',
+      credential_state:'available',
+    }};
+    ctx.statusScope = runtimeModelScope(ctx);
+    ctx.status = {command:'status', summary:{model_operation:{
+      active:true, id:'background-index', phase:'index-load', done:2, total:4,
+    }}};
+    drive();
+    assert.equal(progress.hidden, false);
+    assert.match(progress.innerHTML, /index-load.*50%/);
+    assert.equal(cancel.disabled, false);
+    ctx.desktop.health.generation++;
+    drive();
+    assert.equal(progress.hidden, true);
+    assert.equal(progress.innerHTML, '');
     assert.equal(cancel.disabled, true);
   });
   await test('model page cancels the shown local download without redirecting to a Runtime task', async () => {
